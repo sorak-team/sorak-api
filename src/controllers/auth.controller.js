@@ -45,3 +45,23 @@ export const login = async (req, res) => {
   });
 };
 
+export const verify2FA = async (req, res) => {
+  const { tempToken, otp } = req.body;
+  const deviceInfo = req.headers['user-agent'];
+  const ipAddress = req.ip || req.socket.remoteAddress;
+
+  const result = await authService.verify2FALogin({
+    tempToken,
+    otp,
+    deviceInfo,
+    ipAddress,
+  });
+
+  res.cookie(REFRESH_COOKIE_NAME, result.refreshToken, getCookieOptions());
+
+  res.success({
+    user: result.user,
+    accessToken: result.accessToken,
+  });
+};
+
