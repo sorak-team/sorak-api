@@ -821,6 +821,65 @@ export class AuthService {
       };
     }
 
+  async verifyOtp({ email, otp }) {
+      const trimmedEmail = email.trim().toLowerCase();
+      const trimmedOtp = otp.trim();
+  
+      const activeOtp = await prisma.otpVerification.findFirst({
+        where: {
+          email: trimmedEmail,
+          purpose: 'FORGOT_PASSWORD',
+          is_used: false,
+          expires_at: { gt: new Date() },
+        },
+        orderBy: { created_at: 'desc' },
+      });
+  
+      if (!activeOtp) {
+        throw BadRequest('Mã OTP không hợp lệ hoặc đã hết hạn. Vui lòng yêu cầu mã mới.');
+      }
+  
+      // Rate-limit OTP guessing (Max 5 attempts)
+      if (activeOtp.attempt_count >= 5) {
+        await prisma.otpVerification.update({
+          where: { otp_id: activeOtp.otp_id },
+          data: { is_used: true },
+        });
+        throw BadRequest('Mã OTP đã vượt quá số lần thử cho phép. Vui lòng yêu cầu mã xác thực mới.');
+      }
+  
+      const isMatch = await bcrypt.compare(trimmedOtp, activeOtp.otp_hash);
+      if (!isMatch) {
+        await prisma.otpVerification.update({
+          where: { otp_id: activeOtp.otp_id },
+          data: { attempt_count: activeOtp.attempt_count + 1 },
+        });
+        throw BadRequest('Mã OTP không chính xác. Vui lòng kiểm tra lại.');
+      }
+  
+      // Mark OTP as used
+      await prisma.otpVerification.update({
+        where: { otp_id: activeOtp.otp_id },
+        data: { is_used: true },
+      });
+  
+      // Issue short-lived Reset Token (10 minutes)
+      const resetToken = jwt.sign(
+        {
+          sub: activeOtp.account_id.toString(),
+          email: trimmedEmail,
+          purpose: 'RESET_PASSWORD',
+        },
+        env.jwt.accessSecret,
+        { expiresIn: '10m' },
+      );
+  
+      return {
+        resetToken,
+        message: 'Xác thực OTP thành công. Bạn có thể tiến hành đặt lại mật khẩu.',
+      };
+    }
+
 }
 export const authService = new AuthService();
 export default authService;
