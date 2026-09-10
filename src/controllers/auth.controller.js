@@ -79,3 +79,12 @@ export const confirmEnable2FA = async (req, res) => {
   res.success(result);
 };
 
+export const disable2FA = async (req, res) => {
+  const { password } = req.body;
+  const result = await authService.disable2FA({
+    publicId: req.user.sub,
+    password,
+  });
+  res.success(result);
+};
+

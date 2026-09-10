@@ -521,6 +521,50 @@ export class AuthService {
       };
     }
 
+  async confirmEnable2FA({ publicId, otp }) {
+      const account = await prisma.account.findUnique({
+        where: { public_id: publicId },
+      });
+  
+      if (!account || !account.is_active || account.deleted_at) {
+        throw NotFound('Không tìm thấy tài khoản.');
+      }
+  
+      const activeOtp = await prisma.otpVerification.findFirst({
+        where: {
+          account_id: account.account_id,
+          purpose: 'ENABLE_2FA',
+          is_used: false,
+          expires_at: { gt: new Date() },
+        },
+        orderBy: { created_at: 'desc' },
+      });
+  
+      if (!activeOtp) {
+        throw BadRequest('Mã OTP không hợp lệ hoặc đã hết hạn.');
+      }
+  
+      const isMatch = await bcrypt.compare(otp.trim(), activeOtp.otp_hash);
+      if (!isMatch) {
+        throw BadRequest('Mã OTP không chính xác. Vui lòng kiểm tra lại.');
+      }
+  
+      await prisma.otpVerification.update({
+        where: { otp_id: activeOtp.otp_id },
+        data: { is_used: true },
+      });
+  
+      await prisma.account.update({
+        where: { account_id: account.account_id },
+        data: { is_2fa_enabled: true },
+      });
+  
+      return {
+        is_2fa_enabled: true,
+        message: 'Kích hoạt xác thực 2 bước (2FA) thành công!',
+      };
+    }
+
 }
 export const authService = new AuthService();
 export default authService;
