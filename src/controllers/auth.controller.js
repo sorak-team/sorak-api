@@ -88,3 +88,9 @@ export const disable2FA = async (req, res) => {
   res.success(result);
 };
 
+export const forgotPassword = async (req, res) => {
+  const { identifier, email } = req.body;
+  const result = await authService.forgotPassword({ identifier, email });
+  res.success(result);
+};
+
