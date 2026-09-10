@@ -309,6 +309,138 @@ export class AuthService {
       };
     }
 
+  async verify2FALogin({ tempToken, otp, deviceInfo, ipAddress }) {
+      if (!tempToken || !otp) {
+        throw BadRequest('Vui lòng cung cấp mã xác thực OTP.');
+      }
+  
+      let payload;
+      try {
+        payload = jwt.verify(tempToken, env.jwt.accessSecret);
+      } catch {
+        throw BadRequest(
+          'Phiên xác thực 2 bước đã hết hạn hoặc không hợp lệ. Vui lòng đăng nhập lại.',
+        );
+      }
+  
+      if (payload.purpose !== '2FA_LOGIN_PENDING' || !payload.sub) {
+        throw BadRequest('Thông tin xác thực không hợp lệ.');
+      }
+  
+      const account = await prisma.account.findUnique({
+        where: { public_id: payload.sub },
+        include: {
+          teacher: {
+            include: {
+              teacher_classes: {
+                where: { left_at: null },
+                include: {
+                  class: {
+                    include: {
+                      school_year: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+          student: {
+            include: {
+              parents: true,
+              student_enrollments: {
+                where: { left_at: null },
+                include: {
+                  class: {
+                    include: {
+                      teacher_classes: {
+                        where: { left_at: null },
+                        include: {
+                          teacher: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+  
+      if (!account || !account.is_active || account.deleted_at) {
+        throw Unauthorized('Tài khoản không tồn tại hoặc đã bị khóa.');
+      }
+  
+      const activeOtp = await prisma.otpVerification.findFirst({
+        where: {
+          account_id: account.account_id,
+          purpose: 'LOGIN_2FA',
+          is_used: false,
+          expires_at: { gt: new Date() },
+        },
+        orderBy: { created_at: 'desc' },
+      });
+  
+      if (!activeOtp) {
+        throw BadRequest('Mã OTP không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.');
+      }
+  
+      if (activeOtp.attempt_count >= 5) {
+        await prisma.otpVerification.update({
+          where: { otp_id: activeOtp.otp_id },
+          data: { is_used: true },
+        });
+        throw BadRequest('Mã OTP đã vượt quá số lần thử cho phép. Vui lòng đăng nhập lại.');
+      }
+  
+      const isMatch = await bcrypt.compare(otp.trim(), activeOtp.otp_hash);
+      if (!isMatch) {
+        await prisma.otpVerification.update({
+          where: { otp_id: activeOtp.otp_id },
+          data: { attempt_count: activeOtp.attempt_count + 1 },
+        });
+        throw BadRequest('Mã OTP không chính xác. Vui lòng kiểm tra lại.');
+      }
+  
+      // Mark OTP used
+      await prisma.otpVerification.update({
+        where: { otp_id: activeOtp.otp_id },
+        data: { is_used: true },
+      });
+  
+      // Detect first login and update last_login_at
+      const isFirstLogin = account.last_login_at === null;
+      await prisma.account.update({
+        where: { account_id: account.account_id },
+        data: { last_login_at: new Date() },
+      });
+  
+      const accessToken = jwt.sign(
+        { sub: account.public_id, role: account.role },
+        env.jwt.accessSecret,
+        { expiresIn: env.jwt.accessTtl },
+      );
+  
+      const rawRefreshToken = crypto.randomBytes(40).toString('hex');
+      const tokenHash = crypto.createHash('sha256').update(rawRefreshToken).digest('hex');
+  
+      await prisma.refreshToken.create({
+        data: {
+          account_id: account.account_id,
+          token_hash: tokenHash,
+          device_info: deviceInfo || 'Unknown Browser',
+          ip_address: ipAddress || null,
+          expires_at: new Date(Date.now() + (payload.rememberMe ? 30 : 7) * 24 * 60 * 60 * 1000),
+        },
+      });
+  
+      return {
+        user: this._formatUser(account, isFirstLogin),
+        accessToken,
+        refreshToken: rawRefreshToken,
+      };
+    }
+
 }
 export const authService = new AuthService();
 export default authService;

@@ -65,3 +65,8 @@ export const verify2FA = async (req, res) => {
   });
 };
 
+export const requestEnable2FA = async (req, res) => {
+  const result = await authService.requestEnable2FA(req.user.sub);
+  res.success(result);
+};
+
