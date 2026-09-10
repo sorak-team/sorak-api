@@ -1,5 +1,8 @@
-// Prisma schema — Sorak API
-// Learn more: https://pris.ly/d/prisma-schema
+// ============================================================================
+// SORAK PRESCHOOL SYSTEM — COMPLETE 3NF PHYSICAL PRISMA SCHEMA DEFINITION
+// Single Source of Truth (SSOT) • 27 Tables • 17 Domain PostgreSQL Enums
+// Dual-ID Architecture: High-speed BIGSERIAL PKs + Unguessable Public UUIDv4
+// ============================================================================
 
 generator client {
   provider = "prisma-client-js"
@@ -8,4 +11,919 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// DOMAIN ENUMS (17 ENUMERATIONS)
+// ============================================================================
+
+enum UserRoleEnum {
+  PRINCIPAL_BGH
+  TEACHER_GV
+  PARENT_PH
+
+  @@map("user_role_enum")
+}
+
+enum OtpPurposeEnum {
+  FORGOT_PASSWORD
+  LOGIN_2FA
+  ENABLE_2FA
+
+  @@map("otp_purpose_enum")
+}
+
+enum DevicePlatformEnum {
+  IOS
+  ANDROID
+  WEB
+
+  @@map("device_platform_enum")
+}
+
+enum SchoolYearStatusEnum {
+  UPCOMING
+  ACTIVE
+  COMPLETED
+
+  @@map("school_year_status_enum")
+}
+
+enum GenderEnum {
+  MALE
+  FEMALE
+
+  @@map("gender_enum")
+}
+
+enum WorkStatusEnum {
+  WORKING
+  LEAVE_OF_ABSENCE
+  RESIGNED
+
+  @@map("work_status_enum")
+}
+
+enum StudentStatusEnum {
+  STUDYING
+  RESERVED
+  TRANSFERRED
+  DROPPED_OUT
+  GRADUATED
+
+  @@map("student_status_enum")
+}
+
+enum EnrollmentStatusEnum {
+  ENROLLED
+  COMPLETED
+  GRADUATED
+  TRANSFERRED_CLASS
+  TRANSFERRED_SCHOOL
+  RESERVED
+  DROPPED_OUT
+
+  @@map("enrollment_status_enum")
+}
+
+enum NotificationTypeEnum {
+  ATTENDANCE_CHECK_IN
+  ATTENDANCE_DISMISSAL
+  HEALTH_GROWTH_RECORD
+  DAILY_ASSESSMENT_POSTED
+  MONTHLY_ROSE_REPORT
+  SCHEDULE_WEATHER_CHANGE
+  SCHOOL_ANNOUNCEMENT
+
+  @@map("notification_type_enum")
+}
+
+enum AttendanceStatusEnum {
+  PRESENT
+  EXCUSED_ABSENCE
+  UNEXCUSED_ABSENCE
+
+  @@map("attendance_status_enum")
+}
+
+enum RequestStatusEnum {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+
+  @@map("request_status_enum")
+}
+
+enum DevelopmentalDomainEnum {
+  PHYSICAL
+  COGNITIVE
+  LANGUAGE
+  SOCIO_EMOTIONAL
+  AESTHETIC
+
+  @@map("developmental_domain_enum")
+}
+
+enum DailyRoutineSlotEnum {
+  ARRIVAL_PLAY
+  MORNING_EXERCISE
+  DIRECTED_STUDY
+  CORNER_PLAY
+  OUTDOOR_PLAY
+  HYGIENE_MEAL_SLEEP
+  AFTERNOON_ACTIVITY
+  RETURN_CHILD
+
+  @@map("daily_routine_slot_enum")
+}
+
+enum DayOfWeekEnum {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+
+  @@map("day_of_week_enum")
+}
+
+enum ScheduledActivityStatusEnum {
+  SCHEDULED
+  COMPLETED
+  RESCHEDULED
+  CANCELLED
+
+  @@map("scheduled_activity_status_enum")
+}
+
+enum DailyAssessmentStatusEnum {
+  PENDING
+  NOT_ACHIEVED
+  ACHIEVED
+  OUTSTANDING
+
+  @@map("daily_assessment_status_enum")
+}
+
+enum SemesterEnum {
+  SEMESTER_1
+  SEMESTER_2
+
+  @@map("semester_enum")
+}
+
+enum CurriculumThemeStatusEnum {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+
+  @@map("curriculum_theme_status_enum")
+}
+
+// ============================================================================
+// MODULE 1: AUTHENTICATION, ACCESS CONTROL & NOTIFICATIONS (5 TABLES)
+// ============================================================================
+
+model Account {
+  account_id                    BigInt                @id @default(autoincrement())
+  public_id                     String                @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  username                      String                @unique @db.VarChar(50)
+  password_hash                 String                @db.VarChar(60)
+  role                          UserRoleEnum
+  is_active                     Boolean               @default(true)
+  is_2fa_enabled                Boolean               @default(false)
+  password_changed_at           DateTime?             @db.Timestamptz(6)
+  last_login_at                 DateTime?             @db.Timestamptz(6)
+  deleted_at                    DateTime?             @db.Timestamptz(6)
+  created_at                    DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at                    DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  otp_verifications             OtpVerification[]
+  refresh_tokens                RefreshToken[]
+  device_tokens                 DeviceToken[]
+  notifications_received        Notification[]        @relation("NotificationRecipient")
+  notifications_created         Notification[]        @relation("NotificationCreator")
+  teacher                       Teacher?
+  student                       Student?
+  created_transfers             ClassTransfer[]       @relation("ClassTransferCreatedBy")
+  approved_transfers            ClassTransfer[]       @relation("ClassTransferApprovedBy")
+  attendances_checked_in        Attendance[]          @relation("AttendanceCheckInBy")
+  attendances_checked_out       Attendance[]          @relation("AttendanceCheckOutBy")
+  pickup_authorizations_created PickupAuthorization[] @relation("PickupAuthCreatedBy")
+  pickup_authorizations_approved PickupAuthorization[] @relation("PickupAuthApprovedBy")
+  health_assessments_recorded   HealthAssessment[]    @relation("HealthAssessmentRecordedBy")
+  school_holidays_created       SchoolHoliday[]       @relation("SchoolHolidayCreatedBy")
+  sub_themes_created            SubTheme[]            @relation("SubThemeCreatedBy")
+  sub_theme_logs                SubThemeLog[]         @relation("SubThemeLogActor")
+  daily_assessments_evaluated   DailyAssessment[]     @relation("DailyAssessmentEvaluatedBy")
+  monthly_assessments_evaluated MonthlyAssessment[]   @relation("MonthlyAssessmentEvaluatedBy")
+  monthly_assessments_feedback  MonthlyAssessment[]   @relation("MonthlyAssessmentFeedbackBy")
+  semester_assessments_evaluated SemesterAssessment[] @relation("SemesterAssessmentEvaluatedBy")
+
+  @@index([username], map: "idx_accounts_username")
+  @@index([role], map: "idx_accounts_role")
+  @@map("accounts")
+}
+
+model OtpVerification {
+  otp_id        BigInt         @id @default(autoincrement())
+  account_id    BigInt
+  email         String         @db.VarChar(100)
+  otp_hash      String         @db.VarChar(60)
+  purpose       OtpPurposeEnum
+  attempt_count Int            @default(0) @db.SmallInt
+  is_used       Boolean        @default(false)
+  expires_at    DateTime       @db.Timestamptz(6)
+  created_at    DateTime       @default(now()) @db.Timestamptz(6)
+
+  // Relations
+  account       Account        @relation(fields: [account_id], references: [account_id], onDelete: Cascade)
+
+  @@index([account_id, purpose, is_used], map: "idx_otp_account_active")
+  @@index([expires_at], map: "idx_otp_expires_at")
+  @@map("otp_verifications")
+}
+
+model RefreshToken {
+  token_id    BigInt    @id @default(autoincrement())
+  account_id  BigInt
+  token_hash  String    @db.VarChar(64)
+  device_info String?   @db.VarChar(255)
+  ip_address  String?   @db.VarChar(45)
+  is_revoked  Boolean   @default(false)
+  expires_at  DateTime  @db.Timestamptz(6)
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+
+  // Relations
+  account     Account   @relation(fields: [account_id], references: [account_id], onDelete: Cascade)
+
+  @@index([account_id, is_revoked], map: "idx_refresh_tokens_lookup")
+  @@index([token_hash], map: "idx_refresh_tokens_hash")
+  @@map("refresh_tokens")
+}
+
+model DeviceToken {
+  token_id     BigInt             @id @default(autoincrement())
+  account_id   BigInt
+  device_token String             @db.VarChar(255)
+  platform     DevicePlatformEnum
+  device_name  String?            @db.VarChar(100)
+  is_active    Boolean            @default(true)
+  last_used_at DateTime           @default(now()) @db.Timestamptz(6)
+  created_at   DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  account      Account            @relation(fields: [account_id], references: [account_id], onDelete: Cascade)
+
+  @@unique([account_id, device_token], map: "uq_account_device")
+  @@index([account_id], map: "idx_device_tokens_account")
+  @@map("device_tokens")
+}
+
+model Notification {
+  notification_id BigInt               @id @default(autoincrement())
+  public_id       String               @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  account_id      BigInt
+  created_by      BigInt?
+  type            NotificationTypeEnum
+  title           String               @db.VarChar(150)
+  body            String
+  data            Json?                @default("{}")
+  scheduled_at    DateTime?            @db.Timestamptz(6)
+  is_read         Boolean              @default(false)
+  read_at         DateTime?            @db.Timestamptz(6)
+  deleted_at      DateTime?            @db.Timestamptz(6)
+  created_at      DateTime             @default(now()) @db.Timestamptz(6)
+
+  // Relations
+  recipient       Account              @relation("NotificationRecipient", fields: [account_id], references: [account_id], onDelete: Cascade)
+  creator         Account?             @relation("NotificationCreator", fields: [created_by], references: [account_id], onDelete: SetNull)
+
+  @@index([account_id, is_read, created_at(sort: Desc)], map: "idx_notifications_account_unread")
+  @@index([created_by], map: "idx_notifications_created_by")
+  @@index([created_at(sort: Desc)], map: "idx_notifications_created_at")
+  @@map("notifications")
+}
+
+// ============================================================================
+// MODULE 2: ACADEMIC ORGANIZATION & TEACHING STAFF (4 TABLES)
+// ============================================================================
+
+model SchoolYear {
+  school_year_id      BigInt               @id @default(autoincrement())
+  name                String               @unique @db.VarChar(20)
+  start_date          DateTime             @db.Date
+  semester_1_end_date DateTime             @db.Date
+  end_date            DateTime             @db.Date
+  status              SchoolYearStatusEnum @default(UPCOMING)
+  color_theme         String?              @default("blue") @db.VarChar(20)
+  deleted_at          DateTime?            @db.Timestamptz(6)
+  created_at          DateTime             @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime             @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  classes             Class[]
+  school_holidays     SchoolHoliday[]
+  curriculum_themes   CurriculumTheme[]
+  educational_goals   EducationalGoal[]
+
+  @@index([status], map: "idx_school_years_status")
+  @@map("school_years")
+}
+
+model Class {
+  class_id             BigInt               @id @default(autoincrement())
+  public_id            String               @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  school_year_id       BigInt
+  age_group            String               @db.VarChar(20)
+  name                 String               @db.VarChar(50)
+  room_number          String?              @db.VarChar(20)
+  description          String?              @db.VarChar(255)
+  deleted_at           DateTime?            @db.Timestamptz(6)
+  created_at           DateTime             @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime             @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  school_year          SchoolYear           @relation(fields: [school_year_id], references: [school_year_id], onDelete: Restrict)
+  teacher_classes      TeacherClass[]
+  student_enrollments  StudentEnrollment[]
+  class_transfers_from ClassTransfer[]      @relation("ClassTransferFrom")
+  class_transfers_to   ClassTransfer[]      @relation("ClassTransferTo")
+  attendances          Attendance[]
+  sub_theme_activities SubThemeActivity[]
+  monthly_assessments  MonthlyAssessment[]
+  semester_assessments SemesterAssessment[]
+  theme_goals          ClassThemeGoal[]
+
+  @@unique([school_year_id, name], map: "uq_year_class_name")
+  @@index([school_year_id], map: "idx_classes_school_year")
+  @@index([age_group], map: "idx_classes_age_group")
+  @@map("classes")
+}
+
+model Teacher {
+  teacher_id      BigInt         @id @default(autoincrement())
+  public_id       String         @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  account_id      BigInt?        @unique
+  employee_code   String         @unique @db.VarChar(20)
+  full_name       String         @db.VarChar(100)
+  date_of_birth   DateTime       @db.Date
+  gender          GenderEnum
+  citizen_id      String         @unique @db.VarChar(12)
+  phone           String?        @db.VarChar(15)
+  email           String?        @db.VarChar(100)
+  avatar_url      String?        @db.VarChar(500)
+  address         String?        @db.VarChar(255)
+  position        String?        @db.VarChar(50)
+  work_status     WorkStatusEnum @default(WORKING)
+  start_date      DateTime       @db.Date
+  end_date        DateTime?      @db.Date
+  deleted_at      DateTime?      @db.Timestamptz(6)
+  created_at      DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime       @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  account         Account?       @relation(fields: [account_id], references: [account_id], onDelete: SetNull)
+  teacher_classes TeacherClass[]
+
+  @@index([work_status], map: "idx_teachers_work_status")
+  @@index([full_name], map: "idx_teachers_full_name")
+  @@index([email], map: "idx_teachers_email")
+  @@map("teachers")
+}
+
+model TeacherClass {
+  id          BigInt    @id @default(autoincrement())
+  teacher_id  BigInt
+  class_id    BigInt
+  is_primary  Boolean   @default(false)
+  assigned_at DateTime  @default(now()) @db.Date
+  left_at     DateTime? @db.Date
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  teacher     Teacher   @relation(fields: [teacher_id], references: [teacher_id], onDelete: Restrict)
+  class       Class     @relation(fields: [class_id], references: [class_id], onDelete: Restrict)
+
+  @@index([teacher_id], map: "idx_teacher_classes_teacher")
+  @@index([class_id, left_at], map: "idx_teacher_classes_active")
+  @@map("teacher_classes")
+}
+
+// ============================================================================
+// MODULE 3: STUDENT & FAMILY RECORDS (4 TABLES)
+// ============================================================================
+
+model Student {
+  student_id            BigInt                @id @default(autoincrement())
+  public_id             String                @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  account_id            BigInt?               @unique
+  student_code          String                @unique @db.VarChar(20)
+  full_name             String                @db.VarChar(100)
+  avatar_url            String?               @db.VarChar(500)
+  date_of_birth         DateTime              @db.Date
+  gender                GenderEnum
+  ethnic                String?               @db.VarChar(30)
+  nationality           String?               @default("Việt Nam") @db.VarChar(50)
+  place_of_birth        String?               @db.VarChar(100)
+  permanent_residence   String?               @db.VarChar(255)
+  current_residence     String?               @db.VarChar(255)
+  status                StudentStatusEnum     @default(STUDYING)
+  enrollment_date       DateTime              @db.Date
+  allergy_notes         String?
+  medical_notes         String?
+  previous_school       String?               @db.VarChar(150)
+  deleted_at            DateTime?             @db.Timestamptz(6)
+  created_at            DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  account               Account?              @relation(fields: [account_id], references: [account_id], onDelete: SetNull)
+  parents               Parent[]
+  student_enrollments   StudentEnrollment[]
+  class_transfers       ClassTransfer[]
+  attendances           Attendance[]
+  pickup_authorizations PickupAuthorization[]
+  health_assessments    HealthAssessment[]
+  daily_assessments     DailyAssessment[]
+  monthly_assessments   MonthlyAssessment[]
+  semester_assessments  SemesterAssessment[]
+
+  @@index([student_code], map: "idx_students_active")
+  @@index([status], map: "idx_students_status")
+  @@map("students")
+}
+
+model Parent {
+  parent_id    BigInt    @id @default(autoincrement())
+  public_id    String    @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  student_id   BigInt
+  full_name    String    @db.VarChar(100)
+  relationship String    @db.VarChar(30)
+  phone        String    @db.VarChar(15)
+  can_pickup   Boolean   @default(true)
+  avatar_url   String?   @db.VarChar(500)
+  deleted_at   DateTime? @db.Timestamptz(6)
+  created_at   DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  student      Student   @relation(fields: [student_id], references: [student_id], onDelete: Cascade)
+
+  @@index([student_id], map: "idx_parents_student")
+  @@index([phone], map: "idx_parents_phone")
+  @@map("parents")
+}
+
+model StudentEnrollment {
+  enrollment_id BigInt                @id @default(autoincrement())
+  student_id    BigInt
+  class_id      BigInt
+  enrolled_at   DateTime              @db.Date
+  left_at       DateTime?             @db.Date
+  status        EnrollmentStatusEnum  @default(ENROLLED)
+  leave_reason  String?               @db.VarChar(255)
+  created_at    DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  student       Student   @relation(fields: [student_id], references: [student_id], onDelete: Cascade)
+  class         Class     @relation(fields: [class_id], references: [class_id], onDelete: Cascade)
+
+  @@unique([student_id, class_id], map: "uq_student_class")
+  @@index([student_id], map: "idx_enrollments_student")
+  @@index([class_id], map: "idx_enrollments_class")
+  @@map("student_enrollments")
+}
+
+model ClassTransfer {
+  transfer_id     BigInt            @id @default(autoincrement())
+  public_id       String            @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  student_id      BigInt
+  from_class_id   BigInt
+  to_class_id     BigInt
+  transfer_date   DateTime          @db.Date
+  reason          String?
+  created_by      BigInt
+  status          RequestStatusEnum @default(PENDING)
+  approved_by     BigInt?
+  approved_at     DateTime?         @db.Timestamptz(6)
+  rejected_reason String?           @db.VarChar(255)
+  deleted_at      DateTime?         @db.Timestamptz(6)
+  created_at      DateTime          @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime          @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  student         Student           @relation(fields: [student_id], references: [student_id], onDelete: Cascade)
+  from_class      Class             @relation("ClassTransferFrom", fields: [from_class_id], references: [class_id], onDelete: Restrict)
+  to_class        Class             @relation("ClassTransferTo", fields: [to_class_id], references: [class_id], onDelete: Restrict)
+  creator         Account           @relation("ClassTransferCreatedBy", fields: [created_by], references: [account_id], onDelete: Restrict)
+  approver        Account?          @relation("ClassTransferApprovedBy", fields: [approved_by], references: [account_id], onDelete: SetNull)
+
+  @@index([student_id], map: "idx_class_transfers_student")
+  @@index([from_class_id], map: "idx_class_transfers_from")
+  @@index([to_class_id], map: "idx_class_transfers_to")
+  @@index([created_by], map: "idx_class_transfers_created_by")
+  @@index([status], map: "idx_class_transfers_status")
+  @@map("class_transfers")
+}
+
+// ============================================================================
+// MODULE 4: DAILY ATTENDANCE & SAFE CHILD DISMISSAL (2 TABLES)
+// ============================================================================
+
+model Attendance {
+  attendance_id       BigInt               @id @default(autoincrement())
+  public_id           String               @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  student_id          BigInt
+  class_id            BigInt
+  date                DateTime             @db.Date
+  status              AttendanceStatusEnum @default(PRESENT)
+  check_in_time       DateTime?            @db.Timestamptz(6)
+  check_in_by         BigInt
+  check_out_time      DateTime?            @db.Timestamptz(6)
+  check_out_by        BigInt?
+  pickup_person_name  String?              @db.VarChar(100)
+  pickup_person_phone String?              @db.VarChar(15)
+  pickup_relationship String?              @db.VarChar(30)
+  pickup_citizen_id   String?              @db.VarChar(12)
+  pickup_photo_url    String?              @db.VarChar(500)
+  pickup_note         String?              @db.VarChar(255)
+  notes               String?
+  deleted_at          DateTime?            @db.Timestamptz(6)
+  created_at          DateTime             @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime             @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  student             Student              @relation(fields: [student_id], references: [student_id], onDelete: Cascade)
+  class               Class                @relation(fields: [class_id], references: [class_id], onDelete: Restrict)
+  check_in_staff      Account              @relation("AttendanceCheckInBy", fields: [check_in_by], references: [account_id], onDelete: Restrict)
+  check_out_staff     Account?             @relation("AttendanceCheckOutBy", fields: [check_out_by], references: [account_id], onDelete: SetNull)
+
+  @@index([class_id, date], map: "idx_attendance_class_date")
+  @@index([date, status], map: "idx_attendance_date_status")
+  @@index([student_id], map: "idx_attendance_student")
+  @@map("attendances")
+}
+
+model PickupAuthorization {
+  authorization_id    BigInt            @id @default(autoincrement())
+  public_id           String            @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  student_id          BigInt
+  authorized_by       BigInt
+  pickup_person_name  String            @db.VarChar(100)
+  pickup_person_phone String            @db.VarChar(15)
+  pickup_citizen_id   String?           @db.VarChar(12)
+  relationship        String            @db.VarChar(30)
+  photo_url           String?           @db.VarChar(500)
+  note                String?           @db.VarChar(255)
+  start_date          DateTime          @default(now()) @db.Date
+  end_date            DateTime          @default(now()) @db.Date
+  status              RequestStatusEnum @default(PENDING)
+  approved_by         BigInt?
+  approved_at         DateTime?         @db.Timestamptz(6)
+  rejected_reason     String?           @db.VarChar(255)
+  deleted_at          DateTime?         @db.Timestamptz(6)
+  created_at          DateTime          @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime          @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  student             Student           @relation(fields: [student_id], references: [student_id], onDelete: Cascade)
+  authorizer          Account           @relation("PickupAuthCreatedBy", fields: [authorized_by], references: [account_id], onDelete: Restrict)
+  approver            Account?          @relation("PickupAuthApprovedBy", fields: [approved_by], references: [account_id], onDelete: SetNull)
+
+  @@index([student_id, start_date, end_date, status], map: "idx_pickup_auth_validity")
+  @@index([authorized_by], map: "idx_pickup_auth_authorized_by")
+  @@index([status], map: "idx_pickup_auth_status")
+  @@map("pickup_authorizations")
+}
+
+// ============================================================================
+// MODULE 5: CHILD HEALTH & WHO GROWTH MONITORING (1 TABLE)
+// ============================================================================
+
+model HealthAssessment {
+  assessment_id          BigInt    @id @default(autoincrement())
+  public_id              String    @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  student_id             BigInt
+  assessment_date        DateTime  @db.Date
+  height                 Decimal   @db.Decimal(5, 2)
+  weight                 Decimal   @db.Decimal(5, 2)
+  bmi                    Decimal   @db.Decimal(4, 2)
+  height_for_age_zscore  Decimal?  @db.Decimal(4, 2)
+  weight_for_age_zscore  Decimal?  @db.Decimal(4, 2)
+  bmi_for_age_zscore     Decimal?  @db.Decimal(4, 2)
+  notes                  String?
+  recorded_by            BigInt
+  deleted_at             DateTime? @db.Timestamptz(6)
+  created_at             DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  student                Student   @relation(fields: [student_id], references: [student_id], onDelete: Cascade)
+  recorder               Account   @relation("HealthAssessmentRecordedBy", fields: [recorded_by], references: [account_id], onDelete: Restrict)
+
+  @@index([student_id, assessment_date(sort: Desc)], map: "idx_health_student_date")
+  @@map("health_assessments")
+}
+
+// ============================================================================
+// MODULE 6: ACADEMIC CALENDAR & HOLIDAYS (1 TABLE)
+// ============================================================================
+
+model SchoolHoliday {
+  holiday_id          BigInt     @id @default(autoincrement())
+  public_id           String     @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  school_year_id      BigInt
+  name                String     @db.VarChar(100)
+  start_date          DateTime   @db.Date
+  end_date            DateTime   @db.Date
+  is_teaching_allowed Boolean    @default(false)
+  target_grades       String[]   @default([])
+  description         String?
+  created_by          BigInt
+  deleted_at          DateTime?  @db.Timestamptz(6)
+  created_at          DateTime   @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime   @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  school_year         SchoolYear @relation(fields: [school_year_id], references: [school_year_id], onDelete: Cascade)
+  creator             Account    @relation("SchoolHolidayCreatedBy", fields: [created_by], references: [account_id], onDelete: Restrict)
+
+  @@index([school_year_id, start_date, end_date], map: "idx_holidays_lookup")
+  @@map("school_holidays")
+}
+
+// ============================================================================
+// MODULE 7: CURRICULUM & EDUCATIONAL PLANNING (7 TABLES)
+// ============================================================================
+
+model CurriculumTheme {
+  theme_id       BigInt                    @id @default(autoincrement())
+  public_id      String                    @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  school_year_id BigInt
+  age_group      String                    @db.VarChar(20)
+  name           String                    @db.VarChar(100)
+  start_date     DateTime                  @db.Date
+  end_date       DateTime                  @db.Date
+  status         CurriculumThemeStatusEnum @default(DRAFT)
+  description    String?
+  deleted_at     DateTime?                 @db.Timestamptz(6)
+  created_at     DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime                  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  school_year    SchoolYear                @relation(fields: [school_year_id], references: [school_year_id], onDelete: Restrict)
+  sub_themes     SubTheme[]
+  class_goals    ClassThemeGoal[]
+
+  @@index([school_year_id, age_group, start_date, end_date], map: "idx_themes_dates")
+  @@index([status], map: "idx_themes_status")
+  @@map("curriculum_themes")
+}
+
+model SubTheme {
+  sub_theme_id   BigInt             @id @default(autoincrement())
+  public_id      String             @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  theme_id       BigInt
+  name           String             @db.VarChar(100)
+  start_date     DateTime           @db.Date
+  end_date       DateTime           @db.Date
+  created_by     BigInt?
+  deleted_at     DateTime?          @db.Timestamptz(6)
+  created_at     DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  theme          CurriculumTheme    @relation(fields: [theme_id], references: [theme_id], onDelete: Cascade)
+  creator        Account?           @relation("SubThemeCreatedBy", fields: [created_by], references: [account_id], onDelete: SetNull)
+  logs           SubThemeLog[]
+  activities     SubThemeActivity[]
+
+  @@index([theme_id, start_date], map: "idx_sub_themes_theme_dates")
+  @@index([theme_id], map: "idx_sub_themes_theme")
+  @@map("sub_themes")
+}
+
+model SubThemeLog {
+  log_id         BigInt    @id @default(autoincrement())
+  public_id      String    @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  sub_theme_id   BigInt
+  actor_id       BigInt
+  action_type    String    @db.VarChar(30)
+  change_summary String
+  change_details Json
+  created_at     DateTime  @default(now()) @db.Timestamptz(6)
+
+  // Relations
+  sub_theme      SubTheme  @relation(fields: [sub_theme_id], references: [sub_theme_id], onDelete: Cascade)
+  actor          Account   @relation("SubThemeLogActor", fields: [actor_id], references: [account_id], onDelete: Restrict)
+
+  @@index([sub_theme_id, created_at(sort: Desc)], map: "idx_sub_theme_logs_timeline")
+  @@index([actor_id], map: "idx_sub_theme_logs_actor")
+  @@map("sub_theme_logs")
+}
+
+model EducationalGoal {
+  goal_id           BigInt                   @id @default(autoincrement())
+  public_id         String                   @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  school_year_id    BigInt
+  age_group         String                   @db.VarChar(20)
+  domain            DevelopmentalDomainEnum
+  goal_code         String                   @db.VarChar(20)
+  indicator_code    String?                  @db.VarChar(20)
+  title             String                   @db.VarChar(255)
+  is_approved       Boolean                  @default(true)
+  deleted_at        DateTime?                @db.Timestamptz(6)
+  created_at        DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime                 @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  school_year       SchoolYear               @relation(fields: [school_year_id], references: [school_year_id], onDelete: Restrict)
+  contents          EducationalContent[]
+  daily_assessments DailyAssessment[]
+  class_theme_goals ClassThemeGoal[]
+
+  @@index([school_year_id, age_group, domain], map: "idx_goals_domain_search")
+  @@index([indicator_code], map: "idx_goals_indicator")
+  @@map("educational_goals")
+}
+
+model EducationalContent {
+  content_id BigInt                @id @default(autoincrement())
+  public_id  String                @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  goal_id    BigInt
+  title      String                @db.VarChar(255)
+  deleted_at DateTime?             @db.Timestamptz(6)
+  created_at DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  goal       EducationalGoal       @relation(fields: [goal_id], references: [goal_id], onDelete: Cascade)
+  activities EducationalActivity[]
+
+  @@index([goal_id], map: "idx_contents_goal")
+  @@map("educational_contents")
+}
+
+model EducationalActivity {
+  activity_id          BigInt                @id @default(autoincrement())
+  public_id            String                @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  content_id           BigInt
+  routine_slot         DailyRoutineSlotEnum
+  title                String                @db.VarChar(150)
+  objective            String?
+  preparation          String?
+  procedure            String?
+  evaluation_criteria  String?
+  deleted_at           DateTime?             @db.Timestamptz(6)
+  created_at           DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  content              EducationalContent    @relation(fields: [content_id], references: [content_id], onDelete: Cascade)
+  sub_theme_activities SubThemeActivity[]
+  daily_assessments    DailyAssessment[]
+
+  @@index([routine_slot], map: "idx_activities_slot")
+  @@index([content_id], map: "idx_activities_content")
+  @@map("educational_activities")
+}
+
+model SubThemeActivity {
+  id             BigInt                        @id @default(autoincrement())
+  class_id       BigInt
+  sub_theme_id   BigInt
+  activity_id    BigInt
+  scheduled_date DateTime                      @db.Date
+  day_of_week    DayOfWeekEnum
+  routine_slot   DailyRoutineSlotEnum
+  order_index    Int                           @default(1) @db.SmallInt
+  status         ScheduledActivityStatusEnum   @default(SCHEDULED)
+  notes          String?
+  created_at     DateTime                      @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime                      @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  class          Class                         @relation(fields: [class_id], references: [class_id], onDelete: Restrict)
+  sub_theme      SubTheme                      @relation(fields: [sub_theme_id], references: [sub_theme_id], onDelete: Cascade)
+  activity       EducationalActivity           @relation(fields: [activity_id], references: [activity_id], onDelete: Restrict)
+
+  @@index([class_id, scheduled_date, routine_slot], map: "idx_sub_theme_activities_date")
+  @@index([sub_theme_id], map: "idx_sub_theme_activities_theme")
+  @@index([status], map: "idx_sub_theme_activities_status")
+  @@map("sub_theme_activities")
+}
+
+model ClassThemeGoal {
+  id         BigInt          @id @default(autoincrement())
+  class_id   BigInt
+  theme_id   BigInt
+  goal_id    BigInt
+  created_at DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at DateTime        @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  class      Class           @relation(fields: [class_id], references: [class_id], onDelete: Cascade)
+  theme      CurriculumTheme @relation(fields: [theme_id], references: [theme_id], onDelete: Cascade)
+  goal       EducationalGoal @relation(fields: [goal_id], references: [goal_id], onDelete: Cascade)
+
+  @@unique([class_id, theme_id, goal_id], map: "uq_class_theme_goal")
+  @@index([class_id, theme_id], map: "idx_class_theme_goals_lookup")
+  @@index([goal_id], map: "idx_class_theme_goals_goal")
+  @@map("class_theme_goals")
+}
+
+// ============================================================================
+// MODULE 8: CHILD DEVELOPMENTAL ASSESSMENT & SỔ BÉ NGOAN (3 TABLES)
+// ============================================================================
+
+model DailyAssessment {
+  daily_assessment_id BigInt                    @id @default(autoincrement())
+  public_id           String                    @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  student_id          BigInt
+  activity_id         BigInt
+  goal_id             BigInt?
+  assessment_date     DateTime                  @db.Date
+  status              DailyAssessmentStatusEnum @default(PENDING)
+  notes               String?                   @db.VarChar(255)
+  evaluated_by        BigInt
+  created_at          DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime                  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  student             Student                   @relation(fields: [student_id], references: [student_id], onDelete: Cascade)
+  activity            EducationalActivity       @relation(fields: [activity_id], references: [activity_id], onDelete: Restrict)
+  goal                EducationalGoal?          @relation(fields: [goal_id], references: [goal_id], onDelete: SetNull)
+  evaluator           Account                   @relation("DailyAssessmentEvaluatedBy", fields: [evaluated_by], references: [account_id], onDelete: Restrict)
+
+  @@unique([student_id, activity_id, assessment_date], map: "uq_student_activity_date")
+  @@index([student_id, assessment_date], map: "idx_daily_assessments_lookup")
+  @@index([activity_id, assessment_date], map: "idx_daily_assessments_activity")
+  @@index([goal_id, assessment_date], map: "idx_daily_assessments_goal")
+  @@index([evaluated_by], map: "idx_daily_assessments_evaluator")
+  @@map("daily_assessments")
+}
+
+model MonthlyAssessment {
+  monthly_assessment_id BigInt    @id @default(autoincrement())
+  public_id             String    @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  student_id            BigInt
+  class_id              BigInt
+  month                 Int       @db.SmallInt
+  year                  Int       @db.SmallInt
+  week_1_rose           Boolean   @default(false)
+  week_2_rose           Boolean   @default(false)
+  week_3_rose           Boolean   @default(false)
+  week_4_rose           Boolean   @default(false)
+  week_5_rose           Boolean   @default(false)
+  roses_count           Int       @default(0) @db.SmallInt
+  teacher_notes         String
+  evaluated_by          BigInt
+  parent_feedback       String?
+  feedback_at           DateTime? @db.Timestamptz(6)
+  feedback_by           BigInt?
+  created_at            DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  student               Student   @relation(fields: [student_id], references: [student_id], onDelete: Cascade)
+  class                 Class     @relation(fields: [class_id], references: [class_id], onDelete: Restrict)
+  evaluator             Account   @relation("MonthlyAssessmentEvaluatedBy", fields: [evaluated_by], references: [account_id], onDelete: Restrict)
+  parent_responder      Account?  @relation("MonthlyAssessmentFeedbackBy", fields: [feedback_by], references: [account_id], onDelete: SetNull)
+
+  @@unique([student_id, month, year], map: "uq_student_month_year")
+  @@index([class_id, year, month], map: "idx_monthly_class_period")
+  @@index([student_id], map: "idx_monthly_student")
+  @@index([evaluated_by], map: "idx_monthly_evaluator")
+  @@map("monthly_assessments")
+}
+
+model SemesterAssessment {
+  semester_assessment_id BigInt       @id @default(autoincrement())
+  public_id              String       @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  student_id             BigInt
+  class_id               BigInt
+  semester               SemesterEnum
+  teacher_notes          String
+  evaluated_by           BigInt
+  created_at             DateTime     @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime     @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  student                Student      @relation(fields: [student_id], references: [student_id], onDelete: Cascade)
+  class                  Class        @relation(fields: [class_id], references: [class_id], onDelete: Restrict)
+  evaluator              Account      @relation("SemesterAssessmentEvaluatedBy", fields: [evaluated_by], references: [account_id], onDelete: Restrict)
+
+  @@unique([student_id, class_id, semester], map: "uq_student_class_semester")
+  @@index([class_id, semester], map: "idx_semester_class_lookup")
+  @@index([student_id], map: "idx_semester_student")
+  @@index([evaluated_by], map: "idx_semester_evaluator")
+  @@map("semester_assessments")
 }
