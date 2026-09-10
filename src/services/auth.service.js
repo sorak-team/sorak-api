@@ -880,6 +880,42 @@ export class AuthService {
       };
     }
 
+  async resetPassword({ email, resetToken, password }) {
+      let payload;
+      try {
+        payload = jwt.verify(resetToken, env.jwt.accessSecret);
+      } catch {
+        throw BadRequest('Phiên đặt lại mật khẩu đã hết hạn hoặc không hợp lệ.');
+      }
+  
+      if (payload.purpose !== 'RESET_PASSWORD' || payload.email !== email.trim().toLowerCase()) {
+        throw BadRequest('Thông tin xác thực đặt lại mật khẩu không hợp lệ.');
+      }
+  
+      const accountId = BigInt(payload.sub);
+      const newPasswordHash = await bcrypt.hash(password, 10);
+  
+      // Update password, record password_changed_at and last_login_at
+      await prisma.account.update({
+        where: { account_id: accountId },
+        data: {
+          password_hash: newPasswordHash,
+          password_changed_at: new Date(),
+          last_login_at: new Date(),
+        },
+      });
+  
+      // Revoke all existing sessions for security
+      await prisma.refreshToken.updateMany({
+        where: { account_id: accountId },
+        data: { is_revoked: true },
+      });
+  
+      return {
+        message: 'Đặt lại mật khẩu thành công. Vui lòng đăng nhập bằng mật khẩu mới.',
+      };
+    }
+
 }
 export const authService = new AuthService();
 export default authService;
