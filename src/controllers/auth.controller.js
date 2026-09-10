@@ -106,3 +106,22 @@ export const resetPassword = async (req, res) => {
   res.success(result);
 };
 
+export const refreshToken = async (req, res) => {
+  const rawToken = req.cookies?.[REFRESH_COOKIE_NAME] || req.body?.refreshToken;
+  const deviceInfo = req.headers['user-agent'];
+  const ipAddress = req.ip || req.socket.remoteAddress;
+
+  const result = await authService.refreshToken({
+    rawToken,
+    deviceInfo,
+    ipAddress,
+  });
+
+  // Update rotated refresh token in cookie
+  res.cookie(REFRESH_COOKIE_NAME, result.refreshToken, getCookieOptions());
+
+  res.success({
+    accessToken: result.accessToken,
+  });
+};
+
