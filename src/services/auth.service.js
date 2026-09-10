@@ -565,6 +565,35 @@ export class AuthService {
       };
     }
 
+  async disable2FA({ publicId, password }) {
+      const account = await prisma.account.findUnique({
+        where: { public_id: publicId },
+      });
+  
+      if (!account || !account.is_active || account.deleted_at) {
+        throw NotFound('Không tìm thấy tài khoản.');
+      }
+  
+      if (!account.is_2fa_enabled) {
+        throw BadRequest('Xác thực 2 bước (2FA) chưa được bật.');
+      }
+  
+      const isPasswordValid = await bcrypt.compare(password, account.password_hash);
+      if (!isPasswordValid) {
+        throw BadRequest('Mật khẩu hiện tại không chính xác.');
+      }
+  
+      await prisma.account.update({
+        where: { account_id: account.account_id },
+        data: { is_2fa_enabled: false },
+      });
+  
+      return {
+        is_2fa_enabled: false,
+        message: 'Đã tắt xác thực 2 bước (2FA) thành công.',
+      };
+    }
+
 }
 export const authService = new AuthService();
 export default authService;
