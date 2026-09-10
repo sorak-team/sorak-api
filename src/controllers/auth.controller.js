@@ -70,3 +70,12 @@ export const requestEnable2FA = async (req, res) => {
   res.success(result);
 };
 
+export const confirmEnable2FA = async (req, res) => {
+  const { otp } = req.body;
+  const result = await authService.confirmEnable2FA({
+    publicId: req.user.sub,
+    otp,
+  });
+  res.success(result);
+};
+

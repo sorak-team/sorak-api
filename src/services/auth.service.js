@@ -441,6 +441,86 @@ export class AuthService {
       };
     }
 
+  async requestEnable2FA(publicId) {
+      const account = await prisma.account.findUnique({
+        where: { public_id: publicId },
+        include: {
+          teacher: true,
+        },
+      });
+  
+      if (!account || !account.is_active || account.deleted_at) {
+        throw NotFound('Không tìm thấy tài khoản.');
+      }
+  
+      if (account.is_2fa_enabled) {
+        throw BadRequest('Xác thực 2 bước (2FA) đã được bật trên tài khoản này.');
+      }
+  
+      const email = account.teacher?.email || `${account.username.toLowerCase()}@sorak.edu.vn`;
+  
+      // Anti-Spam: Check 60-second cooldown per account
+      const recentOtp = await prisma.otpVerification.findFirst({
+        where: {
+          account_id: account.account_id,
+          purpose: 'ENABLE_2FA',
+          created_at: {
+            gt: new Date(Date.now() - 60 * 1000),
+          },
+        },
+        orderBy: { created_at: 'desc' },
+      });
+  
+      if (recentOtp) {
+        const waitSeconds = Math.max(
+          1,
+          Math.ceil((60 * 1000 - (Date.now() - new Date(recentOtp.created_at).getTime())) / 1000),
+        );
+        throw BadRequest(
+          `Vui lòng đợi ${waitSeconds} giây trước khi yêu cầu gửi lại mã xác thực 2FA.`,
+        );
+      }
+  
+      const rawOtp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpHash = await bcrypt.hash(rawOtp, 10);
+  
+      await prisma.otpVerification.updateMany({
+        where: {
+          account_id: account.account_id,
+          purpose: 'ENABLE_2FA',
+          is_used: false,
+        },
+        data: { is_used: true },
+      });
+  
+      await prisma.otpVerification.create({
+        data: {
+          account_id: account.account_id,
+          email,
+          otp_hash: otpHash,
+          purpose: 'ENABLE_2FA',
+          expires_at: new Date(Date.now() + 5 * 60 * 1000),
+        },
+      });
+  
+      logger.info(
+        { username: account.username, email, otp: rawOtp },
+        '🔐 [SORAK ENABLE 2FA] Verification code generated',
+      );
+  
+      // Send branded OTP email via Resend
+      await emailService.sendOtpEmail({
+        to: email,
+        otp: rawOtp,
+        purpose: 'ENABLE_2FA',
+        userName: account.username,
+      });
+  
+      return {
+        message: `Mã xác thực gồm 6 chữ số đã được gửi tới email ${email}. Vui lòng nhập mã để hoàn tất kích hoạt.`,
+      };
+    }
+
 }
 export const authService = new AuthService();
 export default authService;
