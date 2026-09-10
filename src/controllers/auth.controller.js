@@ -94,3 +94,9 @@ export const forgotPassword = async (req, res) => {
   res.success(result);
 };
 
+export const verifyOtp = async (req, res) => {
+  const { email, otp } = req.body;
+  const result = await authService.verifyOtp({ email, otp });
+  res.success(result);
+};
+
