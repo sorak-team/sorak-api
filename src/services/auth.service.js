@@ -594,6 +594,233 @@ export class AuthService {
       };
     }
 
+  async forgotPassword({ identifier, email }) {
+      const rawQuery = (identifier || email || '').trim();
+      if (!rawQuery) {
+        throw BadRequest('Vui lòng cung cấp mã học sinh, tên đăng nhập hoặc email.');
+      }
+  
+      const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawQuery);
+  
+      let account = null;
+      if (isEmail) {
+        // Look up faculty / staff by email in the teachers table
+        const teacher = await prisma.teacher.findFirst({
+          where: {
+            email: {
+              equals: rawQuery,
+              mode: 'insensitive',
+            },
+            deleted_at: null,
+          },
+          include: {
+            account: {
+              include: {
+                teacher: true,
+                student: { include: { parents: true } },
+              },
+            },
+          },
+        });
+        account = teacher?.account || null;
+      } else {
+        // Find by username first (e.g., HS26001, CB24001, ADMIN01)
+        account = await prisma.account.findFirst({
+          where: {
+            username: {
+              equals: rawQuery,
+              mode: 'insensitive',
+            },
+            is_active: true,
+            deleted_at: null,
+          },
+          include: {
+            teacher: true,
+            student: { include: { parents: true } },
+          },
+        });
+  
+        // Fallback: search by teacher email if username lookup returns nothing
+        if (!account) {
+          const teacher = await prisma.teacher.findFirst({
+            where: {
+              email: {
+                equals: rawQuery,
+                mode: 'insensitive',
+              },
+              deleted_at: null,
+            },
+            include: {
+              account: {
+                include: {
+                  teacher: true,
+                  student: { include: { parents: true } },
+                },
+              },
+            },
+          });
+          account = teacher?.account || null;
+        }
+      }
+  
+      if (!account) {
+        if (isEmail) {
+          // Generic response to prevent account enumeration
+          return {
+            hasEmail: true,
+            contactTeacher: false,
+            message: 'Nếu thông tin tồn tại trong hệ thống, mã xác thực OTP đã được gửi.',
+          };
+        }
+        throw NotFound('Không tìm thấy tài khoản với mã học sinh hoặc tên đăng nhập này.');
+      }
+  
+      // Special rule: PARENT_PH (Parents & Students) NEVER use email OTP.
+      // They must contact the homeroom teacher / school support for account reset.
+      if (account.role === 'PARENT_PH') {
+        let student = null;
+        try {
+          student = await prisma.student.findFirst({
+            where: { account_id: account.account_id, deleted_at: null },
+            include: {
+              parents: true,
+              student_enrollments: {
+                where: { left_at: null },
+                include: {
+                  class: {
+                    include: {
+                      teacher_classes: {
+                        where: { is_primary: true, left_at: null },
+                        include: {
+                          teacher: {
+                            select: {
+                              full_name: true,
+                              phone: true,
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          });
+        } catch (e) {
+          logger.warn(
+            { error: e.message },
+            'Failed to load student enrollment for forgot-password response',
+          );
+        }
+  
+        const activeEnrollment = student?.student_enrollments?.[0];
+        const className = activeEnrollment?.class?.name || null;
+        const primaryTeacher = activeEnrollment?.class?.teacher_classes?.[0]?.teacher;
+        const parentPhone = student?.parents?.[0]?.phone || null;
+  
+        return {
+          hasEmail: false,
+          contactTeacher: true,
+          role: 'PARENT_PH',
+          username: account.username,
+          studentName: student?.full_name || null,
+          className,
+          teacherName: primaryTeacher?.full_name || null,
+          teacherPhone: primaryTeacher?.phone || null,
+          phone: parentPhone,
+          message:
+            'Quý phụ huynh vui lòng liên hệ giáo viên chủ nhiệm để được hỗ trợ cấp lại mật khẩu.',
+        };
+      }
+  
+      // For faculty / admin roles (TEACHER_GV, PRINCIPAL_BGH, ADMIN_BGH): check teacher profile email
+      const teacherEmail = account.teacher?.email;
+      if (!teacherEmail || teacherEmail.trim() === '') {
+        return {
+          hasEmail: false,
+          contactTeacher: true,
+          contactAdmin: true,
+          role: account.role,
+          username: account.username,
+          teacherName: account.teacher?.full_name || account.username,
+          phone: account.teacher?.phone || null,
+          message:
+            'Tài khoản giáo viên chưa được liên kết email. Vui lòng liên hệ ban giám hiệu hoặc quản trị viên nhà trường để được hỗ trợ.',
+        };
+      }
+  
+      const trimmedEmail = teacherEmail.trim().toLowerCase();
+  
+      // Anti-Spam: Check 60-second cooldown per account
+      const recentOtp = await prisma.otpVerification.findFirst({
+        where: {
+          account_id: account.account_id,
+          purpose: 'FORGOT_PASSWORD',
+          created_at: {
+            gt: new Date(Date.now() - 60 * 1000),
+          },
+        },
+        orderBy: { created_at: 'desc' },
+      });
+  
+      if (recentOtp) {
+        const waitSeconds = Math.max(
+          1,
+          Math.ceil((60 * 1000 - (Date.now() - new Date(recentOtp.created_at).getTime())) / 1000),
+        );
+        throw BadRequest(
+          `Vui lòng đợi ${waitSeconds} giây trước khi yêu cầu gửi lại mã OTP mới.`,
+        );
+      }
+  
+      // Generate 6-digit OTP
+      const rawOtp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpHash = await bcrypt.hash(rawOtp, 10);
+  
+      // Invalidate previous OTPs for this account
+      await prisma.otpVerification.updateMany({
+        where: {
+          account_id: account.account_id,
+          purpose: 'FORGOT_PASSWORD',
+          is_used: false,
+        },
+        data: { is_used: true },
+      });
+  
+      // Save new OTP (5 minutes validity)
+      await prisma.otpVerification.create({
+        data: {
+          account_id: account.account_id,
+          email: trimmedEmail,
+          otp_hash: otpHash,
+          purpose: 'FORGOT_PASSWORD',
+          expires_at: new Date(Date.now() + 5 * 60 * 1000),
+        },
+      });
+  
+      // In development / demo: log OTP clearly to console for testing
+      logger.info(
+        { username: account.username, email: trimmedEmail, otp: rawOtp },
+        '🔐 [SORAK OTP] Generated password reset code',
+      );
+  
+      // Send branded OTP email via Resend
+      await emailService.sendOtpEmail({
+        to: trimmedEmail,
+        otp: rawOtp,
+        purpose: 'FORGOT_PASSWORD',
+        userName: account.username,
+      });
+  
+      return {
+        hasEmail: true,
+        contactTeacher: false,
+        email: trimmedEmail,
+        emailMasked: maskEmail(trimmedEmail),
+        message: `Mã xác thực OTP gồm 6 chữ số đã được gửi tới ${maskEmail(trimmedEmail)}.`,
+      };
+    }
+
 }
 export const authService = new AuthService();
 export default authService;
