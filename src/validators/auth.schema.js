@@ -21,3 +21,14 @@ export const loginSchema = Joi.object({
   rememberMe: Joi.boolean().default(true).optional(),
 });
 
+export const forgotPasswordSchema = Joi.object({
+  identifier: Joi.string().trim().min(2).max(150).optional().messages({
+    'string.min': 'Tên đăng nhập hoặc mã học sinh phải có ít nhất 2 ký tự',
+  }),
+  email: Joi.string().trim().max(150).optional(),
+})
+  .or('identifier', 'email')
+  .messages({
+    'object.missing': 'Vui lòng nhập mã học sinh, tên đăng nhập hoặc địa chỉ email',
+  });
+
