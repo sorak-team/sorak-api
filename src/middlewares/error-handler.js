@@ -1,4 +1,5 @@
-import { Prisma } from '@prisma/client';
+import prismaPkg from '@prisma/client';
+const { Prisma } = prismaPkg;
 import { HttpError } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
 
@@ -14,6 +15,8 @@ const statusToCode = (status) => {
       return 'NOT_FOUND';
     case 409:
       return 'CONFLICT';
+    case 423:
+      return 'ACCOUNT_LOCKED';
     case 429:
       return 'TOO_MANY_REQUESTS';
     default:

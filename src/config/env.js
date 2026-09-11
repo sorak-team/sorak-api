@@ -1,4 +1,4 @@
-﻿import Joi from 'joi';
+import Joi from 'joi';
 
 const schema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
@@ -11,6 +11,18 @@ const schema = Joi.object({
   JWT_REFRESH_SECRET: Joi.string().min(32).required(),
   JWT_ACCESS_TTL: Joi.string().default('15m'),
   JWT_REFRESH_TTL: Joi.string().default('7d'),
+  TURNSTILE_SECRET_KEY: Joi.string().allow('', null).optional(),
+  RESEND_API_KEY: Joi.string().allow('', null).optional(),
+  EMAIL_FROM: Joi.string().default('onboarding@resend.dev'),
+
+  // MinIO S3 Object Storage
+  MINIO_ENDPOINT: Joi.string().allow('', null).optional(),
+  MINIO_PORT: Joi.number().default(9000),
+  MINIO_USE_SSL: Joi.boolean().default(false),
+  MINIO_ACCESS_KEY: Joi.string().allow('', null).optional(),
+  MINIO_SECRET_KEY: Joi.string().allow('', null).optional(),
+  MINIO_BUCKET_NAME: Joi.string().default('sorak-media'),
+  MINIO_PUBLIC_URL: Joi.string().allow('', null).optional(),
 }).unknown(true);
 
 const { value, error } = schema.validate(process.env, { abortEarly: false });
@@ -29,6 +41,19 @@ export const env = {
     .filter(Boolean),
 
   databaseUrl: value.DATABASE_URL,
+  turnstileSecret: value.TURNSTILE_SECRET_KEY || '',
+  resendApiKey: value.RESEND_API_KEY || '',
+  emailFrom: value.EMAIL_FROM || 'onboarding@resend.dev',
+
+  minio: {
+    endpoint: value.MINIO_ENDPOINT || '',
+    port: Number(value.MINIO_PORT || 9000),
+    useSSL: String(value.MINIO_USE_SSL) === 'true',
+    accessKey: value.MINIO_ACCESS_KEY || '',
+    secretKey: value.MINIO_SECRET_KEY || '',
+    bucket: value.MINIO_BUCKET_NAME || 'sorak-media',
+    publicUrl: value.MINIO_PUBLIC_URL || '',
+  },
 
   jwt: {
     accessSecret: value.JWT_ACCESS_SECRET,
