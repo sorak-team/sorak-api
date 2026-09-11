@@ -985,6 +985,56 @@ export class AuthService {
       };
     }
 
+  async getMe(publicId) {
+      const account = await prisma.account.findUnique({
+        where: { public_id: publicId },
+        include: {
+          teacher: {
+            include: {
+              teacher_classes: {
+                where: { left_at: null },
+                include: {
+                  class: {
+                    include: {
+                      school_year: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+          student: {
+            include: {
+              parents: true,
+              student_enrollments: {
+                where: { left_at: null },
+                include: {
+                  class: {
+                    include: {
+                      teacher_classes: {
+                        where: { left_at: null },
+                        include: {
+                          teacher: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+  
+      if (!account || !account.is_active || account.deleted_at) {
+        throw NotFound('Không tìm thấy tài khoản');
+      }
+  
+      return {
+        user: this._formatUser(account, account.last_login_at === null),
+      };
+    }
+
 }
 export const authService = new AuthService();
 export default authService;
