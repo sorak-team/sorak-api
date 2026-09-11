@@ -35,6 +35,7 @@ const router = Router();
 
 router.post('/login', validate(loginSchema), asyncHandler(login));
 router.post('/verify-2fa', validate(verify2FASchema), asyncHandler(verify2FA));
+router.post('/forgot-password', validate(forgotPasswordSchema), asyncHandler(forgotPassword));
 
 
 // Protected Profile & Security Endpoints
