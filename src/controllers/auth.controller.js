@@ -125,3 +125,18 @@ export const refreshToken = async (req, res) => {
   });
 };
 
+export const logout = async (req, res) => {
+  const rawToken = req.cookies?.[REFRESH_COOKIE_NAME] || req.body?.refreshToken;
+
+  const result = await authService.logout({ rawToken });
+
+  // Clear cookie on client
+  res.clearCookie(REFRESH_COOKIE_NAME, {
+    httpOnly: true,
+    secure: env.isProd,
+    sameSite: 'lax',
+  });
+
+  res.success(result);
+};
+

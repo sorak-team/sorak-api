@@ -971,6 +971,20 @@ export class AuthService {
       };
     }
 
+  async logout({ rawToken }) {
+      if (rawToken) {
+        const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+        await prisma.refreshToken.updateMany({
+          where: { token_hash: tokenHash },
+          data: { is_revoked: true },
+        });
+      }
+  
+      return {
+        message: 'Đăng xuất thành công',
+      };
+    }
+
 }
 export const authService = new AuthService();
 export default authService;
