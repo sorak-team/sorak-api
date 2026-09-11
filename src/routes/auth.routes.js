@@ -34,6 +34,7 @@ const router = Router();
 // Public Authentication Endpoints
 
 router.post('/login', validate(loginSchema), asyncHandler(login));
+router.post('/verify-2fa', validate(verify2FASchema), asyncHandler(verify2FA));
 
 
 // Protected Profile & Security Endpoints
