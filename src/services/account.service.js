@@ -480,6 +480,33 @@ export class AccountService {
       return this.getAccountById(account.public_id || account.account_id.toString());
     }
 
+  async changeStatus(id, isActive) {
+      const where = { ...this._parseId(id), deleted_at: null };
+      const account = await prisma.account.findFirst({ where });
+      if (!account) {
+        throw new NotFound('Tài khoản không tồn tại');
+      }
+  
+      await prisma.account.update({
+        where: { account_id: account.account_id },
+        data: { is_active: isActive },
+      });
+  
+      // If locked/deactivated, revoke active refresh sessions
+      if (!isActive) {
+        await prisma.refreshToken.updateMany({
+          where: { account_id: account.account_id, is_revoked: false },
+          data: { is_revoked: true },
+        });
+      }
+  
+      return {
+        id: account.public_id || account.account_id.toString(),
+        isActive,
+        message: isActive ? 'Đã kích hoạt tài khoản' : 'Đã khóa tài khoản thành công',
+      };
+    }
+
 }
 export const accountService = new AccountService();
 export default accountService;
