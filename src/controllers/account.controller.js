@@ -17,3 +17,9 @@ export const createAccount = async (req, res) => {
   res.status(201).success(result);
 };
 
+export const updateAccount = async (req, res) => {
+  const { id } = req.params;
+  const result = await accountService.updateAccount(id, req.body);
+  res.success(result);
+};
+

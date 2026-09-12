@@ -341,6 +341,96 @@ export class AccountService {
       };
     }
 
+  async createAccount(data) {
+      // 1. Check username collision
+      const existing = await prisma.account.findFirst({
+        where: { username: data.username, deleted_at: null },
+      });
+      if (existing) {
+        throw new Conflict(`Tên đăng nhập '${data.username}' đã được sử dụng`);
+      }
+  
+      // 2. Hash password
+      const passwordHash = await bcrypt.hash(data.password || '123456', 10);
+  
+      const assignedRole = data.role === 'ADMIN_BGH' ? 'PRINCIPAL_BGH' : data.role;
+      const account = await prisma.account.create({
+        data: {
+          username: data.username,
+          password_hash: passwordHash,
+          role: assignedRole,
+          is_active: data.isActive !== undefined ? data.isActive : true,
+        },
+      });
+  
+      if (data.teacherId) {
+        try {
+          const isBigInt = /^\d+$/.test(String(data.teacherId));
+          const where = isBigInt ? { teacher_id: BigInt(data.teacherId) } : { public_id: String(data.teacherId) };
+          await prisma.teacher.update({
+            where,
+            data: { account_id: account.account_id },
+          });
+        } catch (e) {
+          logger.warn({ error: e.message }, 'Failed to link teacher profile to account by teacherId');
+        }
+      } else if (data.role === 'TEACHER_GV' || data.role === 'PRINCIPAL_BGH' || data.role === 'ADMIN_BGH') {
+        const code = data.employeeCode || data.username;
+        if (code) {
+          try {
+            const t = await prisma.teacher.findFirst({
+              where: { employee_code: { equals: code, mode: 'insensitive' }, deleted_at: null },
+            });
+            if (t) {
+              await prisma.teacher.update({
+                where: { teacher_id: t.teacher_id },
+                data: { account_id: account.account_id },
+              });
+            }
+          } catch (e) {
+            logger.warn({ error: e.message }, 'Failed to auto-link teacher by code');
+          }
+        }
+      }
+  
+      if (data.studentId) {
+        try {
+          const isBigInt = /^\d+$/.test(String(data.studentId));
+          const where = isBigInt ? { student_id: BigInt(data.studentId) } : { public_id: String(data.studentId) };
+          await prisma.student.update({
+            where,
+            data: { account_id: account.account_id },
+          });
+        } catch (e) {
+          logger.warn({ error: e.message }, 'Failed to link student profile to account by studentId');
+        }
+      } else if (data.role === 'PARENT_PH' || data.role === 'STUDENT') {
+        const code = data.studentCode || data.username;
+        if (code) {
+          try {
+            const s = await prisma.student.findFirst({
+              where: { student_code: { equals: code, mode: 'insensitive' }, deleted_at: null },
+            });
+            if (s) {
+              await prisma.student.update({
+                where: { student_id: s.student_id },
+                data: { account_id: account.account_id },
+              });
+            }
+          } catch (e) {
+            logger.warn({ error: e.message }, 'Failed to auto-link student by code');
+          }
+        }
+      }
+  
+      logger.info(
+        { accountId: account.account_id.toString(), username: account.username },
+        'Created account',
+      );
+  
+      return this.getAccountById(account.public_id || account.account_id.toString());
+    }
+
 }
 export const accountService = new AccountService();
 export default accountService;
