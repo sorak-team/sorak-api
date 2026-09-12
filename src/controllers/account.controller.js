@@ -12,3 +12,8 @@ export const getAccountById = async (req, res) => {
   res.success(result);
 };
 
+export const createAccount = async (req, res) => {
+  const result = await accountService.createAccount(req.body);
+  res.status(201).success(result);
+};
+
