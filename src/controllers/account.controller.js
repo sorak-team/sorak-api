@@ -6,3 +6,9 @@ export const listAccounts = async (req, res) => {
   res.success(result);
 };
 
+export const getAccountById = async (req, res) => {
+  const { id } = req.params;
+  const result = await accountService.getAccountById(id);
+  res.success(result);
+};
+
