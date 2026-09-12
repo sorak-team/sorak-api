@@ -194,6 +194,153 @@ export class AccountService {
       };
     }
 
+  async getAccountById(id) {
+      const where = { ...this._parseId(id), deleted_at: null };
+  
+      const account = await prisma.account.findFirst({
+        where,
+        include: {
+          teacher: {
+            include: {
+              teacher_classes: {
+                where: { left_at: null },
+                include: {
+                  class: {
+                    select: {
+                      class_id: true,
+                      public_id: true,
+                      name: true,
+                      room_number: true,
+                      school_year_id: true,
+                      school_year: {
+                        select: {
+                          school_year_id: true,
+                          name: true,
+                          status: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          student: {
+            include: {
+              parents: {
+                where: { deleted_at: null },
+              },
+              student_enrollments: {
+                where: { left_at: null },
+                include: {
+                  class: {
+                    select: {
+                      class_id: true,
+                      public_id: true,
+                      name: true,
+                      room_number: true,
+                      age_group: true,
+                      school_year: {
+                        select: {
+                          school_year_id: true,
+                          name: true,
+                          status: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+  
+      if (!account) {
+        throw new NotFound('Tài khoản không tồn tại trên hệ thống');
+      }
+  
+      const email = account.teacher?.email || null;
+      const phone = account.teacher?.phone || account.student?.parents?.[0]?.phone || null;
+      const avatarUrl = account.teacher?.avatar_url || account.student?.avatar_url || null;
+      const fullName = account.teacher?.full_name || account.student?.full_name || account.username;
+  
+      const currentEnrollment = account.student?.student_enrollments?.[0];
+      const enrolledClass = currentEnrollment?.class;
+  
+      return {
+        id: account.public_id || account.account_id.toString(),
+        publicId: account.public_id,
+        username: account.username,
+        fullName,
+        email,
+        phone,
+        role: account.role,
+        avatarUrl,
+        isActive: account.is_active,
+        is2faEnabled: account.is_2fa_enabled,
+        lastLoginAt: account.last_login_at,
+        createdAt: account.created_at,
+        updatedAt: account.updated_at,
+        teacherProfile: account.teacher
+          ? {
+              id: account.teacher.public_id || account.teacher.teacher_id.toString(),
+              publicId: account.teacher.public_id,
+              employeeCode: account.teacher.employee_code,
+              fullName: account.teacher.full_name,
+              phone: account.teacher.phone,
+              email: account.teacher.email,
+              dateOfBirth: account.teacher.date_of_birth,
+              gender: account.teacher.gender,
+              citizenId: account.teacher.citizen_id,
+              address: account.teacher.address,
+              position: account.teacher.position,
+              workStatus: account.teacher.work_status,
+              startDate: account.teacher.start_date,
+              assignedClasses: account.teacher.teacher_classes.map((tc) => ({
+                id: tc.id.toString(),
+                classId: tc.class.public_id || tc.class.class_id.toString(),
+                className: tc.class.name,
+                schoolYearId: tc.class.school_year_id ? tc.class.school_year_id.toString() : null,
+                schoolYearName: tc.class.school_year?.name || null,
+                roomNumber: tc.class.room_number,
+                isPrimary: tc.is_primary,
+                assignedAt: tc.assigned_at,
+              })),
+            }
+          : null,
+        studentProfile: account.student
+          ? {
+              id: account.student.public_id || account.student.student_id.toString(),
+              publicId: account.student.public_id,
+              studentCode: account.student.student_code,
+              fullName: account.student.full_name,
+              avatarUrl: account.student.avatar_url,
+              status: account.student.status,
+              currentClass: enrolledClass
+                ? {
+                    classId: enrolledClass.public_id || enrolledClass.class_id.toString(),
+                    publicId: enrolledClass.public_id,
+                    className: enrolledClass.name,
+                    roomNumber: enrolledClass.room_number,
+                    ageGroup: enrolledClass.age_group,
+                    schoolYearName: enrolledClass.school_year?.name || null,
+                  }
+                : null,
+              studentClass: enrolledClass?.name || null,
+              ageGroup: enrolledClass?.age_group || null,
+              parents: account.student.parents.map((p) => ({
+                id: p.public_id || p.parent_id.toString(),
+                fullName: p.full_name,
+                relationship: p.relationship,
+                phone: p.phone,
+                canPickup: p.can_pickup,
+              })),
+            }
+          : null,
+      };
+    }
+
 }
 export const accountService = new AccountService();
 export default accountService;
