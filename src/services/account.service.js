@@ -539,6 +539,30 @@ export class AccountService {
       };
     }
 
+  async deleteAccount(id) {
+      const where = { ...this._parseId(id), deleted_at: null };
+      const account = await prisma.account.findFirst({ where });
+      if (!account) {
+        throw new NotFound('Tài khoản không tồn tại');
+      }
+  
+      await prisma.account.update({
+        where: { account_id: account.account_id },
+        data: {
+          deleted_at: new Date(),
+          is_active: false,
+        },
+      });
+  
+      // Revoke sessions
+      await prisma.refreshToken.updateMany({
+        where: { account_id: account.account_id, is_revoked: false },
+        data: { is_revoked: true },
+      });
+  
+      return { success: true, message: 'Đã xóa tài khoản thành công' };
+    }
+
 }
 export const accountService = new AccountService();
 export default accountService;
