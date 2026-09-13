@@ -1072,6 +1072,81 @@ export class AuthService {
       };
     }
 
+  async getSessions(publicId, currentRawToken = null) {
+      const account = await prisma.account.findUnique({
+        where: { public_id: publicId },
+        select: {
+          account_id: true,
+          last_login_at: true,
+        },
+      });
+  
+      if (!account) {
+        throw NotFound('Không tìm thấy tài khoản');
+      }
+  
+      let currentHash = null;
+      if (currentRawToken) {
+        currentHash = crypto.createHash('sha256').update(currentRawToken).digest('hex');
+      }
+  
+      const tokens = await prisma.refreshToken.findMany({
+        where: {
+          account_id: account.account_id,
+          is_revoked: false,
+          expires_at: { gt: new Date() },
+        },
+        orderBy: { created_at: 'desc' },
+        take: 10,
+      });
+  
+      const sessions = tokens.map((token, index) => {
+        const parsedDevice = this._parseUserAgent(token.device_info);
+        const isCurrent = currentHash
+          ? token.token_hash === currentHash
+          : index === 0;
+  
+        return {
+          id: token.token_id.toString(),
+          deviceInfo: token.device_info,
+          browser: parsedDevice.browser,
+          os: parsedDevice.os,
+          deviceType: parsedDevice.deviceType,
+          deviceDisplay: parsedDevice.display,
+          ipAddress: token.ip_address,
+          location: this._formatLocation(token.ip_address),
+          createdAt: token.created_at,
+          lastActive: isCurrent ? (account.last_login_at || token.created_at) : token.created_at,
+          lastActiveAt: isCurrent ? (account.last_login_at || token.created_at) : token.created_at,
+          isCurrent,
+        };
+      });
+  
+      // If no active refresh token record exists in DB, fallback to a virtual current session
+      if (sessions.length === 0) {
+        const now = new Date();
+        sessions.push({
+          id: 'current',
+          deviceInfo: 'Web Browser',
+          browser: 'Trình duyệt Web',
+          os: 'Thiết bị này',
+          deviceType: 'desktop',
+          deviceDisplay: 'Trình duyệt Web · Windows',
+          ipAddress: '127.0.0.1',
+          location: 'Cơ sở Sorak Cao Lãnh (Mạng trường)',
+          createdAt: account.last_login_at || now,
+          lastActive: account.last_login_at || now,
+          lastActiveAt: account.last_login_at || now,
+          isCurrent: true,
+        });
+      }
+  
+      return {
+        lastLoginAt: account.last_login_at,
+        sessions,
+      };
+    }
+
 }
 export const authService = new AuthService();
 export default authService;

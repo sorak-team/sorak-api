@@ -27,6 +27,7 @@ router.use(authMiddleware);
 router.use(requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'));
 router.get('/', validate(queryAccountSchema, 'query'), asyncHandler(listAccounts));
 router.get('/:id', asyncHandler(getAccountById));
+router.post('/', validate(createAccountSchema), asyncHandler(createAccount));
 
 
   '/:id/reset-password',
