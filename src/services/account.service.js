@@ -507,6 +507,38 @@ export class AccountService {
       };
     }
 
+  async resetPassword(id, newPassword = '123456') {
+      const where = { ...this._parseId(id), deleted_at: null };
+      const account = await prisma.account.findFirst({ where });
+      if (!account) {
+        throw new NotFound('Tài khoản không tồn tại');
+      }
+  
+      const passwordHash = await bcrypt.hash(newPassword, 10);
+  
+      await prisma.account.update({
+        where: { account_id: account.account_id },
+        data: {
+          password_hash: passwordHash,
+          password_changed_at: new Date(),
+        },
+      });
+  
+      // Revoke all sessions so old JWT tokens cannot be refreshed
+      await prisma.refreshToken.updateMany({
+        where: { account_id: account.account_id, is_revoked: false },
+        data: { is_revoked: true },
+      });
+  
+      logger.info({ accountId: account.account_id.toString() }, 'Reset password for account');
+  
+      return {
+        id: account.public_id || account.account_id.toString(),
+        temporaryPassword: newPassword,
+        message: 'Đặt lại mật khẩu thành công. Mật khẩu tạm thời là: ' + newPassword,
+      };
+    }
+
 }
 export const accountService = new AccountService();
 export default accountService;

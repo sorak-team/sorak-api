@@ -24,6 +24,7 @@ const router = Router();
 // All Account Management endpoints require authentication and PRINCIPAL_BGH role
 
 router.use(authMiddleware);
+router.use(requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'));
 
 
   '/:id/reset-password',
