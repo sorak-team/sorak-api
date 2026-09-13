@@ -30,6 +30,7 @@ router.get('/:id', asyncHandler(getAccountById));
 router.post('/', validate(createAccountSchema), asyncHandler(createAccount));
 router.patch('/:id', validate(updateAccountSchema), asyncHandler(updateAccount));
 router.patch('/:id/status', asyncHandler(toggleAccountStatus));
+router.post(
 
 
   '/:id/reset-password',

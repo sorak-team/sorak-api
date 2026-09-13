@@ -56,3 +56,14 @@ export const updateAccountSchema = Joi.object({
   avatarUrl: Joi.string().trim().uri().allow('', null).optional(),
 });
 
+export const queryAccountSchema = Joi.object({
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+  search: Joi.string().trim().allow('', null).optional(),
+  role: Joi.string()
+    .valid('ALL', 'PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV', 'PARENT_PH')
+    .default('ALL'),
+  status: Joi.string().valid('ALL', 'active', 'locked', 'inactive').default('ALL'),
+  sortBy: Joi.string().valid('newest', 'oldest', 'username', 'lastLogin').default('newest'),
+});
+
