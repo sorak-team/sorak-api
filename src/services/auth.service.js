@@ -1035,6 +1035,43 @@ export class AuthService {
       };
     }
 
+  _parseUserAgent(ua = '') {
+      let browser = 'Trình duyệt Web';
+      let os = 'Thiết bị';
+      let deviceType = 'desktop';
+  
+      if (/windows nt 10\.0/i.test(ua)) os = 'Windows 10/11';
+      else if (/windows nt 6\.3/i.test(ua)) os = 'Windows 8.1';
+      else if (/windows nt 6\.1/i.test(ua)) os = 'Windows 7';
+      else if (/windows/i.test(ua)) os = 'Windows';
+      else if (/macintosh|mac os x/i.test(ua)) os = 'macOS';
+      else if (/iphone/i.test(ua)) {
+        os = 'iOS (iPhone)';
+        deviceType = 'mobile';
+      } else if (/ipad/i.test(ua)) {
+        os = 'iPadOS';
+        deviceType = 'tablet';
+      } else if (/android/i.test(ua)) {
+        os = 'Android';
+        deviceType = 'mobile';
+      } else if (/linux/i.test(ua)) {
+        os = 'Linux';
+      }
+  
+      if (/edg\//i.test(ua)) browser = 'Microsoft Edge';
+      else if (/opr\/|opera\//i.test(ua)) browser = 'Opera';
+      else if (/chrome|crios/i.test(ua)) browser = 'Google Chrome';
+      else if (/firefox|fxios/i.test(ua)) browser = 'Mozilla Firefox';
+      else if (/safari/i.test(ua)) browser = 'Apple Safari';
+  
+      return {
+        browser,
+        os,
+        deviceType,
+        display: `${browser} · ${os}`,
+      };
+    }
+
 }
 export const authService = new AuthService();
 export default authService;
