@@ -34,3 +34,25 @@ export const createAccountSchema = Joi.object({
   studentId: Joi.alternatives().try(Joi.string(), Joi.number()).allow('', null).optional(),
 });
 
+export const updateAccountSchema = Joi.object({
+  email: Joi.string().trim().email().allow('', null).optional().messages({
+    'string.email': 'Email không đúng định dạng',
+  }),
+  phone: Joi.string()
+    .trim()
+    .pattern(/^[0-9]{9,15}$/)
+    .allow('', null)
+    .optional()
+    .messages({
+      'string.pattern.base': 'Số điện thoại phải từ 9 đến 15 chữ số',
+    }),
+  role: Joi.string()
+    .valid('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV', 'PARENT_PH')
+    .optional()
+    .messages({
+      'any.only': 'Vai trò phải là PRINCIPAL_BGH, ADMIN_BGH, TEACHER_GV hoặc PARENT_PH',
+    }),
+  isActive: Joi.boolean().optional(),
+  avatarUrl: Joi.string().trim().uri().allow('', null).optional(),
+});
+
