@@ -13,6 +13,12 @@ export class TeacherService {
       return { public_id: '00000000-0000-0000-0000-000000000000' };
     }
 
+  _parseClassId(id) {
+      const str = String(id).trim();
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+      return { public_id: isUuid ? str : '00000000-0000-0000-0000-000000000000' };
+    }
+
 }
 export const teacherService = new TeacherService();
 export default teacherService;
