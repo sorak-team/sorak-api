@@ -19,6 +19,11 @@ export class TeacherService {
       return { public_id: isUuid ? str : '00000000-0000-0000-0000-000000000000' };
     }
 
+  _getDefaultAvatar(seed) {
+      const safeSeed = (seed || 'GV').toString().trim();
+      return `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(safeSeed)}`;
+    }
+
 }
 export const teacherService = new TeacherService();
 export default teacherService;
