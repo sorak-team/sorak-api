@@ -25,6 +25,7 @@ const router = Router();
 
 router.get('/', authMiddleware, validate(queryTeacherSchema, 'query'), asyncHandler(listTeachers));
 router.get('/:id', authMiddleware, asyncHandler(getTeacherById));
+router.post(
 
 
 
