@@ -266,6 +266,48 @@ export class TeacherService {
       };
     }
 
+  async _generateTeacherCode(startDate) {
+      let joinYear;
+      if (startDate) {
+        if (typeof startDate === 'string' && startDate.includes('/')) {
+          const parts = startDate.split('/');
+          if (parts.length === 3) joinYear = parseInt(parts[2], 10);
+        } else {
+          const parsed = new Date(startDate).getFullYear();
+          if (!isNaN(parsed)) joinYear = parsed;
+        }
+      }
+      // Quy tắc: Mã số cán bộ tối thiểu là từ năm 2000 (CB00xxx)
+      if (!joinYear || isNaN(joinYear)) {
+        joinYear = new Date().getFullYear();
+      } else if (joinYear < 2000) {
+        joinYear = 2000;
+      }
+  
+      const yearSuffix = String(joinYear).slice(-2);
+      const prefix = `CB${yearSuffix}`;
+  
+      const existing = await prisma.teacher.findMany({
+        where: { employee_code: { startsWith: prefix, mode: 'insensitive' }, deleted_at: null },
+        select: { employee_code: true },
+      });
+  
+      let maxSeq = 0;
+      const regex = new RegExp(`^${prefix}(\\d{3})$`, 'i');
+      for (const t of existing) {
+        const match = String(t.employee_code || '')
+          .trim()
+          .match(regex);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (num > maxSeq) maxSeq = num;
+        }
+      }
+  
+      const nextSeq = String(maxSeq + 1).padStart(3, '0');
+      return `${prefix}${nextSeq}`;
+    }
+
 }
 export const teacherService = new TeacherService();
 export default teacherService;
