@@ -24,6 +24,7 @@ const router = Router();
 // Read operations: Available to authenticated users (Admin, Teachers)
 
 router.get('/', authMiddleware, validate(queryTeacherSchema, 'query'), asyncHandler(listTeachers));
+router.get('/:id', authMiddleware, asyncHandler(getTeacherById));
 
 
 
