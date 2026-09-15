@@ -73,13 +73,3 @@ export const updateTeacherSchema = Joi.object({
   avatarUrl: Joi.string().trim().max(500).allow('', null).optional(),
 });
 
-export const queryTeacherSchema = Joi.object({
-  page: Joi.number().integer().min(1).default(1),
-  limit: Joi.number().integer().min(1).max(100).default(20),
-  search: Joi.string().trim().allow('', null).optional(),
-  workStatus: Joi.string().valid('ALL', 'WORKING', 'LEAVE_OF_ABSENCE', 'RESIGNED').default('ALL'),
-  gender: Joi.string().valid('ALL', 'MALE', 'FEMALE').default('ALL'),
-  classId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).allow('', null).optional(),
-  sortBy: Joi.string().valid('newest', 'oldest', 'name', 'code', 'startDate').default('newest'),
-});
-
