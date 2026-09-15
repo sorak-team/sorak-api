@@ -27,6 +27,7 @@ router.get('/', authMiddleware, validate(queryTeacherSchema, 'query'), asyncHand
 router.get('/:id', authMiddleware, asyncHandler(getTeacherById));
 router.post(
 router.patch(
+router.delete(
 
 
 
