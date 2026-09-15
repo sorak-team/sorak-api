@@ -308,6 +308,80 @@ export class TeacherService {
       return `${prefix}${nextSeq}`;
     }
 
+  async createTeacher(data) {
+      let finalCode = data.employeeCode?.trim().toUpperCase();
+      if (
+        !finalCode ||
+        finalCode.startsWith('GV') ||
+        (finalCode.startsWith('CB') && finalCode.length > 7)
+      ) {
+        finalCode = await this._generateTeacherCode(data.startDate || data.joinDate);
+      }
+  
+      // 1. Verify code and citizen_id uniqueness
+      const codeConflict = await prisma.teacher.findFirst({
+        where: { employee_code: finalCode, deleted_at: null },
+      });
+      if (codeConflict) {
+        throw new Conflict(`Mã giáo viên '${finalCode}' đã tồn tại`);
+      }
+  
+      const citizenConflict = await prisma.teacher.findFirst({
+        where: { citizen_id: data.citizenId, deleted_at: null },
+      });
+      if (citizenConflict) {
+        throw new Conflict(`Số CCCD '${data.citizenId}' đã được đăng ký bởi giáo viên khác`);
+      }
+  
+      // 2. Create teacher profile (without auto-creating account)
+      const createdTeacher = await prisma.$transaction(async (tx) => {
+        const teacher = await tx.teacher.create({
+          data: {
+            account_id: null,
+            employee_code: finalCode,
+            full_name: data.fullName,
+            date_of_birth: new Date(data.dateOfBirth),
+            gender: data.gender,
+            citizen_id: data.citizenId,
+            phone: data.phone || null,
+            email: data.email || null,
+            avatar_url: data.avatarUrl || null,
+            address: data.address || null,
+            position: data.position || null,
+            work_status: data.workStatus || 'WORKING',
+            start_date: new Date(data.startDate),
+            end_date: data.endDate ? new Date(data.endDate) : null,
+          },
+        });
+  
+        // Optional initial class assignment
+        if (data.classId) {
+          const targetClass = await tx.class.findFirst({
+            where: { ...this._parseClassId(data.classId), deleted_at: null },
+          });
+          if (targetClass) {
+            await tx.teacherClass.create({
+              data: {
+                teacher_id: teacher.teacher_id,
+                class_id: targetClass.class_id,
+                is_primary: !!data.isPrimary,
+                assigned_at: new Date(),
+              },
+            });
+          }
+        }
+  
+        return teacher;
+      });
+  
+      logger.info(
+        { teacherId: createdTeacher.teacher_id.toString() },
+        'Created teacher profile and account',
+      );
+  
+      return this.getTeacherById(createdTeacher.public_id || createdTeacher.teacher_id.toString());
+    }
+
 }
 export const teacherService = new TeacherService();
 export default teacherService;
