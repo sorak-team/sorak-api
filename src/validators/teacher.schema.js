@@ -49,3 +49,37 @@ export const createTeacherSchema = Joi.object({
   isPrimary: Joi.boolean().default(false),
 });
 
+export const updateTeacherSchema = Joi.object({
+  fullName: Joi.string().trim().min(2).max(150).optional(),
+  dateOfBirth: Joi.date().iso().optional(),
+  gender: Joi.string().valid('MALE', 'FEMALE').optional(),
+  citizenId: Joi.string().trim().min(9).max(20).optional(),
+  address: Joi.string().trim().max(255).allow('', null).optional(),
+  position: Joi.string().trim().max(100).allow('', null).optional(),
+  workStatus: Joi.string().valid('WORKING', 'LEAVE_OF_ABSENCE', 'RESIGNED').optional(),
+  startDate: Joi.date().iso().min('2000-01-01').optional().messages({
+    'date.base': 'Ngày bắt đầu công tác không đúng định dạng',
+    'date.min': 'Ngày bắt đầu công tác tối thiểu từ năm 2000 (từ ngày 01/01/2000 trở đi)',
+  }),
+  endDate: Joi.date().iso().allow(null).optional(),
+
+  // Account synced fields
+  email: Joi.string().trim().email().allow('', null).optional(),
+  phone: Joi.string()
+    .trim()
+    .pattern(/^[0-9]{9,15}$/)
+    .allow('', null)
+    .optional(),
+  avatarUrl: Joi.string().trim().max(500).allow('', null).optional(),
+});
+
+export const queryTeacherSchema = Joi.object({
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+  search: Joi.string().trim().allow('', null).optional(),
+  workStatus: Joi.string().valid('ALL', 'WORKING', 'LEAVE_OF_ABSENCE', 'RESIGNED').default('ALL'),
+  gender: Joi.string().valid('ALL', 'MALE', 'FEMALE').default('ALL'),
+  classId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).allow('', null).optional(),
+  sortBy: Joi.string().valid('newest', 'oldest', 'name', 'code', 'startDate').default('newest'),
+});
+
