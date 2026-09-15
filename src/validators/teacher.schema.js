@@ -93,3 +93,7 @@ export const assignTeacherClassSchema = Joi.object({
     .default(() => new Date()),
 });
 
+export const updateTeacherClassSchema = Joi.object({
+  isPrimary: Joi.boolean().optional(),
+  leftAt: Joi.date().iso().allow(null).optional(),
+});
