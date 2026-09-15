@@ -35,3 +35,9 @@ export const assignTeacherToClass = async (req, res) => {
   res.status(201).success(result);
 };
 
+export const removeTeacherFromClass = async (req, res) => {
+  const { id, classId } = req.params;
+  const result = await teacherService.removeTeacherFromClass(id, classId);
+  res.success(result);
+};
+
