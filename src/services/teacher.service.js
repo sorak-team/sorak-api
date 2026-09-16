@@ -382,6 +382,109 @@ export class TeacherService {
       return this.getTeacherById(createdTeacher.public_id || createdTeacher.teacher_id.toString());
     }
 
+  async updateTeacher(id, data) {
+      const where = { ...this._parseId(id), deleted_at: null };
+      const teacher = await prisma.teacher.findFirst({ where });
+      if (!teacher) {
+        throw new NotFound('Giáo viên không tồn tại trên hệ thống');
+      }
+  
+      if (data.citizenId && data.citizenId !== teacher.citizen_id) {
+        const conflict = await prisma.teacher.findFirst({
+          where: { citizen_id: data.citizenId, deleted_at: null },
+        });
+        if (conflict) {
+          throw new Conflict(`Số CCCD '${data.citizenId}' đã được sử dụng`);
+        }
+      }
+  
+      const teacherUpdate = {};
+      if (data.fullName !== undefined) teacherUpdate.full_name = data.fullName;
+      if (data.dateOfBirth !== undefined) teacherUpdate.date_of_birth = new Date(data.dateOfBirth);
+      if (data.gender !== undefined) teacherUpdate.gender = data.gender;
+      if (data.citizenId !== undefined) teacherUpdate.citizen_id = data.citizenId;
+      if (data.phone !== undefined) teacherUpdate.phone = data.phone || null;
+      if (data.email !== undefined) teacherUpdate.email = data.email || null;
+      if (data.avatarUrl !== undefined) teacherUpdate.avatar_url = data.avatarUrl || null;
+      if (data.address !== undefined) teacherUpdate.address = data.address || null;
+      if (data.position !== undefined) teacherUpdate.position = data.position || null;
+      if (data.workStatus !== undefined) teacherUpdate.work_status = data.workStatus;
+      if (data.startDate !== undefined) teacherUpdate.start_date = new Date(data.startDate);
+      if (data.endDate !== undefined)
+        teacherUpdate.end_date = data.endDate ? new Date(data.endDate) : null;
+  
+      await prisma.teacher.update({
+        where: { teacher_id: teacher.teacher_id },
+        data: teacherUpdate,
+      });
+  
+      return this.getTeacherById(teacher.public_id || teacher.teacher_id.toString());
+    }
+
+  async removeTeacherFromClass(teacherId, classId) {
+      const teacher = await prisma.teacher.findFirst({
+        where: { ...this._parseId(teacherId), deleted_at: null },
+      });
+      if (!teacher) throw new NotFound('Giáo viên không tồn tại');
+  
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseClassId(classId), deleted_at: null },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      const active = await prisma.teacherClass.findFirst({
+        where: {
+          teacher_id: teacher.teacher_id,
+          class_id: classRecord.class_id,
+          left_at: null,
+        },
+      });
+      if (!active) {
+        throw new NotFound('Không tìm thấy bản ghi phân công lớp đang hoạt động');
+      }
+  
+      await prisma.teacherClass.update({
+        where: { id: active.id },
+        data: { left_at: new Date() },
+      });
+  
+      return { success: true, message: 'Đã hoàn tất phân công giáo viên rời khỏi lớp học' };
+    }
+
+  async deleteTeacher(id) {
+      const where = { ...this._parseId(id), deleted_at: null };
+      const teacher = await prisma.teacher.findFirst({ where });
+      if (!teacher) throw new NotFound('Giáo viên không tồn tại');
+  
+      await prisma.$transaction(async (tx) => {
+        // 1. Soft delete teacher
+        await tx.teacher.update({
+          where: { teacher_id: teacher.teacher_id },
+          data: {
+            deleted_at: new Date(),
+            work_status: 'RESIGNED',
+            end_date: new Date(),
+          },
+        });
+  
+        // 2. Terminate active class allocations
+        await tx.teacherClass.updateMany({
+          where: { teacher_id: teacher.teacher_id, left_at: null },
+          data: { left_at: new Date() },
+        });
+  
+        // 3. Deactivate associated account if exists
+        if (teacher.account_id) {
+          await tx.account.update({
+            where: { account_id: teacher.account_id },
+            data: { is_active: false, deleted_at: new Date() },
+          });
+        }
+      });
+  
+      return { success: true, message: 'Đã xóa hồ sơ giáo viên thành công' };
+    }
+
 }
 export const teacherService = new TeacherService();
 export default teacherService;
