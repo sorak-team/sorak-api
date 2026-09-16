@@ -22,17 +22,12 @@ import {
 const router = Router();
 
 // Read operations: Available to authenticated users (Admin, Teachers)
-
 router.get('/', authMiddleware, validate(queryTeacherSchema, 'query'), asyncHandler(listTeachers));
+
 router.get('/:id', authMiddleware, asyncHandler(getTeacherById));
-router.post(
-router.patch(
-router.delete(
-router.post(
-
-
 
 // Write operations: Strictly restricted to ADMIN_BGH
+router.post(
   '/',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
@@ -40,6 +35,7 @@ router.post(
   asyncHandler(createTeacher),
 );
 
+router.patch(
   '/:id',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
@@ -47,6 +43,7 @@ router.post(
   asyncHandler(updateTeacher),
 );
 
+router.delete(
   '/:id',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
@@ -54,6 +51,7 @@ router.post(
 );
 
 // Classroom Allocations
+router.post(
   '/:id/classes',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
@@ -61,6 +59,7 @@ router.post(
   asyncHandler(assignTeacherToClass),
 );
 
+router.delete(
   '/:id/classes/:classId',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
