@@ -28,6 +28,8 @@ router.get('/:id', authMiddleware, asyncHandler(getTeacherById));
 router.post(
 router.patch(
 router.delete(
+router.post(
+router.delete(
 
 
 
