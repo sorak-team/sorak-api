@@ -6,3 +6,9 @@ export const listSchoolYears = async (req, res) => {
   res.success(result);
 };
 
+export const getSchoolYearById = async (req, res) => {
+  const { id } = req.params;
+  const result = await schoolYearService.getSchoolYearById(id);
+  res.success(result);
+};
+
