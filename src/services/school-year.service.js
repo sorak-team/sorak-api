@@ -629,6 +629,48 @@ export class SchoolYearService {
       };
     }
 
+  async closeRemainingEnrollments(id, accountId) {
+      const bigId = BigInt(id);
+      const classes = await prisma.class.findMany({
+        where: { school_year_id: bigId, deleted_at: null },
+        include: {
+          student_enrollments: {
+            where: { left_at: null, status: 'ENROLLED' },
+          },
+        },
+      });
+  
+      let updatedCount = 0;
+      await prisma.$transaction(async (tx) => {
+        for (const cls of classes) {
+          const isGraduated = cls.age_group === 'LA';
+          for (const enr of cls.student_enrollments) {
+            await tx.studentEnrollment.update({
+              where: { enrollment_id: enr.enrollment_id },
+              data: {
+                left_at: new Date(),
+                status: isGraduated ? 'GRADUATED' : 'COMPLETED',
+                leave_reason: isGraduated ? 'Tốt nghiệp ra trường' : 'Hoàn thành năm học',
+              },
+            });
+            if (isGraduated) {
+              await tx.student.update({
+                where: { student_id: enr.student_id },
+                data: { status: 'GRADUATED' },
+              });
+            }
+            updatedCount++;
+          }
+        }
+      });
+  
+      return {
+        success: true,
+        updatedCount,
+        message: `Đã chốt hoàn tất năm học cho ${updatedCount} học sinh. Hiện không còn học sinh nào ở trạng thái đang học.`,
+      };
+    }
+
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;
