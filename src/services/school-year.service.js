@@ -280,6 +280,117 @@ export class SchoolYearService {
       });
     }
 
+  async updateSchoolYear(id, data) {
+      const bigId = BigInt(id);
+      const existing = await prisma.schoolYear.findFirst({
+        where: { school_year_id: bigId, deleted_at: null },
+      });
+  
+      if (!existing) {
+        throw NotFound('Không tìm thấy năm học để cập nhật');
+      }
+  
+      // Kiểm tra nếu năm học đã được sử dụng (điểm danh, chủ đề, mục tiêu, lớp học)
+      const [classCount, themeCount, goalCount, attendanceCount] = await Promise.all([
+        prisma.class.count({ where: { school_year_id: bigId, deleted_at: null } }),
+        prisma.curriculumTheme.count({ where: { school_year_id: bigId, deleted_at: null } }),
+        prisma.educationalGoal.count({ where: { school_year_id: bigId, deleted_at: null } }),
+        prisma.attendance.count({
+          where: {
+            class: { school_year_id: bigId, deleted_at: null },
+            deleted_at: null,
+          },
+        }),
+      ]);
+  
+      const isUsed = Boolean(classCount > 0 || themeCount > 0 || goalCount > 0 || attendanceCount > 0);
+  
+      // Nếu năm học đã được sử dụng: Không cho phép sửa tên, ngày bắt đầu và ngày kết thúc năm học.
+      // Vẫn cho phép điều chỉnh ngày kết thúc HK1 và trạng thái.
+      const isChangingLockedFields = Boolean(
+        (data.name && data.name.trim() !== existing.name) ||
+        (data.startDate && new Date(data.startDate).getTime() !== existing.start_date.getTime()) ||
+        (data.endDate && new Date(data.endDate).getTime() !== existing.end_date.getTime())
+      );
+  
+      if (isUsed && isChangingLockedFields) {
+        const reasons = [];
+        if (attendanceCount > 0) reasons.push(`${attendanceCount} lượt điểm danh`);
+        if (themeCount > 0) reasons.push(`${themeCount} chủ đề`);
+        if (goalCount > 0) reasons.push(`${goalCount} mục tiêu giáo dục`);
+        if (classCount > 0) reasons.push(`${classCount} lớp học`);
+        throw BadRequest(
+          `Năm học "${existing.name}" đã được sử dụng (${reasons.join(', ')}). Không thể sửa tên, ngày bắt đầu và ngày kết thúc năm học (vẫn cho phép cập nhật ngày kết thúc HK1 và trạng thái).`
+        );
+      }
+  
+      const updatePayload = {};
+  
+      if (data.name) {
+        const trimmedName = data.name.trim();
+        if (trimmedName !== existing.name) {
+          const duplicate = await prisma.schoolYear.findFirst({
+            where: {
+              name: trimmedName,
+              deleted_at: null,
+              school_year_id: { not: bigId },
+            },
+          });
+          if (duplicate) {
+            throw BadRequest(`Tên năm học "${trimmedName}" đã được sử dụng`);
+          }
+        }
+        updatePayload.name = trimmedName;
+      }
+  
+      const sDate = data.startDate ? new Date(data.startDate) : existing.start_date;
+      const sem1Date = data.semester1EndDate ? new Date(data.semester1EndDate) : existing.semester_1_end_date;
+      const eDate = data.endDate ? new Date(data.endDate) : existing.end_date;
+  
+      if (sDate >= sem1Date || sem1Date >= eDate) {
+        throw BadRequest('Ngày kết thúc học kỳ 1 phải nằm giữa ngày bắt đầu và ngày kết thúc năm học');
+      }
+  
+      if (data.startDate) updatePayload.start_date = sDate;
+      if (data.semester1EndDate) updatePayload.semester_1_end_date = sem1Date;
+      if (data.endDate) updatePayload.end_date = eDate;
+      if (data.colorTheme) updatePayload.color_theme = data.colorTheme;
+  
+      return prisma.$transaction(async (tx) => {
+        if (data.status) {
+          if (data.status === 'ACTIVE' && existing.status !== 'ACTIVE') {
+            // Deactivate any currently active school year
+            await tx.schoolYear.updateMany({
+              where: {
+                status: 'ACTIVE',
+                deleted_at: null,
+                school_year_id: { not: bigId },
+              },
+              data: { status: 'COMPLETED' },
+            });
+          }
+          updatePayload.status = data.status;
+        }
+  
+        const updated = await tx.schoolYear.update({
+          where: { school_year_id: bigId },
+          data: updatePayload,
+        });
+  
+        return {
+          id: updated.school_year_id.toString(),
+          name: updated.name,
+          startDate: updated.start_date.toISOString().split('T')[0],
+          semester1EndDate: updated.semester_1_end_date.toISOString().split('T')[0],
+          endDate: updated.end_date.toISOString().split('T')[0],
+          status: updated.status,
+          colorTheme: updated.color_theme || 'blue',
+          isActive: updated.status === 'ACTIVE',
+          updatedAt: updated.updated_at,
+        };
+      });
+    }
+
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;
