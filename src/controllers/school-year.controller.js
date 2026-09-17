@@ -12,3 +12,8 @@ export const getSchoolYearById = async (req, res) => {
   res.success(result);
 };
 
+export const getActiveSchoolYear = async (req, res) => {
+  const result = await schoolYearService.getActiveSchoolYear();
+  res.success(result);
+};
+
