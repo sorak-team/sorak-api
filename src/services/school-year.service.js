@@ -220,6 +220,66 @@ export class SchoolYearService {
       };
     }
 
+  async createSchoolYear({ name, startDate, semester1EndDate, endDate, status = 'UPCOMING', colorTheme = 'blue' }) {
+      const sDate = new Date(startDate);
+      const sem1Date = new Date(semester1EndDate);
+      const eDate = new Date(endDate);
+  
+      if (sDate >= sem1Date || sem1Date >= eDate) {
+        throw BadRequest('Ngày kết thúc học kỳ 1 phải nằm giữa ngày bắt đầu và ngày kết thúc năm học');
+      }
+  
+      const trimmedName = name.trim();
+      const existing = await prisma.schoolYear.findFirst({
+        where: {
+          name: trimmedName,
+          deleted_at: null,
+        },
+      });
+  
+      if (existing) {
+        throw BadRequest(`Năm học "${trimmedName}" đã tồn tại trên hệ thống`);
+      }
+  
+      // If marked active, execute atomic transaction to set prior active year to COMPLETED
+      return prisma.$transaction(async (tx) => {
+        if (status === 'ACTIVE') {
+          await tx.schoolYear.updateMany({
+            where: { status: 'ACTIVE', deleted_at: null },
+            data: { status: 'COMPLETED' },
+          });
+        }
+  
+        const created = await tx.schoolYear.create({
+          data: {
+            name: trimmedName,
+            start_date: sDate,
+            semester_1_end_date: sem1Date,
+            end_date: eDate,
+            status,
+            color_theme: colorTheme,
+          },
+        });
+  
+        logger.info(
+          { schoolYearId: created.school_year_id.toString(), name: trimmedName, status, colorTheme },
+          'School year created',
+        );
+  
+        return {
+          id: created.school_year_id.toString(),
+          name: created.name,
+          startDate: created.start_date.toISOString().split('T')[0],
+          semester1EndDate: created.semester_1_end_date.toISOString().split('T')[0],
+          endDate: created.end_date.toISOString().split('T')[0],
+          status: created.status,
+          colorTheme: created.color_theme || 'blue',
+          isActive: created.status === 'ACTIVE',
+          createdAt: created.created_at,
+        };
+      });
+    }
+
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;
