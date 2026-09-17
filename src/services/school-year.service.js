@@ -395,6 +395,10 @@ export class SchoolYearService {
       return this.updateSchoolYear(id, { status: 'ACTIVE' });
     }
 
+  async completeSchoolYear(id) {
+      return this.updateSchoolYear(id, { status: 'COMPLETED' });
+    }
+
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;
