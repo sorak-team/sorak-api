@@ -46,3 +46,9 @@ export const deleteSchoolYear = async (req, res) => {
   res.success(result);
 };
 
+export const getTransitionReadiness = async (req, res) => {
+  const { id } = req.params;
+  const result = await schoolYearService.getTransitionReadiness(id);
+  res.success(result);
+};
+
