@@ -22,3 +22,9 @@ export const createSchoolYear = async (req, res) => {
   res.status(201).success(result);
 };
 
+export const updateSchoolYear = async (req, res) => {
+  const { id } = req.params;
+  const result = await schoolYearService.updateSchoolYear(id, req.body);
+  res.success(result);
+};
+
