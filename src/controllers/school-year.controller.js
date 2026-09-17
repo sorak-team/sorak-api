@@ -64,3 +64,9 @@ export const listHolidays = async (req, res) => {
   res.success(result);
 };
 
+export const createHoliday = async (req, res) => {
+  const { id } = req.params;
+  const result = await schoolYearService.createHoliday(id, req.user?.sub, req.body);
+  res.status(201).success(result);
+};
+
