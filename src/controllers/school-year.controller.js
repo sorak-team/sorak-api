@@ -40,3 +40,9 @@ export const completeSchoolYear = async (req, res) => {
   res.success(result);
 };
 
+export const deleteSchoolYear = async (req, res) => {
+  const { id } = req.params;
+  const result = await schoolYearService.deleteSchoolYear(id);
+  res.success(result);
+};
+
