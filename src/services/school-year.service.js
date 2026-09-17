@@ -399,6 +399,40 @@ export class SchoolYearService {
       return this.updateSchoolYear(id, { status: 'COMPLETED' });
     }
 
+  async deleteSchoolYear(id) {
+      const bigId = BigInt(id);
+      const existing = await prisma.schoolYear.findFirst({
+        where: { school_year_id: bigId, deleted_at: null },
+        include: {
+          _count: {
+            select: { classes: { where: { deleted_at: null } } },
+          },
+        },
+      });
+  
+      if (!existing) {
+        throw NotFound('Không tìm thấy năm học để xóa');
+      }
+  
+      if (existing._count.classes > 0) {
+        throw BadRequest(
+          `Không thể xóa năm học "${existing.name}" vì đang có ${existing._count.classes} lớp học trực thuộc (Quy tắc toàn vẹn dữ liệu RESTRICT)`,
+        );
+      }
+  
+      await prisma.schoolYear.update({
+        where: { school_year_id: bigId },
+        data: { deleted_at: new Date() },
+      });
+  
+      logger.info({ schoolYearId: id, name: existing.name }, 'School year soft-deleted');
+  
+      return {
+        success: true,
+        message: `Đã xóa thành công năm học "${existing.name}"`,
+      };
+    }
+
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;
