@@ -188,6 +188,38 @@ export class SchoolYearService {
       };
     }
 
+  async getActiveSchoolYear() {
+      const item = await prisma.schoolYear.findFirst({
+        where: {
+          status: 'ACTIVE',
+          deleted_at: null,
+        },
+        include: {
+          _count: {
+            select: { classes: { where: { deleted_at: null } } },
+          },
+        },
+      });
+  
+      if (!item) {
+        return null;
+      }
+  
+      return {
+        id: item.school_year_id.toString(),
+        name: item.name,
+        startDate: item.start_date.toISOString().split('T')[0],
+        semester1EndDate: item.semester_1_end_date ? item.semester_1_end_date.toISOString().split('T')[0] : null,
+        endDate: item.end_date.toISOString().split('T')[0],
+        status: item.status,
+        colorTheme: item.color_theme || 'blue',
+        isActive: true,
+        totalClasses: item._count.classes,
+        createdAt: item.created_at,
+        updatedAt: item.updated_at,
+      };
+    }
+
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;
