@@ -1181,34 +1181,6 @@ export class SchoolYearService {
       };
     }
 
-  async deleteHoliday(id, holidayId) {
-      const bigId = BigInt(id);
-      const existing = await prisma.schoolHoliday.findFirst({
-        where: {
-          school_year_id: bigId,
-          OR: [
-            { public_id: holidayId },
-            { holiday_id: /^\d+$/.test(String(holidayId)) ? BigInt(holidayId) : -1n },
-          ],
-          deleted_at: null,
-        },
-      });
-  
-      if (!existing) {
-        throw NotFound('Không tìm thấy ngày nghỉ hoặc sự kiện');
-      }
-  
-      await prisma.schoolHoliday.update({
-        where: { holiday_id: existing.holiday_id },
-        data: { deleted_at: new Date() },
-      });
-  
-      return {
-        success: true,
-        message: 'Đã xóa ngày nghỉ / sự kiện thành công!',
-      };
-    }
-
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;
