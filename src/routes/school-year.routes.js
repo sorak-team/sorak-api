@@ -38,6 +38,7 @@ router.get('/:id/holidays', authMiddleware, asyncHandler(listHolidays));
 router.post(
 router.post(
 router.patch(
+router.delete(
 
   '/:id/close-enrollments',
   authMiddleware,
