@@ -37,6 +37,7 @@ router.post(
 router.get('/:id/holidays', authMiddleware, asyncHandler(listHolidays));
 router.post(
 router.post(
+router.patch(
 
   '/:id/close-enrollments',
   authMiddleware,

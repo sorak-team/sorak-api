@@ -1133,6 +1133,54 @@ export class SchoolYearService {
       };
     }
 
+  async updateHoliday(id, holidayId, accountId, data) {
+      const bigId = BigInt(id);
+      const existing = await prisma.schoolHoliday.findFirst({
+        where: {
+          school_year_id: bigId,
+          OR: [
+            { public_id: holidayId },
+            { holiday_id: /^\d+$/.test(String(holidayId)) ? BigInt(holidayId) : -1n },
+          ],
+          deleted_at: null,
+        },
+      });
+  
+      if (!existing) {
+        throw NotFound('Không tìm thấy ngày nghỉ hoặc sự kiện');
+      }
+  
+      const updateData = {};
+      if (data.name !== undefined) updateData.name = data.name.trim();
+      if (data.startDate !== undefined) updateData.start_date = new Date(data.startDate);
+      if (data.endDate !== undefined) updateData.end_date = new Date(data.endDate);
+      if (data.isTeachingAllowed !== undefined) updateData.is_teaching_allowed = Boolean(data.isTeachingAllowed);
+      if (data.targetGrades !== undefined) {
+        updateData.target_grades = Array.isArray(data.targetGrades) ? data.targetGrades : [];
+      }
+      if (data.description !== undefined || data.scope !== undefined) {
+        let desc = data.description !== undefined ? (data.description ? data.description.trim() : '') : (existing.description || '');
+        const cleaned = desc.replace(/^\[.*?\]\s*/, '').trim();
+        if (data.scope && data.scope !== 'Toàn trường') {
+          desc = `[${data.scope}] ${cleaned}`.trim();
+        } else if (data.scope === 'Toàn trường') {
+          desc = cleaned;
+        }
+        updateData.description = desc || null;
+      }
+  
+      const updated = await prisma.schoolHoliday.update({
+        where: { holiday_id: existing.holiday_id },
+        data: updateData,
+      });
+  
+      return {
+        id: updated.public_id,
+        name: updated.name,
+        message: 'Cập nhật ngày nghỉ / sự kiện thành công!',
+      };
+    }
+
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;
