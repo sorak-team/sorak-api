@@ -671,6 +671,214 @@ export class SchoolYearService {
       };
     }
 
+  async executeTransition(id, accountId, body = {}) {
+      const bigId = BigInt(id);
+      const { copyThemes = true, copyGoals = true } = body || {};
+  
+      const currentYear = await prisma.schoolYear.findFirst({
+        where: { school_year_id: bigId, deleted_at: null },
+        include: {
+          classes: {
+            where: { deleted_at: null },
+            include: {
+              student_enrollments: {
+                where: { left_at: null },
+                include: { student: true },
+              },
+            },
+          },
+        },
+      });
+  
+      if (!currentYear) throw NotFound('Không tìm thấy năm học.');
+  
+      const matchYears = currentYear.name.match(/(\d{4})[–-](\d{4})/);
+      let nextStartYear = 2027;
+      let nextEndYear = 2028;
+      if (matchYears) {
+        nextStartYear = parseInt(matchYears[2], 10);
+        nextEndYear = nextStartYear + 1;
+      }
+      const targetYearName = `Năm học ${nextStartYear}–${nextEndYear}`;
+  
+      return prisma.$transaction(async (tx) => {
+        // 1. Mark current year COMPLETED
+        await tx.schoolYear.update({
+          where: { school_year_id: bigId },
+          data: { status: 'COMPLETED' },
+        });
+  
+        // 2. Find or create target school year, mark ACTIVE
+        let targetYear = await tx.schoolYear.findFirst({
+          where: { name: targetYearName, deleted_at: null },
+        });
+  
+        if (targetYear) {
+          targetYear = await tx.schoolYear.update({
+            where: { school_year_id: targetYear.school_year_id },
+            data: { status: 'ACTIVE' },
+          });
+        } else {
+          targetYear = await tx.schoolYear.create({
+            data: {
+              name: targetYearName,
+              start_date: new Date(`${nextStartYear}-09-05`),
+              semester_1_end_date: new Date(`${nextEndYear}-01-15`),
+              end_date: new Date(`${nextEndYear}-05-31`),
+              status: 'ACTIVE',
+              color_theme: 'emerald',
+            },
+          });
+        }
+  
+        // 3. Copy themes if requested
+        if (copyThemes) {
+          const existingThemes = await tx.curriculumTheme.count({
+            where: { school_year_id: targetYear.school_year_id, deleted_at: null },
+          });
+          if (existingThemes === 0) {
+            const oldThemes = await tx.curriculumTheme.findMany({
+              where: { school_year_id: bigId, deleted_at: null },
+              include: {
+                sub_themes: {
+                  where: { deleted_at: null },
+                },
+              },
+            });
+  
+            const yearDiff = nextStartYear - currentYear.start_date.getFullYear();
+            for (const oldT of oldThemes) {
+              const newStart = new Date(oldT.start_date);
+              newStart.setFullYear(newStart.getFullYear() + yearDiff);
+              const newEnd = new Date(oldT.end_date);
+              newEnd.setFullYear(newEnd.getFullYear() + yearDiff);
+  
+              const newTheme = await tx.curriculumTheme.create({
+                data: {
+                  school_year_id: targetYear.school_year_id,
+                  age_group: oldT.age_group,
+                  name: oldT.name,
+                  start_date: newStart,
+                  end_date: newEnd,
+                  status: 'PUBLISHED',
+                  description: oldT.description,
+                },
+              });
+  
+              for (const oldSub of oldT.sub_themes) {
+                const subStart = new Date(oldSub.start_date);
+                subStart.setFullYear(subStart.getFullYear() + yearDiff);
+                const subEnd = new Date(oldSub.end_date);
+                subEnd.setFullYear(subEnd.getFullYear() + yearDiff);
+  
+                await tx.subTheme.create({
+                  data: {
+                    theme_id: newTheme.theme_id,
+                    name: oldSub.name,
+                    start_date: subStart,
+                    end_date: subEnd,
+                    created_by: accountId ? BigInt(accountId) : null,
+                  },
+                });
+              }
+            }
+          }
+        }
+  
+        // 4. Copy educational goals if requested
+        if (copyGoals) {
+          const existingGoals = await tx.educationalGoal.count({
+            where: { school_year_id: targetYear.school_year_id, deleted_at: null },
+          });
+          if (existingGoals === 0) {
+            const oldGoals = await tx.educationalGoal.findMany({
+              where: { school_year_id: bigId, deleted_at: null },
+              include: {
+                contents: {
+                  where: { deleted_at: null },
+                },
+              },
+            });
+  
+            for (const oldG of oldGoals) {
+              const newGoal = await tx.educationalGoal.create({
+                data: {
+                  school_year_id: targetYear.school_year_id,
+                  age_group: oldG.age_group,
+                  domain: oldG.domain,
+                  goal_code: oldG.goal_code,
+                  indicator_code: oldG.indicator_code,
+                  title: oldG.title,
+                  is_approved: true,
+                },
+              });
+  
+              for (const cnt of oldG.contents) {
+                await tx.educationalContent.create({
+                  data: {
+                    goal_id: newGoal.goal_id,
+                    title: cnt.title,
+                  },
+                });
+              }
+            }
+          }
+        }
+  
+        // 5. Process promotions and graduation
+        for (const cls of currentYear.classes) {
+          const isGraduated = cls.age_group === 'LA';
+          for (const enr of cls.student_enrollments) {
+            await tx.studentEnrollment.update({
+              where: { enrollment_id: enr.enrollment_id },
+              data: {
+                left_at: new Date(),
+                status: isGraduated ? 'GRADUATED' : 'COMPLETED',
+                leave_reason: isGraduated ? 'Tốt nghiệp ra trường' : 'Hoàn thành năm học',
+              },
+            });
+  
+            if (isGraduated) {
+              await tx.student.update({
+                where: { student_id: enr.student_id },
+                data: { status: 'GRADUATED' },
+              });
+            }
+          }
+        }
+  
+        // 6. Create announcement notification for BGH and Faculty
+        try {
+          const staffAccounts = await tx.account.findMany({
+            where: { role: { in: ['PRINCIPAL_BGH', 'TEACHER_GV'] }, is_active: true },
+            take: 30,
+          });
+  
+          for (const staff of staffAccounts) {
+            await tx.notification.create({
+              data: {
+                account_id: staff.account_id,
+                created_by: accountId ? BigInt(accountId) : null,
+                type: 'SCHOOL_ANNOUNCEMENT',
+                title: `Chuyển giao năm học mới: ${targetYearName}`,
+                body: `Hệ thống đã hoàn tất chuyển giao từ ${currentYear.name} sang ${targetYearName}. Danh sách học sinh các khối đã được chuyển vào Pool sẵn sàng phân lớp.`,
+              },
+            });
+          }
+        } catch (e) {
+          logger.warn({ error: e.message }, 'Failed to emit transition notification');
+        }
+  
+        return {
+          success: true,
+          message: `Chuyển giao năm học ${targetYearName} thành công!`,
+          previousYearId: currentYear.school_year_id.toString(),
+          targetYearId: targetYear.school_year_id.toString(),
+          targetYearName,
+        };
+      });
+    }
+
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;
