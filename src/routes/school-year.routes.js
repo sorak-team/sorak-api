@@ -32,6 +32,7 @@ const router = Router();
 // Transition & Readiness endpoints
 
 router.get('/:id/transition-readiness', authMiddleware, asyncHandler(getTransitionReadiness));
+router.post(
 
   '/:id/close-enrollments',
   authMiddleware,
