@@ -35,6 +35,7 @@ router.get('/:id/transition-readiness', authMiddleware, asyncHandler(getTransiti
 router.post(
 router.post(
 router.get('/:id/holidays', authMiddleware, asyncHandler(listHolidays));
+router.post(
 
   '/:id/close-enrollments',
   authMiddleware,

@@ -1063,6 +1063,42 @@ export class SchoolYearService {
       };
     }
 
+  async createHoliday(id, accountId, data) {
+      const bigId = BigInt(id);
+      const { name, startDate, endDate, isTeachingAllowed = false, description, scope, targetGrades } = data;
+  
+      if (!name?.trim()) throw BadRequest('Vui lòng nhập tên ngày nghỉ hoặc sự kiện.');
+      if (!startDate || !endDate) throw BadRequest('Vui lòng chọn ngày bắt đầu và kết thúc.');
+  
+      const sDate = new Date(startDate);
+      const eDate = new Date(endDate);
+      if (eDate < sDate) throw BadRequest('Ngày kết thúc không được trước ngày bắt đầu.');
+  
+      let finalDesc = description?.trim() || null;
+      if (scope && scope !== 'Toàn trường' && !finalDesc?.startsWith(`[${scope}]`)) {
+        finalDesc = `[${scope}] ${finalDesc || ''}`.trim();
+      }
+  
+      const holiday = await prisma.schoolHoliday.create({
+        data: {
+          school_year_id: bigId,
+          name: name.trim(),
+          start_date: sDate,
+          end_date: eDate,
+          is_teaching_allowed: Boolean(isTeachingAllowed),
+          target_grades: Array.isArray(targetGrades) ? targetGrades : [],
+          description: finalDesc,
+          created_by: accountId ? BigInt(accountId) : 1n,
+        },
+      });
+  
+      return {
+        id: holiday.public_id,
+        name: holiday.name,
+        message: 'Thêm ngày nghỉ / sự kiện thành công!',
+      };
+    }
+
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;
