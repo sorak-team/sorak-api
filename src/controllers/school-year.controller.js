@@ -1,6 +1,5 @@
 import { schoolYearService } from '../services/school-year.service.js';
 
-
 export const listSchoolYears = async (req, res) => {
   const result = await schoolYearService.listSchoolYears(req.query);
   res.success(result);
@@ -52,9 +51,46 @@ export const getTransitionReadiness = async (req, res) => {
   res.success(result);
 };
 
+export const closeRemainingEnrollments = async (req, res) => {
+  const { id } = req.params;
+  const result = await schoolYearService.closeRemainingEnrollments(id, req.user?.sub);
+  res.success(result);
+};
+
 export const executeTransition = async (req, res) => {
   const { id } = req.params;
   const result = await schoolYearService.executeTransition(id, req.user?.sub, req.body);
   res.success(result);
 };
+
+export const listHolidays = async (req, res) => {
+  const { id } = req.params;
+  const result = await schoolYearService.listHolidays(id, req.query);
+  res.success(result);
+};
+
+export const createHoliday = async (req, res) => {
+  const { id } = req.params;
+  const result = await schoolYearService.createHoliday(id, req.user?.sub, req.body);
+  res.status(201).success(result);
+};
+
+export const importHolidays = async (req, res) => {
+  const { id } = req.params;
+  const result = await schoolYearService.importHolidays(id, req.user?.sub, req.body.items || req.body);
+  res.success(result);
+};
+
+export const updateHoliday = async (req, res) => {
+  const { id, holidayId } = req.params;
+  const result = await schoolYearService.updateHoliday(id, holidayId, req.user?.sub, req.body);
+  res.success(result);
+};
+
+export const deleteHoliday = async (req, res) => {
+  const { id, holidayId } = req.params;
+  const result = await schoolYearService.deleteHoliday(id, holidayId);
+  res.success(result);
+};
+
 
