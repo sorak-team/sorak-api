@@ -223,6 +223,68 @@ export class StudentService {
       };
     }
 
+  async getStudentById(id) {
+      const where = { ...this._parseId(id), deleted_at: null };
+  
+      const student = await prisma.student.findFirst({
+        where,
+        include: {
+          account: {
+            select: {
+              account_id: true,
+              public_id: true,
+              username: true,
+              role: true,
+              is_active: true,
+              last_login_at: true,
+              created_at: true,
+            },
+          },
+          parents: {
+            where: { deleted_at: null },
+            orderBy: { created_at: 'asc' },
+          },
+          student_enrollments: {
+            orderBy: { enrolled_at: 'desc' },
+            include: {
+              class: {
+                select: {
+                  class_id: true,
+                  public_id: true,
+                  name: true,
+                  room_number: true,
+                  age_group: true,
+                  school_year: {
+                    select: { school_year_id: true, name: true, status: true },
+                  },
+                },
+              },
+            },
+          },
+          class_transfers: {
+            orderBy: { transfer_date: 'desc' },
+            include: {
+              from_class: {
+                select: { class_id: true, public_id: true, name: true, room_number: true },
+              },
+              to_class: {
+                select: { class_id: true, public_id: true, name: true, room_number: true },
+              },
+              creator: {
+                select: { account_id: true, public_id: true, username: true, role: true },
+              },
+            },
+          },
+        },
+      });
+  
+      if (!student) {
+        throw new NotFound('Hồ sơ học sinh không tồn tại hoặc đã bị xóa');
+      }
+  
+      return this._formatStudentDetail(student);
+    }
+
 }
 export const studentService = new StudentService();
 export default studentService;
