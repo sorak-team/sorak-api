@@ -327,6 +327,144 @@ export class StudentService {
       return `${prefix}${nextSeq}`;
     }
 
+  async createStudent(payload) {
+      const {
+        studentCode,
+        fullName,
+        dateOfBirth,
+        gender,
+        ethnic,
+        nationality = 'Việt Nam',
+        placeOfBirth,
+        permanentResidence,
+        currentResidence,
+        status = 'STUDYING',
+        enrollmentDate,
+        allergyNotes,
+        medicalNotes,
+        notes,
+        avatarUrl,
+        classId,
+        enrolledAt = new Date(),
+        parents = [],
+      } = payload;
+  
+      // Validate class if provided
+      let targetClass = null;
+      if (classId) {
+        const isNumeric = /^\d+$/.test(String(classId));
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          String(classId),
+        );
+        if (isNumeric) {
+          targetClass = await prisma.class.findFirst({
+            where: { class_id: BigInt(classId), deleted_at: null },
+            include: { school_year: true },
+          });
+        } else if (isUuid) {
+          targetClass = await prisma.class.findFirst({
+            where: { public_id: String(classId), deleted_at: null },
+            include: { school_year: true },
+          });
+        } else {
+          // Fallback for mock IDs like 'nt-a1' or matching by name
+          targetClass = await prisma.class.findFirst({
+            where: {
+              OR: [
+                { name: { contains: String(classId), mode: 'insensitive' } },
+                { age_group: { contains: String(classId), mode: 'insensitive' } },
+              ],
+              deleted_at: null,
+            },
+            include: { school_year: true },
+          });
+        }
+        if (!targetClass && (isNumeric || isUuid)) {
+          throw new NotFound(`Lớp học (ID: ${classId}) không tồn tại`);
+        }
+      }
+  
+      // Auto-generate or format studentCode (HS + YY + 001..999 per admission year)
+      let finalStudentCode;
+      if (!studentCode || String(studentCode).trim().toUpperCase().startsWith('HS')) {
+        const startYear = targetClass?.school_year?.start_date
+          ? new Date(targetClass.school_year.start_date).getFullYear()
+          : null;
+        finalStudentCode = await this._generateStudentCode(
+          enrollmentDate,
+          startYear,
+        );
+      } else {
+        finalStudentCode = String(studentCode).trim().toUpperCase();
+      }
+  
+      // Check studentCode uniqueness
+      const existingCode = await prisma.student.findUnique({
+        where: { student_code: finalStudentCode },
+      });
+      if (existingCode) {
+        throw new Conflict(`Mã học sinh '${finalStudentCode}' đã tồn tại trên hệ thống`);
+      }
+  
+      // Execute atomic creation (Profile SSOT without auto-creating account)
+      const created = await prisma.$transaction(async (tx) => {
+        // 1. Create Student (Profile SSOT with account_id: null)
+        const student = await tx.student.create({
+          data: {
+            account_id: null,
+            student_code: finalStudentCode,
+            full_name: fullName,
+            avatar_url: avatarUrl || null,
+            date_of_birth: new Date(dateOfBirth),
+            gender,
+            ethnic: ethnic || null,
+            nationality,
+            place_of_birth: placeOfBirth || null,
+            permanent_residence: permanentResidence || null,
+            current_residence: currentResidence || null,
+            status,
+            enrollment_date: new Date(enrollmentDate),
+            allergy_notes: allergyNotes || null,
+            medical_notes: medicalNotes || null,
+            previous_school: payload.previousSchool || notes || null,
+          },
+        });
+  
+        // 2. Create Parents
+        if (Array.isArray(parents) && parents.length > 0) {
+          for (const p of parents) {
+            if (p.fullName && p.fullName.trim()) {
+              await tx.parent.create({
+                data: {
+                  student_id: student.student_id,
+                  full_name: p.fullName.trim(),
+                  relationship: p.relationship || 'Bố',
+                  phone: p.phone || '',
+                  can_pickup: p.canPickup !== undefined ? Boolean(p.canPickup) : true,
+                },
+              });
+            }
+          }
+        }
+  
+        // 3. Initial Class Enrollment if provided
+        if (targetClass) {
+          await tx.studentEnrollment.create({
+            data: {
+              student_id: student.student_id,
+              class_id: targetClass.class_id,
+              enrolled_at: new Date(enrolledAt),
+            },
+          });
+        }
+  
+        return student;
+      });
+  
+      logger.info(`[StudentService] Created student ${created.student_code} (${created.full_name})`);
+      return this.getStudentById(created.public_id || created.student_id.toString());
+    }
+
 }
 export const studentService = new StudentService();
 export default studentService;
