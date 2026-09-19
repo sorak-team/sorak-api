@@ -48,3 +48,9 @@ export const addParent = async (req, res) => {
   res.status(201).success(result);
 };
 
+export const updateParent = async (req, res) => {
+  const { id, parentId } = req.params;
+  const result = await studentService.updateParent(id, parentId, req.body);
+  res.success(result);
+};
+
