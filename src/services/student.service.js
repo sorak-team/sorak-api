@@ -27,6 +27,11 @@ export class StudentService {
       return { public_id: isUuid ? str : '00000000-0000-0000-0000-000000000000' };
     }
 
+  _getDefaultAvatar(seed) {
+      const safeSeed = (seed || 'student').toString().trim();
+      return `https://api.dicebear.com/10.x/critters/svg?seed=${encodeURIComponent(safeSeed)}&backgroundColor=ff2e63,00c2a8,ffb300,3d5afe,8e24aa,00e676`;
+    }
+
 }
 export const studentService = new StudentService();
 export default studentService;
