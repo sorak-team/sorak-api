@@ -54,3 +54,9 @@ export const updateParent = async (req, res) => {
   res.success(result);
 };
 
+export const deleteParent = async (req, res) => {
+  const { id, parentId } = req.params;
+  const result = await studentService.deleteParent(id, parentId);
+  res.success(result);
+};
+
