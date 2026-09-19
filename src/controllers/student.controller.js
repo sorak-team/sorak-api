@@ -6,3 +6,9 @@ export const listStudents = async (req, res) => {
   res.success(result);
 };
 
+export const getStudentById = async (req, res) => {
+  const { id } = req.params;
+  const result = await studentService.getStudentById(id);
+  res.success(result);
+};
+
