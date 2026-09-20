@@ -634,6 +634,34 @@ export class StudentService {
       });
     }
 
+  async addParent(studentId, parentData) {
+      const student = await prisma.student.findFirst({
+        where: { ...this._parseId(studentId), deleted_at: null },
+      });
+      if (!student) throw new NotFound('Hồ sơ học sinh không tồn tại');
+  
+      const created = await prisma.parent.create({
+        data: {
+          student_id: student.student_id,
+          full_name: parentData.fullName,
+          relationship: parentData.relationship,
+          phone: parentData.phone,
+          can_pickup: parentData.canPickup !== undefined ? Boolean(parentData.canPickup) : true,
+          avatar_url: parentData.avatarUrl || null,
+        },
+      });
+  
+      return {
+        id: created.parent_id.toString(),
+        publicId: created.public_id,
+        fullName: created.full_name,
+        relationship: created.relationship,
+        phone: created.phone,
+        canPickup: created.can_pickup,
+        avatarUrl: created.avatar_url || null,
+      };
+    }
+
 }
 export const studentService = new StudentService();
 export default studentService;
