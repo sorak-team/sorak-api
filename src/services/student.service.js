@@ -705,6 +705,55 @@ export class StudentService {
       return { success: true, message: 'Đã xóa thông tin phụ huynh' };
     }
 
+  _formatStudentSummary(s, schoolYearId));
+  
+      // Default sort by class age tier (smallest to largest: Nhà trẻ -> Mầm -> Chồi -> Lá)
+      if (!sortBy || sortBy === 'classTier' || sortBy === 'newest') {
+        const CLASS_TIER_ORDER = {
+          NHA_TRE: 1,
+          MAM: 2,
+          CHOI: 3,
+          LA: 4,
+        };
+  
+        const getTier = (s) => {
+          if (!s.currentClass) return 999;
+          const grp = String(s.currentClass.ageGroup || '')
+            .toUpperCase()
+            .trim();
+          if (CLASS_TIER_ORDER[grp]) return CLASS_TIER_ORDER[grp];
+          const name = String(s.currentClass.className || '').toLowerCase();
+          if (name.includes('nhà trẻ') || name.includes('nha tre')) return 1;
+          if (name.includes('mầm') || name.includes('mam')) return 2;
+          if (name.includes('chồi') || name.includes('choi')) return 3;
+          if (name.includes('lá') || name.includes('la')) return 4;
+          return 500;
+        };
+  
+        formatted.sort((a, b) => {
+          const tierA = getTier(a);
+          const tierB = getTier(b);
+          if (tierA !== tierB) return tierA - tierB;
+  
+          const codeA = String(a.studentCode || a.code || '').trim();
+          const codeB = String(b.studentCode || b.code || '').trim();
+          const codeComp = codeA.localeCompare(codeB, undefined, {
+            numeric: true,
+            sensitivity: 'base',
+          });
+          if (codeComp !== 0) return codeComp;
+  
+          const classA = a.currentClass?.className || '';
+          const classB = b.currentClass?.className || '';
+          const cComp = classA.localeCompare(classB, 'vi');
+          if (cComp !== 0) return cComp;
+  
+          const nameA = a.fullName || a.studentCode || '';
+          const nameB = b.fullName || b.studentCode || '';
+          return nameA.localeCompare(nameB, 'vi');
+        });
+      }
+
 }
 export const studentService = new StudentService();
 export default studentService;

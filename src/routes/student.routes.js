@@ -36,6 +36,7 @@ router.patch(
 router.delete(
 router.post(
 router.post(
+router.post(
 
 
 
