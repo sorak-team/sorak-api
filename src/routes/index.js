@@ -3,6 +3,7 @@ import authRouter from './auth.routes.js';
 import accountRouter from './account.routes.js';
 import teacherRouter from './teacher.routes.js';
 import schoolYearRouter from './school-year.routes.js';
+import studentRouter from './student.routes.js';
 
 const router = Router();
 
@@ -10,5 +11,6 @@ router.use('/auth', authRouter);
 router.use('/accounts', accountRouter);
 router.use('/teachers', teacherRouter);
 router.use('/school-years', schoolYearRouter);
+router.use('/students', studentRouter);
 
 export default router;
