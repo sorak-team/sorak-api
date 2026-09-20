@@ -30,6 +30,7 @@ const router = Router();
 // Read operations: Available to authenticated school staff
 
 router.get('/', authMiddleware, validate(queryStudentSchema, 'query'), asyncHandler(listStudents));
+router.get('/:id', authMiddleware, asyncHandler(getStudentById));
 
 
 
