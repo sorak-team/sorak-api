@@ -28,19 +28,12 @@ import {
 const router = Router();
 
 // Read operations: Available to authenticated school staff
-
 router.get('/', authMiddleware, validate(queryStudentSchema, 'query'), asyncHandler(listStudents));
+
 router.get('/:id', authMiddleware, asyncHandler(getStudentById));
-router.post(
-router.patch(
-router.delete(
-router.post(
-router.post(
-router.post(
-
-
 
 // Write operations: Strictly restricted to PRINCIPAL_BGH / TEACHER_GV
+router.post(
   '/',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
@@ -48,6 +41,7 @@ router.post(
   asyncHandler(createStudent),
 );
 
+router.patch(
   '/:id',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
@@ -55,6 +49,7 @@ router.post(
   asyncHandler(updateStudent),
 );
 
+router.delete(
   '/:id',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
@@ -62,6 +57,7 @@ router.post(
 );
 
 // Classroom Enrollment & Transfers
+router.post(
   '/:id/enroll',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
@@ -69,6 +65,7 @@ router.post(
   asyncHandler(enrollStudent),
 );
 
+router.post(
   '/:id/transfer',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
@@ -77,6 +74,7 @@ router.post(
 );
 
 // Parent / Guardian CRUD
+router.post(
   '/:id/parents',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
@@ -84,6 +82,7 @@ router.post(
   asyncHandler(addParent),
 );
 
+router.patch(
   '/:id/parents/:parentId',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
@@ -91,6 +90,7 @@ router.post(
   asyncHandler(updateParent),
 );
 
+router.delete(
   '/:id/parents/:parentId',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
