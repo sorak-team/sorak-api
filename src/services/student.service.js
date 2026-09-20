@@ -662,6 +662,35 @@ export class StudentService {
       };
     }
 
+  async updateParent(studentId, parentId, parentData) {
+      const parent = await prisma.parent.findFirst({
+        where: { ...this._parseParentId(parentId), deleted_at: null },
+      });
+      if (!parent) throw new NotFound('Thông tin phụ huynh không tồn tại');
+  
+      const updateData = {};
+      if (parentData.fullName !== undefined) updateData.full_name = parentData.fullName;
+      if (parentData.relationship !== undefined) updateData.relationship = parentData.relationship;
+      if (parentData.phone !== undefined) updateData.phone = parentData.phone;
+      if (parentData.canPickup !== undefined) updateData.can_pickup = Boolean(parentData.canPickup);
+      if (parentData.avatarUrl !== undefined) updateData.avatar_url = parentData.avatarUrl || null;
+  
+      const updated = await prisma.parent.update({
+        where: { parent_id: parent.parent_id },
+        data: updateData,
+      });
+  
+      return {
+        id: updated.public_id || updated.parent_id.toString(),
+        publicId: updated.public_id,
+        fullName: updated.full_name,
+        relationship: updated.relationship,
+        phone: updated.phone,
+        canPickup: updated.can_pickup,
+        avatarUrl: updated.avatar_url || null,
+      };
+    }
+
 }
 export const studentService = new StudentService();
 export default studentService;

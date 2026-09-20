@@ -34,6 +34,7 @@ router.get('/:id', authMiddleware, asyncHandler(getStudentById));
 router.post(
 router.patch(
 router.delete(
+router.post(
 
 
 
