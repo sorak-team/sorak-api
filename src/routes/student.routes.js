@@ -31,6 +31,7 @@ const router = Router();
 
 router.get('/', authMiddleware, validate(queryStudentSchema, 'query'), asyncHandler(listStudents));
 router.get('/:id', authMiddleware, asyncHandler(getStudentById));
+router.post(
 
 
 
