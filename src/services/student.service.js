@@ -691,6 +691,20 @@ export class StudentService {
       };
     }
 
+  async deleteParent(studentId, parentId) {
+      const parent = await prisma.parent.findFirst({
+        where: { ...this._parseParentId(parentId), deleted_at: null },
+      });
+      if (!parent) throw new NotFound('Thông tin phụ huynh không tồn tại');
+  
+      await prisma.parent.update({
+        where: { parent_id: parent.parent_id },
+        data: { deleted_at: new Date() },
+      });
+  
+      return { success: true, message: 'Đã xóa thông tin phụ huynh' };
+    }
+
 }
 export const studentService = new StudentService();
 export default studentService;
