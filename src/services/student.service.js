@@ -607,6 +607,33 @@ export class StudentService {
       return { success: true, message: 'Đã xóa hồ sơ học sinh thành công' };
     }
 
+  async _findClass(idOrKey) {
+      if (!idOrKey) return null;
+      const str = String(idOrKey).trim();
+      const isNumeric = /^\d+$/.test(str);
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+  
+      if (isNumeric) {
+        return prisma.class.findFirst({
+          where: { class_id: BigInt(str), deleted_at: null },
+        });
+      }
+      if (isUuid) {
+        return prisma.class.findFirst({
+          where: { public_id: str, deleted_at: null },
+        });
+      }
+      return prisma.class.findFirst({
+        where: {
+          OR: [
+            { name: { contains: str, mode: 'insensitive' } },
+            { age_group: { contains: str, mode: 'insensitive' } },
+          ],
+          deleted_at: null,
+        },
+      });
+    }
+
 }
 export const studentService = new StudentService();
 export default studentService;
