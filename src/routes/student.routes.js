@@ -33,6 +33,7 @@ router.get('/', authMiddleware, validate(queryStudentSchema, 'query'), asyncHand
 router.get('/:id', authMiddleware, asyncHandler(getStudentById));
 router.post(
 router.patch(
+router.delete(
 
 
 
