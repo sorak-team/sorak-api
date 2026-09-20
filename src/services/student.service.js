@@ -754,6 +754,55 @@ export class StudentService {
         });
       }
 
+  _formatStudentDetail(student);
+    }
+  
+    /**
+     * Auto-generate student code based on admission year (Cohort): HS + YY + (001 -> 999)
+     * Minimum year is 2000 (HS00xxx).
+     */
+    async _generateStudentCode(enrollmentDate, schoolYearStartYear) {
+      let admissionYear;
+      if (enrollmentDate) {
+        if (typeof enrollmentDate === 'string' && enrollmentDate.includes('/')) {
+          const parts = enrollmentDate.split('/');
+          if (parts.length === 3) admissionYear = parseInt(parts[2], 10);
+        } else {
+          const d = new Date(enrollmentDate);
+          if (!isNaN(d.getTime())) admissionYear = d.getFullYear();
+        }
+      }
+      if (!admissionYear || isNaN(admissionYear)) {
+        admissionYear = schoolYearStartYear || new Date().getFullYear();
+      }
+  
+      // Quy tắc: Mã số học sinh tối thiểu là từ năm 2000 (HS00xxx)
+      if (admissionYear < 2000) {
+        admissionYear = 2000;
+      }
+  
+      const yearSuffix = String(admissionYear).slice(-2);
+      const prefix = `HS${yearSuffix}`;
+  
+      const existing = await prisma.student.findMany({
+        where: { student_code: { startsWith: prefix, mode: 'insensitive' } },
+        select: { student_code: true },
+      });
+  
+      let maxSeq = 0;
+      const regex = new RegExp(`^${prefix}(\\d{3})$`, 'i');
+      for (const s of existing) {
+        const match = s.student_code.match(regex);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (num > maxSeq) maxSeq = num;
+        }
+      }
+  
+      const nextSeq = String(maxSeq + 1).padStart(3, '0');
+      return `${prefix}${nextSeq}`;
+    }
+
 }
 export const studentService = new StudentService();
 export default studentService;
