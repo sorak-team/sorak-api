@@ -59,3 +59,9 @@ export const removeStudents = async (req, res) => {
   res.success(result);
 };
 
+export const importStudents = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.importStudents(id, req.body);
+  res.status(200).success(result);
+};
+
