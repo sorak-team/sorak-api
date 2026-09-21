@@ -53,3 +53,9 @@ export const allocateStudents = async (req, res) => {
   res.status(200).success(result);
 };
 
+export const removeStudents = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.removeStudents(id, req.body);
+  res.success(result);
+};
+
