@@ -424,6 +424,15 @@ export class ClassService {
       });
     }
 
+  async removeTeacher(classId, teacherId) {
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseId(classId), deleted_at: null },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      return teacherService.removeTeacherFromClass(teacherId, classRecord.class_id);
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
