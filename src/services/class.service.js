@@ -397,6 +397,33 @@ export class ClassService {
       return { success: true, message: 'Đã xóa lớp học thành công' };
     }
 
+  async assignTeacher(classId, body = {}) {
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseId(classId), deleted_at: null },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      if (Array.isArray(body.teacherIds) && body.teacherIds.length > 0) {
+        const results = [];
+        for (const tId of body.teacherIds) {
+          const res = await teacherService.assignTeacherToClass(tId, {
+            classId: classRecord.class_id,
+            isPrimary: false,
+            assignedAt: body.assignedAt,
+          });
+          results.push(res);
+        }
+        return results;
+      }
+  
+      const targetTeacherId = body.teacherId || body.id;
+      return teacherService.assignTeacherToClass(targetTeacherId, {
+        classId: classRecord.class_id,
+        isPrimary: Boolean(body.isPrimary),
+        assignedAt: body.assignedAt,
+      });
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
