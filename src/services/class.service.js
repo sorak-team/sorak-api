@@ -297,6 +297,47 @@ export class ClassService {
       };
     }
 
+  async createClass(data) {
+      let schoolYearId = data.schoolYearId;
+      if (!schoolYearId) {
+        const activeYear = await prisma.schoolYear.findFirst({
+          where: { status: 'ACTIVE', deleted_at: null },
+        });
+        if (!activeYear) {
+          throw new BadRequest('Chưa có năm học nào đang kích hoạt. Vui lòng chọn năm học.');
+        }
+        schoolYearId = activeYear.school_year_id;
+      } else {
+        schoolYearId = BigInt(schoolYearId);
+      }
+  
+      // Check duplicate name within the same school year
+      const existing = await prisma.class.findFirst({
+        where: {
+          school_year_id: schoolYearId,
+          name: data.name.trim(),
+          deleted_at: null,
+        },
+      });
+      if (existing) {
+        throw new Conflict(`Tên lớp '${data.name.trim()}' đã tồn tại trong năm học này`);
+      }
+  
+      const created = await prisma.class.create({
+        data: {
+          school_year_id: schoolYearId,
+          name: data.name.trim(),
+          age_group: data.ageGroup,
+          room_number: data.roomNumber?.trim() || null,
+          description: data.description?.trim() || null,
+        },
+      });
+  
+      logger.info({ classId: created.class_id.toString(), name: created.name }, 'Created classroom');
+  
+      return this.getClassById(created.public_id || created.class_id.toString());
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
