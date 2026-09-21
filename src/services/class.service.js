@@ -433,6 +433,26 @@ export class ClassService {
       return teacherService.removeTeacherFromClass(teacherId, classRecord.class_id);
     }
 
+  _calculateSuitableGrade(dob) {
+      if (!dob) return { key: 'NHA_TRE', label: 'Nhà trẻ' };
+      const birthDate = new Date(dob);
+      const birthYear = birthDate.getFullYear();
+      // In Sorak system:
+      // Children born 2023-2025 -> Nhà trẻ (12–36+ tháng)
+      // Children born 2022 -> Mầm (3–4 tuổi)
+      // Children born 2021 -> Chồi (4–5 tuổi)
+      // Children born 2020 or earlier -> Lá (5–6 tuổi)
+      if (birthYear >= 2023) {
+        return { key: 'NHA_TRE', label: 'Nhà trẻ' };
+      } else if (birthYear === 2022) {
+        return { key: 'MAM', label: 'Mầm' };
+      } else if (birthYear === 2021) {
+        return { key: 'CHOI', label: 'Chồi' };
+      } else {
+        return { key: 'LA', label: 'Lá' };
+      }
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
