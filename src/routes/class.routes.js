@@ -49,6 +49,7 @@ const router = Router();
 router.get('/', authMiddleware, validate(queryClassSchema, 'query'), asyncHandler(listClasses));
 router.get(
 router.get(
+router.post(
 
 
 // Global transfer requests for BGH / Admin
