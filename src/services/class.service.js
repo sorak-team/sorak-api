@@ -44,6 +44,14 @@ export class ClassService {
       return { public_id: isUuid ? str : '00000000-0000-0000-0000-000000000000' };
     }
 
+  _parseStudentId(id) {
+      const str = String(id).trim();
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+      if (isUuid) return { public_id: str };
+      if (/^[A-Za-z0-9_-]+$/.test(str) && !/^\d+$/.test(str)) return { student_code: str };
+      return { public_id: '00000000-0000-0000-0000-000000000000' };
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
