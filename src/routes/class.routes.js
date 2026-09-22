@@ -50,6 +50,7 @@ router.get('/', authMiddleware, validate(queryClassSchema, 'query'), asyncHandle
 router.get(
 router.get(
 router.post(
+router.patch(
 
 
 // Global transfer requests for BGH / Admin
