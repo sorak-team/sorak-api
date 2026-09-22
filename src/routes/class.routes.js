@@ -51,6 +51,7 @@ router.get(
 router.get(
 router.post(
 router.patch(
+router.get('/:id', authMiddleware, asyncHandler(getClassById));
 
 
 // Global transfer requests for BGH / Admin
