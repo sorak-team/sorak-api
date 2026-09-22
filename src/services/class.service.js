@@ -209,6 +209,94 @@ export class ClassService {
       };
     }
 
+  async getClassById(id) {
+      const where = { ...this._parseId(id), deleted_at: null };
+  
+      const c = await prisma.class.findFirst({
+        where,
+        include: {
+          school_year: true,
+          teacher_classes: {
+            orderBy: { assigned_at: 'desc' },
+            include: {
+              teacher: {
+                include: {
+                  account: {
+                    select: { is_active: true },
+                  },
+                },
+              },
+            },
+          },
+          student_enrollments: {
+            where: {
+              student: { deleted_at: null },
+            },
+            select: { enrollment_id: true, left_at: true },
+          },
+        },
+      });
+  
+      if (!c) {
+        throw new NotFound('Lớp học không tồn tại trên hệ thống');
+      }
+  
+      const activeAllocations = c.teacher_classes.filter((tc) => tc.left_at === null);
+      const primaryTeacher =
+        activeAllocations.find((tc) => tc.is_primary)?.teacher || activeAllocations[0]?.teacher;
+  
+      const capacity = 24;
+      const isCompletedYear = c.school_year?.status === 'COMPLETED';
+      const studentCount = isCompletedYear
+        ? c.student_enrollments?.length || 0
+        : c.student_enrollments?.filter((e) => e.left_at === null).length || 0;
+  
+      return {
+        id: c.public_id || c.class_id.toString(),
+        publicId: c.public_id,
+        name: c.name,
+        schoolYearId: c.school_year_id.toString(),
+        academicYear: c.school_year?.name,
+        schoolYearStatus: c.school_year?.status,
+        grade: c.age_group.toLowerCase(),
+        ageGroup: c.age_group,
+        gradeLabel: GRADE_LABELS[c.age_group] || c.age_group,
+        room: c.room_number || '',
+        roomNumber: c.room_number || '',
+        color: GRADE_COLORS[c.age_group] || 'emerald',
+        avatarUrl: getClassPlanetUrl(c.age_group),
+        description: c.description || '',
+        capacity,
+        studentCount,
+        remainingSlots: Math.max(0, capacity - studentCount),
+        teachersCount: activeAllocations.length,
+        teacher: primaryTeacher?.full_name || 'Chưa phân công',
+        activeTeachers: activeAllocations.map((tc) => ({
+          allocationId: tc.id.toString(),
+          teacherId: tc.teacher.public_id || tc.teacher.teacher_id.toString(),
+          employeeCode: tc.teacher.employee_code,
+          fullName: tc.teacher.full_name,
+          position: tc.teacher.position,
+          isPrimary: tc.is_primary,
+          email: tc.teacher.email || '',
+          phone: tc.teacher.phone || '',
+          avatar: tc.teacher.avatar_url || null,
+        })),
+        assignmentHistory: c.teacher_classes.map((tc) => ({
+          allocationId: tc.id.toString(),
+          teacherId: tc.teacher.public_id || tc.teacher.teacher_id.toString(),
+          fullName: tc.teacher.full_name,
+          employeeCode: tc.teacher.employee_code,
+          isPrimary: tc.is_primary,
+          assignedAt: tc.assigned_at,
+          leftAt: tc.left_at,
+          isActive: tc.left_at === null,
+        })),
+        createdAt: c.created_at,
+        updatedAt: c.updated_at,
+      };
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
