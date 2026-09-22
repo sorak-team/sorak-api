@@ -373,6 +373,66 @@ export class ClassService {
       return this.getClassById(updated.public_id || updated.class_id.toString());
     }
 
+  async deleteClass(id) {
+      const where = { ...this._parseId(id), deleted_at: null };
+      const classRecord = await prisma.class.findFirst({ where });
+      if (!classRecord) {
+        throw new NotFound('Lớp học không tồn tại');
+      }
+  
+      await prisma.$transaction(async (tx) => {
+        // 1. Soft delete class
+        await tx.class.update({
+          where: { class_id: classRecord.class_id },
+          data: { deleted_at: new Date() },
+        });
+  
+        // 2. Close active teacher assignments
+        await tx.teacherClass.updateMany({
+          where: { class_id: classRecord.class_id, left_at: null },
+          data: { left_at: new Date() },
+        });
+      });
+  
+      return { success: true, message: 'Đã xóa lớp học thành công' };
+    }
+
+  async assignTeacher(classId, body = {}) {
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseId(classId), deleted_at: null },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      if (Array.isArray(body.teacherIds) && body.teacherIds.length > 0) {
+        const results = [];
+        for (const tId of body.teacherIds) {
+          const res = await teacherService.assignTeacherToClass(tId, {
+            classId: classRecord.class_id,
+            isPrimary: false,
+            assignedAt: body.assignedAt,
+          });
+          results.push(res);
+        }
+        return results;
+      }
+  
+      const targetTeacherId = body.teacherId || body.id;
+      return teacherService.assignTeacherToClass(targetTeacherId, {
+        classId: classRecord.class_id,
+        isPrimary: Boolean(body.isPrimary),
+        assignedAt: body.assignedAt,
+      });
+    }
+
+  async removeTeacher(classId, teacherId) {
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseId(classId), deleted_at: null },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      return teacherService.removeTeacherFromClass(teacherId, classRecord.class_id);
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
