@@ -1245,6 +1245,126 @@ export class ClassService {
       return this.getClassTeachers(classRecord.public_id || classRecord.class_id.toString());
     }
 
+  async getClassTransfers(classId, { status, direction, search } = {}) {
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseId(classId), deleted_at: null },
+        include: { school_year: true },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      const where = {
+        deleted_at: null,
+      };
+  
+      if (direction === 'OUT') {
+        where.from_class_id = classRecord.class_id;
+      } else if (direction === 'IN') {
+        where.to_class_id = classRecord.class_id;
+      } else {
+        where.OR = [
+          { from_class_id: classRecord.class_id },
+          { to_class_id: classRecord.class_id },
+        ];
+      }
+  
+      if (status && status !== 'ALL') {
+        where.status = status;
+      }
+  
+      if (search && search.trim()) {
+        const q = search.trim();
+        where.student = {
+          OR: [
+            { full_name: { contains: q, mode: 'insensitive' } },
+            { student_code: { contains: q, mode: 'insensitive' } },
+          ],
+        };
+      }
+  
+      const transfers = await prisma.classTransfer.findMany({
+        where,
+        include: {
+          student: true,
+          from_class: true,
+          to_class: true,
+          creator: true,
+          approver: true,
+        },
+        orderBy: { created_at: 'desc' },
+      });
+  
+      const items = transfers.map((t) => {
+        const isOutbound = t.from_class_id === classRecord.class_id;
+        return {
+          id: t.public_id || t.transfer_id.toString(),
+          publicId: t.public_id,
+          studentId: t.student.public_id || t.student.student_id.toString(),
+          studentCode: t.student.student_code,
+          studentName: t.student.full_name,
+          studentAvatar:
+            (t.student.avatar_url && !t.student.avatar_url.includes('api.dicebear.com'))
+              ? t.student.avatar_url
+              : `https://api.dicebear.com/10.x/critters/svg?seed=${encodeURIComponent(t.student.student_code || t.student.full_name)}&backgroundColor=ff2e63,00c2a8,ffb300,3d5afe,8e24aa,00e676`,
+          fromClassId: t.from_class?.public_id || t.from_class_id.toString(),
+          fromClassName: t.from_class.name,
+          toClassId: t.to_class?.public_id || t.to_class_id.toString(),
+          toClassName: t.to_class.name,
+          direction: isOutbound ? 'OUT' : 'IN',
+          directionLabel: isOutbound ? 'Chuyển đi' : 'Chuyển đến',
+          status: t.status,
+          transferDate: t.transfer_date,
+          reason: t.reason || '',
+          rejectedReason: t.rejected_reason || '',
+          createdAt: t.created_at,
+          createdByName: t.creator?.username || 'Ban Giám Hiệu',
+          approvedAt: t.approved_at,
+        };
+      });
+  
+      const totalCount = items.length;
+      const pendingCount = items.filter((i) => i.status === 'PENDING').length;
+      const approvedCount = items.filter((i) => i.status === 'APPROVED').length;
+      const rejectedCount = items.filter((i) => i.status === 'REJECTED').length;
+  
+      // Available target classes in same school year
+      const availableTargetClasses = await prisma.class.findMany({
+        where: {
+          school_year_id: classRecord.school_year_id,
+          class_id: { not: classRecord.class_id },
+          deleted_at: null,
+        },
+        select: {
+          class_id: true,
+          public_id: true,
+          name: true,
+          age_group: true,
+          room_number: true,
+        },
+        orderBy: { name: 'asc' },
+      });
+  
+      return {
+        class: {
+          id: classRecord.public_id || classRecord.class_id.toString(),
+          name: classRecord.name,
+          academicYear: classRecord.school_year?.name,
+        },
+        summary: {
+          total: totalCount,
+          pending: pendingCount,
+          approved: approvedCount,
+          rejected: rejectedCount,
+        },
+        items,
+        targetClasses: availableTargetClasses.map((c) => ({
+          id: c.public_id || c.class_id.toString(),
+          name: c.name,
+          gradeLabel: GRADE_LABELS[c.age_group] || c.age_group,
+          room: c.room_number || '',
+        })),
+      };
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
