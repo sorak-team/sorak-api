@@ -57,6 +57,7 @@ router.patch(
 router.delete(
 router.get('/:id/teachers', authMiddleware, asyncHandler(getClassTeachers));
 router.post(
+router.patch(
 
 
 // Global transfer requests for BGH / Admin
