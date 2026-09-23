@@ -731,6 +731,96 @@ export class ClassService {
       };
     }
 
+  async allocateStudents(classId, { studentIds }) {
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseId(classId), deleted_at: null },
+        include: {
+          school_year: true,
+          student_enrollments: {
+            where: { left_at: null, student: { deleted_at: null } },
+          },
+        },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      const capacity = 24;
+      const currentCount = classRecord.student_enrollments.length;
+      const remainingSlots = Math.max(0, capacity - currentCount);
+  
+      if (studentIds.length > remainingSlots) {
+        throw new BadRequest(
+          `Lớp học chỉ còn ${remainingSlots} chỗ trống (sĩ số tối đa ${capacity}). Không thể thêm ${studentIds.length} học sinh.`
+        );
+      }
+  
+      // Resolve student records
+      const students = await prisma.student.findMany({
+        where: {
+          OR: studentIds.map((id) =>
+            /^\d+$/.test(String(id)) ? { student_id: BigInt(id) } : { public_id: String(id) }
+          ),
+          deleted_at: null,
+        },
+        select: { student_id: true, public_id: true, full_name: true },
+      });
+  
+      if (students.length === 0) {
+        throw new BadRequest('Không tìm thấy học sinh hợp lệ để thêm vào lớp');
+      }
+  
+      const now = new Date();
+      await prisma.$transaction(async (tx) => {
+        for (const s of students) {
+          // Close active enrollments in other classes for this school year
+          await tx.studentEnrollment.updateMany({
+            where: {
+              student_id: s.student_id,
+              left_at: null,
+              class: {
+                school_year_id: classRecord.school_year_id,
+                class_id: { not: classRecord.class_id },
+              },
+            },
+            data: { left_at: now },
+          });
+  
+          // Upsert into target class
+          const existing = await tx.studentEnrollment.findUnique({
+            where: {
+              student_id_class_id: {
+                student_id: s.student_id,
+                class_id: classRecord.class_id,
+              },
+            },
+          });
+  
+          if (existing) {
+            await tx.studentEnrollment.update({
+              where: { enrollment_id: existing.enrollment_id },
+              data: { left_at: null, enrolled_at: now },
+            });
+          } else {
+            await tx.studentEnrollment.create({
+              data: {
+                student_id: s.student_id,
+                class_id: classRecord.class_id,
+                enrolled_at: now,
+                left_at: null,
+              },
+            });
+          }
+  
+          // Ensure student status is STUDYING when admitted into active class
+          await tx.student.update({
+            where: { student_id: s.student_id },
+            data: { status: 'STUDYING' },
+          });
+        }
+      });
+  
+      return this.getClassStudents(classRecord.public_id || classRecord.class_id.toString());
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
