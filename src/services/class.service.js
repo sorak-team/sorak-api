@@ -821,6 +821,37 @@ export class ClassService {
       return this.getClassStudents(classRecord.public_id || classRecord.class_id.toString());
     }
 
+  async removeStudents(classId, { studentIds }) {
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseId(classId), deleted_at: null },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      const students = await prisma.student.findMany({
+        where: {
+          OR: studentIds.map((id) =>
+            /^\d+$/.test(String(id)) ? { student_id: BigInt(id) } : { public_id: String(id) }
+          ),
+        },
+        select: { student_id: true },
+      });
+  
+      const targetStudentIds = students.map((s) => s.student_id);
+  
+      await prisma.studentEnrollment.updateMany({
+        where: {
+          class_id: classRecord.class_id,
+          student_id: { in: targetStudentIds },
+          left_at: null,
+        },
+        data: {
+          left_at: new Date(),
+        },
+      });
+  
+      return this.getClassStudents(classRecord.public_id || classRecord.class_id.toString());
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
