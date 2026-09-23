@@ -60,6 +60,8 @@ router.post(
 router.patch(
 router.delete(
 router.get('/:id/students', authMiddleware, asyncHandler(getClassStudents));
+router.get('/:id/student-report', authMiddleware, asyncHandler(getStudentReport));
+router.get('/:id/daily-report', authMiddleware, asyncHandler(getDailyReport));
 
 
 // Global transfer requests for BGH / Admin
