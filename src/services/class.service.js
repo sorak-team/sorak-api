@@ -1365,6 +1365,106 @@ export class ClassService {
       };
     }
 
+  async getAllTransfers({ status, search, schoolYearId } = {}) {
+      const andConditions = [{ deleted_at: null }];
+  
+      if (status && status !== 'ALL') {
+        andConditions.push({ status });
+      }
+  
+      if (schoolYearId) {
+        const isBigInt = /^\d+$/.test(String(schoolYearId));
+        if (isBigInt) {
+          andConditions.push({
+            OR: [
+              { from_class: { school_year_id: BigInt(schoolYearId) } },
+              { to_class: { school_year_id: BigInt(schoolYearId) } },
+            ],
+          });
+        } else {
+          andConditions.push({
+            OR: [
+              { from_class: { school_year: { name: { contains: String(schoolYearId), mode: 'insensitive' } } } },
+              { to_class: { school_year: { name: { contains: String(schoolYearId), mode: 'insensitive' } } } },
+            ],
+          });
+        }
+      }
+  
+      if (search && search.trim()) {
+        const q = search.trim();
+        andConditions.push({
+          student: {
+            OR: [
+              { full_name: { contains: q, mode: 'insensitive' } },
+              { student_code: { contains: q, mode: 'insensitive' } },
+            ],
+          },
+        });
+      }
+  
+      const where = andConditions.length > 1 ? { AND: andConditions } : andConditions[0];
+  
+      const transfers = await prisma.classTransfer.findMany({
+        where,
+        include: {
+          student: true,
+          from_class: { include: { school_year: true } },
+          to_class: { include: { school_year: true } },
+          creator: true,
+          approver: true,
+        },
+        orderBy: { created_at: 'desc' },
+      });
+  
+      const items = transfers.map((t) => ({
+        id: t.public_id || t.transfer_id.toString(),
+        publicId: t.public_id,
+        studentId: t.student.public_id || t.student.student_id.toString(),
+        studentCode: t.student.student_code,
+        studentName: t.student.full_name,
+        studentAvatar:
+          (t.student.avatar_url && !t.student.avatar_url.includes('api.dicebear.com'))
+            ? t.student.avatar_url
+            : `https://api.dicebear.com/10.x/critters/svg?seed=${encodeURIComponent(t.student.student_code || t.student.full_name)}&backgroundColor=ff2e63,00c2a8,ffb300,3d5afe,8e24aa,00e676`,
+        fromClassId: t.from_class?.public_id || t.from_class_id.toString(),
+        fromClassName: t.from_class.name,
+        fromClassSchoolYearId: t.from_class?.school_year_id ? t.from_class.school_year_id.toString() : '',
+        fromClassSchoolYear: t.from_class.school_year?.name || '',
+        toClassId: t.to_class?.public_id || t.to_class_id.toString(),
+        toClassName: t.to_class.name,
+        toClassSchoolYearId: t.to_class?.school_year_id ? t.to_class.school_year_id.toString() : '',
+        toClassSchoolYear: t.to_class.school_year?.name || '',
+        schoolYearId: t.from_class?.school_year_id
+          ? t.from_class.school_year_id.toString()
+          : (t.to_class?.school_year_id ? t.to_class.school_year_id.toString() : ''),
+        schoolYearName: t.from_class.school_year?.name || t.to_class.school_year?.name || '',
+        status: t.status,
+        transferDate: t.transfer_date,
+        reason: t.reason || '',
+        rejectedReason: t.rejected_reason || '',
+        createdAt: t.created_at,
+        createdByName: t.creator?.username || 'Giáo viên',
+        approvedAt: t.approved_at,
+        approvedByName: t.approver?.username || '',
+      }));
+  
+      const totalCount = items.length;
+      const pendingCount = items.filter((i) => i.status === 'PENDING').length;
+      const approvedCount = items.filter((i) => i.status === 'APPROVED').length;
+      const rejectedCount = items.filter((i) => i.status === 'REJECTED').length;
+  
+      return {
+        summary: {
+          total: totalCount,
+          pending: pendingCount,
+          approved: approvedCount,
+          rejected: rejectedCount,
+        },
+        items,
+      };
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
