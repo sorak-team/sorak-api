@@ -35,3 +35,7 @@ Thumbs.db
 
 # docker volumes
 .data/
+
+# scratch & temp scripts
+scratch/
+scratch_db.sql
