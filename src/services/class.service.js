@@ -453,6 +453,126 @@ export class ClassService {
       }
     }
 
+  async getClassStudents(classId, { search } = {}) {
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseId(classId), deleted_at: null },
+        include: {
+          school_year: { select: { school_year_id: true, name: true, status: true } },
+        },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      const isCurrentActiveYear = classRecord.school_year?.status === 'ACTIVE';
+  
+      const enrollmentWhere = {
+        class_id: classRecord.class_id,
+        student: { deleted_at: null },
+      };
+  
+      // Only filter active enrollment if the school year is ACTIVE
+      // For past school years, all students who were enrolled in this class are included!
+      if (isCurrentActiveYear) {
+        enrollmentWhere.left_at = null;
+      }
+  
+      if (search && search.trim()) {
+        const q = search.trim();
+        enrollmentWhere.student.OR = [
+          { full_name: { contains: q, mode: 'insensitive' } },
+          { student_code: { contains: q, mode: 'insensitive' } },
+        ];
+      }
+  
+      const enrollments = await prisma.studentEnrollment.findMany({
+        where: enrollmentWhere,
+        orderBy: { enrolled_at: 'asc' },
+        include: {
+          student: {
+            include: {
+              parents: {
+                where: { deleted_at: null },
+                orderBy: { created_at: 'asc' },
+              },
+            },
+          },
+        },
+      });
+  
+      const STATUS_MAP = {
+        STUDYING: { label: 'Đang học', color: 'emerald' },
+        RESERVED: { label: 'Bảo lưu', color: 'amber' },
+        TRANSFERRED: { label: 'Chuyển trường', color: 'blue' },
+        DROPPED_OUT: { label: 'Thôi học', color: 'rose' },
+        GRADUATED: { label: 'Đã tốt nghiệp', color: 'purple' },
+      };
+  
+      const ENROLLMENT_STATUS_MAP = {
+        ENROLLED: { label: 'Đang học', color: 'emerald' },
+        COMPLETED: { label: 'Hoàn thành năm học', color: 'indigo' },
+        GRADUATED: { label: 'Đã tốt nghiệp', color: 'purple' },
+        TRANSFERRED_CLASS: { label: 'Chuyển lớp', color: 'cyan' },
+        TRANSFERRED_SCHOOL: { label: 'Chuyển trường', color: 'blue' },
+        RESERVED: { label: 'Bảo lưu', color: 'amber' },
+        DROPPED_OUT: { label: 'Thôi học', color: 'rose' },
+      };
+  
+      const capacity = 24;
+      const students = enrollments.map((e) => {
+        const primaryParent = e.student.parents?.[0] || null;
+        return {
+          id: e.student.public_id || e.student.student_id.toString(),
+          publicId: e.student.public_id,
+          enrollmentId: e.enrollment_id.toString(),
+          studentCode: e.student.student_code,
+          fullName: e.student.full_name,
+          avatarUrl:
+            e.student.avatar_url ||
+            `https://api.dicebear.com/10.x/critters/svg?seed=${encodeURIComponent(e.student.student_code || e.student.full_name)}&backgroundColor=ff2e63,00c2a8,ffb300,3d5afe,8e24aa,00e676`,
+          dateOfBirth: e.student.date_of_birth,
+          gender: e.student.gender,
+          status: e.status,
+          enrollmentStatus: e.status,
+          leaveReason: e.leave_reason,
+          globalStatus: e.student.status,
+          statusLabel: ENROLLMENT_STATUS_MAP[e.status]?.label || STATUS_MAP[e.student.status]?.label || 'Đang học',
+          statusColor: ENROLLMENT_STATUS_MAP[e.status]?.color || STATUS_MAP[e.student.status]?.color || 'gray',
+          enrolledAt: e.enrolled_at,
+          leftAt: e.left_at,
+          currentClass: {
+            classId: classRecord.public_id || classRecord.class_id.toString(),
+            className: classRecord.name,
+            ageGroup: classRecord.age_group,
+            schoolYear: classRecord.school_year?.name,
+          },
+          primaryParent: primaryParent
+            ? {
+                id: primaryParent.public_id || primaryParent.parent_id.toString(),
+                fullName: primaryParent.full_name,
+                phone: primaryParent.phone,
+                relationship: primaryParent.relationship,
+              }
+            : null,
+        };
+      });
+  
+      return {
+        class: {
+          id: classRecord.public_id || classRecord.class_id.toString(),
+          publicId: classRecord.public_id,
+          name: classRecord.name,
+          ageGroup: classRecord.age_group,
+          gradeLabel: GRADE_LABELS[classRecord.age_group] || classRecord.age_group,
+          academicYear: classRecord.school_year?.name,
+          schoolYearId: classRecord.school_year_id.toString(),
+          schoolYearStatus: classRecord.school_year?.status,
+          capacity,
+          studentCount: students.length,
+          remainingSlots: Math.max(0, capacity - students.length),
+        },
+        students,
+      };
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
