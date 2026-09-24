@@ -65,3 +65,9 @@ export const importStudents = async (req, res) => {
   res.status(200).success(result);
 };
 
+export const updateTeacherRole = async (req, res) => {
+  const { id, teacherId } = req.params;
+  const result = await classService.updateTeacherRole(id, teacherId, req.body);
+  res.success(result);
+};
+
