@@ -852,6 +852,51 @@ export class ClassService {
       return this.getClassStudents(classRecord.public_id || classRecord.class_id.toString());
     }
 
+  async getHistorySources(classId) {
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseId(classId), deleted_at: null },
+        include: { school_year: true },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      const schoolYears = await prisma.schoolYear.findMany({
+        where: {
+          deleted_at: null,
+        },
+        orderBy: { start_date: 'desc' },
+        include: {
+          classes: {
+            where: { deleted_at: null },
+            orderBy: { name: 'asc' },
+            select: {
+              class_id: true,
+              public_id: true,
+              name: true,
+              age_group: true,
+              room_number: true,
+            },
+          },
+        },
+      });
+  
+      const years = schoolYears.map((sy) => ({
+        id: sy.school_year_id.toString(),
+        name: sy.name,
+        displayName: sy.name.replace('Năm học ', ''),
+        status: sy.status,
+        isCurrent: sy.school_year_id === classRecord.school_year_id,
+        classes: sy.classes.map((c) => ({
+          id: c.public_id || c.class_id.toString(),
+          publicId: c.public_id,
+          name: c.name,
+          ageGroup: c.age_group,
+          gradeLabel: GRADE_LABELS[c.age_group] || c.age_group,
+        })),
+      }));
+  
+      return { years };
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
