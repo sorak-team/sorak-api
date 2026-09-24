@@ -1009,6 +1009,79 @@ export class ClassService {
       };
     }
 
+  async importStudents(classId, { students, autoAllocate = false }) {
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseId(classId), deleted_at: null },
+        include: { school_year: true },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      if (!Array.isArray(students) || students.length === 0) {
+        throw new BadRequest('Danh sách học sinh nhập không hợp lệ');
+      }
+  
+      const createdIds = [];
+  
+      await prisma.$transaction(async (tx) => {
+        for (const item of students) {
+          const studentCode = item.studentCode?.trim();
+          const fullName = item.fullName?.trim();
+          if (!studentCode || !fullName) continue;
+  
+          let dob = item.dateOfBirth ? new Date(item.dateOfBirth) : new Date('2023-01-01');
+          if (isNaN(dob.getTime())) dob = new Date('2023-01-01');
+  
+          const gender = item.gender === 'FEMALE' ? 'FEMALE' : 'MALE';
+  
+          const student = await tx.student.upsert({
+            where: { student_code: studentCode },
+            update: {
+              full_name: fullName,
+              date_of_birth: dob,
+              gender,
+              status: 'STUDYING',
+            },
+            create: {
+              student_code: studentCode,
+              full_name: fullName,
+              date_of_birth: dob,
+              gender,
+              enrollment_date: new Date(),
+              status: 'STUDYING',
+              avatar_url: `https://api.dicebear.com/10.x/critters/svg?seed=${encodeURIComponent(studentCode)}&backgroundColor=ff2e63,00c2a8,ffb300,3d5afe,8e24aa,00e676`,
+            },
+          });
+  
+          createdIds.push(student.student_id);
+  
+          if (autoAllocate) {
+            const existing = await tx.studentEnrollment.findFirst({
+              where: { student_id: student.student_id, class_id: classRecord.class_id },
+            });
+            if (existing) {
+              await tx.studentEnrollment.update({
+                where: { enrollment_id: existing.enrollment_id },
+                data: { left_at: null },
+              });
+            } else {
+              await tx.studentEnrollment.create({
+                data: {
+                  student_id: student.student_id,
+                  class_id: classRecord.class_id,
+                  enrolled_at: new Date(),
+                },
+              });
+            }
+          }
+        }
+      });
+  
+      return {
+        importedCount: createdIds.length,
+        allocatedCount: autoAllocate ? createdIds.length : 0,
+      };
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
