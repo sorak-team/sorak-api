@@ -206,6 +206,75 @@ export class AuthService {
       refreshToken: rawRefreshToken,
     };
   }
+
+  async refreshToken({ rawToken, deviceInfo, ipAddress }) {
+    if (!rawToken) {
+      throw Unauthorized('Không tìm thấy refresh token');
+    }
+
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+    const existingToken = await prisma.refreshToken.findFirst({
+      where: {
+        token_hash: tokenHash,
+        is_revoked: false,
+        expires_at: { gt: new Date() },
+      },
+      include: {
+        account: true,
+      },
+    });
+
+    if (!existingToken || !existingToken.account.is_active || existingToken.account.deleted_at) {
+      throw Unauthorized('Phiên đăng nhập không hợp lệ hoặc đã hết hạn');
+    }
+
+    // Revoke old token
+    await prisma.refreshToken.update({
+      where: { token_id: existingToken.token_id },
+      data: { is_revoked: true },
+    });
+
+    // Create new rotated refresh token
+    const newRawRefreshToken = crypto.randomBytes(40).toString('hex');
+    const newHash = crypto.createHash('sha256').update(newRawRefreshToken).digest('hex');
+
+    await prisma.refreshToken.create({
+      data: {
+        account_id: existingToken.account_id,
+        token_hash: newHash,
+        device_info: deviceInfo || existingToken.device_info,
+        ip_address: ipAddress || null,
+        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    // Generate new Access Token
+    const newAccessToken = jwt.sign(
+      { sub: existingToken.account.public_id, role: existingToken.account.role },
+      env.jwt.accessSecret,
+      { expiresIn: env.jwt.accessTtl },
+    );
+
+    return {
+      accessToken: newAccessToken,
+      refreshToken: newRawRefreshToken,
+    };
+  }
+
+  async logout({ rawToken }) {
+    if (rawToken) {
+      const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+      await prisma.refreshToken.updateMany({
+        where: { token_hash: tokenHash },
+        data: { is_revoked: true },
+      });
+    }
+
+    return {
+      message: 'Đăng xuất thành công',
+    };
+  }
 }
 export const authService = new AuthService();
 export default authService;
