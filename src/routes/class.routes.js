@@ -64,6 +64,7 @@ router.get('/:id/student-report', authMiddleware, asyncHandler(getStudentReport)
 router.get('/:id/daily-report', authMiddleware, asyncHandler(getDailyReport));
 router.put('/:id/daily-report/student', authMiddleware, asyncHandler(saveStudentDailyReport));
 router.post('/:id/daily-report/batch', authMiddleware, asyncHandler(batchSaveDailyReport));
+router.get(
 
 
 // Global transfer requests for BGH / Admin
