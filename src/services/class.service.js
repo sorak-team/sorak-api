@@ -2537,6 +2537,28 @@ export class ClassService {
       };
     }
 
+  async batchSaveDailyReport(classId, { date, records }, userId = 1n) {
+      if (!Array.isArray(records)) return { success: true, count: 0 };
+      for (const record of records) {
+        await this.saveStudentDailyReport(
+          classId,
+          {
+            date,
+            studentId: record.studentId || record.id,
+            attendance: record.attendance,
+            health: record.health,
+            assessments: record.assessments,
+          },
+          userId
+        );
+      }
+      return {
+        success: true,
+        count: records.length,
+        message: `Đã cập nhật ${records.length} học sinh thành công`,
+      };
+    }
+
 }
 export const classService = new ClassService();
 export default classService;

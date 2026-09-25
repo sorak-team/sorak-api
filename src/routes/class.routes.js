@@ -73,6 +73,7 @@ router.post(
 router.get('/:id/transfers', authMiddleware, asyncHandler(getClassTransfers));
 router.post(
 router.patch(
+router.get('/:id/export-data', authMiddleware, asyncHandler(getClassExportData));
 
 
 // Global transfer requests for BGH / Admin
