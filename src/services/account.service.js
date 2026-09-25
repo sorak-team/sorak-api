@@ -427,6 +427,55 @@ export class AccountService {
 
     return this.getAccountById(account.public_id || account.account_id.toString());
   }
+
+  async updateAccount(id, data) {
+    const where = { ...this._parseId(id), deleted_at: null };
+    const account = await prisma.account.findFirst({
+      where,
+      include: { teacher: true, student: true },
+    });
+    if (!account) {
+      throw new NotFound('Tài khoản không tồn tại trên hệ thống');
+    }
+
+    const updateData = {};
+    if (data.role !== undefined) {
+      updateData.role = data.role === 'ADMIN_BGH' ? 'PRINCIPAL_BGH' : data.role;
+    }
+    if (data.isActive !== undefined) updateData.is_active = data.isActive;
+
+    if (Object.keys(updateData).length > 0) {
+      await prisma.account.update({
+        where: { account_id: account.account_id },
+        data: updateData,
+      });
+    }
+
+    // If contact or avatar data is passed and linked to teacher/student, update the linked profile
+    if (account.teacher) {
+      const teacherUpdate = {};
+      if (data.email !== undefined) teacherUpdate.email = data.email || null;
+      if (data.phone !== undefined) teacherUpdate.phone = data.phone || null;
+      if (data.avatarUrl !== undefined) teacherUpdate.avatar_url = data.avatarUrl || null;
+      if (Object.keys(teacherUpdate).length > 0) {
+        await prisma.teacher.update({
+          where: { teacher_id: account.teacher.teacher_id },
+          data: teacherUpdate,
+        });
+      }
+    } else if (account.student) {
+      const studentUpdate = {};
+      if (data.avatarUrl !== undefined) studentUpdate.avatar_url = data.avatarUrl || null;
+      if (Object.keys(studentUpdate).length > 0) {
+        await prisma.student.update({
+          where: { student_id: account.student.student_id },
+          data: studentUpdate,
+        });
+      }
+    }
+
+    return this.getAccountById(account.public_id || account.account_id.toString());
+  }
 }
 export const accountService = new AccountService();
 export default accountService;
