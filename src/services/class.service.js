@@ -1632,6 +1632,93 @@ export class ClassService {
       return { success: true, status };
     }
 
+  async getClassExportData(classId) {
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseId(classId), deleted_at: null },
+        include: {
+          school_year: true,
+          teacher_classes: {
+            where: { left_at: null },
+            include: { teacher: true },
+            orderBy: [{ is_primary: 'desc' }, { assigned_at: 'asc' }],
+          },
+          student_enrollments: {
+            where: {
+              left_at: null,
+              student: { deleted_at: null },
+            },
+            include: {
+              student: {
+                include: {
+                  parents: { where: { deleted_at: null } },
+                },
+              },
+            },
+            orderBy: { student: { student_code: 'asc' } },
+          },
+        },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      const teachers = classRecord.teacher_classes.map((tc) => ({
+        employeeCode: tc.teacher.employee_code,
+        fullName: tc.teacher.full_name,
+        role: tc.is_primary ? 'Giáo viên chủ nhiệm' : 'Giáo viên bảo mẫu',
+        position: tc.teacher.position || 'Giáo viên',
+        phone: tc.teacher.phone || '',
+        email: tc.teacher.email || '',
+        assignedAt: tc.assigned_at,
+      }));
+  
+      const students = classRecord.student_enrollments.map((e, index) => {
+        const s = e.student;
+        const primaryParent = s.parents?.[0] || null;
+        return {
+          stt: index + 1,
+          studentCode: s.student_code,
+          fullName: s.full_name,
+          dateOfBirth: s.date_of_birth
+            ? new Date(s.date_of_birth).toLocaleDateString('vi-VN')
+            : '',
+          gender: s.gender === 'MALE' ? 'Nam' : 'Nữ',
+          ethnic: s.ethnic || 'Kinh',
+          placeOfBirth: s.place_of_birth || '',
+          permanentResidence: s.permanent_residence || '',
+          enrollmentDate: s.enrollment_date
+            ? new Date(s.enrollment_date).toLocaleDateString('vi-VN')
+            : '',
+          status: s.status === 'STUDYING' ? 'Đang học' : s.status,
+          allergyNotes: s.allergy_notes || 'Không có',
+          medicalNotes: s.medical_notes || 'Bình thường',
+          parentName: primaryParent?.full_name || '',
+          parentRelationship: primaryParent?.relationship || '',
+          parentPhone: primaryParent?.phone || '',
+          canPickup: primaryParent?.can_pickup ? 'Có' : 'Không',
+          parents: (s.parents || []).map((p) => ({
+            fullName: p.full_name || '',
+            relationship: p.relationship || '',
+            phone: p.phone || '',
+            canPickup: p.can_pickup ? 'Có' : 'Không',
+          })),
+        };
+      });
+  
+      return {
+        classInfo: {
+          id: classRecord.class_id.toString(),
+          name: classRecord.name,
+          gradeLabel: GRADE_LABELS[classRecord.age_group] || classRecord.age_group,
+          academicYear: classRecord.school_year?.name,
+          roomNumber: classRecord.room_number || '',
+          studentCount: students.length,
+          teacherCount: teachers.length,
+          exportedAt: new Date().toISOString(),
+        },
+        teachers,
+        students,
+      };
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
