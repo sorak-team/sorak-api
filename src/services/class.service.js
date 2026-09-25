@@ -1552,6 +1552,86 @@ export class ClassService {
       return this.createTransferRequest(fromClassId, body, creatorAccountId);
     }
 
+  async updateTransferStatus(classId, transferId, { status, rejectedReason }, approverAccountId) {
+      const transfer = await prisma.classTransfer.findFirst({
+        where: { ...this._parseTransferId(transferId), deleted_at: null },
+        include: { student: true, from_class: true, to_class: true },
+      });
+      if (!transfer) throw new NotFound('Không tìm thấy yêu cầu chuyển lớp');
+  
+      let approverId = approverAccountId;
+      if (!approverId) {
+        const defaultAdmin = await prisma.account.findFirst({ where: { role: 'PRINCIPAL_BGH' } });
+        approverId = defaultAdmin?.account_id || 1n;
+      }
+  
+      if (status === 'APPROVED') {
+        const tDate = new Date();
+        await prisma.$transaction(async (tx) => {
+          // 1. Close enrollment in from_class
+          await tx.studentEnrollment.updateMany({
+            where: {
+              student_id: transfer.student_id,
+              class_id: transfer.from_class_id,
+              left_at: null,
+            },
+            data: {
+              left_at: tDate,
+              status: 'TRANSFERRED_CLASS',
+              leave_reason: transfer.reason || 'Chuyển lớp',
+            },
+          });
+  
+          // 2. Open enrollment in to_class
+          const existingEnrollment = await tx.studentEnrollment.findFirst({
+            where: {
+              student_id: transfer.student_id,
+              class_id: transfer.to_class_id,
+            },
+          });
+          if (existingEnrollment) {
+            await tx.studentEnrollment.update({
+              where: { enrollment_id: existingEnrollment.enrollment_id },
+              data: { left_at: null, status: 'ENROLLED', leave_reason: null },
+            });
+          } else {
+            await tx.studentEnrollment.create({
+              data: {
+                student_id: transfer.student_id,
+                class_id: transfer.to_class_id,
+                enrolled_at: tDate,
+                status: 'ENROLLED',
+              },
+            });
+          }
+  
+          // 3. Mark transfer approved
+          await tx.classTransfer.update({
+            where: { transfer_id: transfer.transfer_id },
+            data: {
+              status: 'APPROVED',
+              approved_by: BigInt(approverId),
+              approved_at: tDate,
+            },
+          });
+        });
+      } else if (status === 'REJECTED') {
+        await prisma.classTransfer.update({
+          where: { transfer_id: transfer.transfer_id },
+          data: {
+            status: 'REJECTED',
+            rejected_reason: rejectedReason?.trim() || 'Không đáp ứng điều kiện chuyển lớp',
+            approved_by: BigInt(approverId),
+            approved_at: new Date(),
+          },
+        });
+      } else {
+        throw new BadRequest('Trạng thái cập nhật không hợp lệ');
+      }
+  
+      return { success: true, status };
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
