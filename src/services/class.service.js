@@ -1465,6 +1465,73 @@ export class ClassService {
       };
     }
 
+  async getTransferById(transferId) {
+      const t = await prisma.classTransfer.findFirst({
+        where: {
+          ...this._parseTransferId(transferId),
+          deleted_at: null,
+        },
+        include: {
+          student: {
+            include: {
+              parents: { where: { deleted_at: null }, orderBy: { created_at: 'asc' } },
+            },
+          },
+          from_class: { include: { school_year: true } },
+          to_class: { include: { school_year: true } },
+          creator: true,
+          approver: true,
+        },
+      });
+  
+      if (!t) {
+        throw new NotFound('Không tìm thấy yêu cầu chuyển lớp');
+      }
+  
+      const primaryParent = t.student.parents?.find((p) => p.is_primary) || t.student.parents?.[0];
+  
+      return {
+        id: t.public_id || t.transfer_id.toString(),
+        publicId: t.public_id,
+        studentId: t.student.public_id || t.student.student_id.toString(),
+        studentCode: t.student.student_code,
+        studentName: t.student.full_name,
+        studentDob: t.student.date_of_birth,
+        studentGender: t.student.gender,
+        studentAvatar:
+          (t.student.avatar_url && !t.student.avatar_url.includes('api.dicebear.com'))
+            ? t.student.avatar_url
+            : `https://api.dicebear.com/10.x/critters/svg?seed=${encodeURIComponent(t.student.student_code || t.student.full_name)}&backgroundColor=ff2e63,00c2a8,ffb300,3d5afe,8e24aa,00e676`,
+        parentName: primaryParent?.full_name || '',
+        parentPhone: primaryParent?.phone || '',
+        parentRelationship: primaryParent?.relationship || '',
+        fromClassId: t.from_class?.public_id || t.from_class_id.toString(),
+        fromClassName: t.from_class.name,
+        fromClassRoom: t.from_class.room_number || '',
+        fromClassAgeGroup: t.from_class.age_group || '',
+        fromClassSchoolYearId: t.from_class?.school_year_id ? t.from_class.school_year_id.toString() : '',
+        fromClassSchoolYear: t.from_class.school_year?.name || '',
+        toClassId: t.to_class?.public_id || t.to_class_id.toString(),
+        toClassName: t.to_class.name,
+        toClassRoom: t.to_class.room_number || '',
+        toClassAgeGroup: t.to_class.age_group || '',
+        toClassSchoolYearId: t.to_class?.school_year_id ? t.to_class.school_year_id.toString() : '',
+        toClassSchoolYear: t.to_class.school_year?.name || '',
+        schoolYearId: t.from_class?.school_year_id
+          ? t.from_class.school_year_id.toString()
+          : (t.to_class?.school_year_id ? t.to_class.school_year_id.toString() : ''),
+        schoolYearName: t.from_class.school_year?.name || t.to_class.school_year?.name || '',
+        status: t.status,
+        transferDate: t.transfer_date,
+        reason: t.reason || '',
+        rejectedReason: t.rejected_reason || '',
+        createdAt: t.created_at,
+        createdByName: t.creator?.username || 'Giáo viên',
+        approvedAt: t.approved_at,
+        approvedByName: t.approver?.username || '',
+      };
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
