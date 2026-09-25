@@ -72,6 +72,7 @@ router.get('/:id/history-students', authMiddleware, asyncHandler(getHistoryStude
 router.post(
 router.get('/:id/transfers', authMiddleware, asyncHandler(getClassTransfers));
 router.post(
+router.patch(
 
 
 // Global transfer requests for BGH / Admin
