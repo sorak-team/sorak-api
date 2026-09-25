@@ -78,3 +78,14 @@ export const logout = async (req, res) => {
   res.success(result);
 };
 
+export const getMe = async (req, res) => {
+  const result = await authService.getMe(req.user.sub);
+  res.success(result);
+};
+
+export const getSessions = async (req, res) => {
+  const currentRawToken = req.cookies?.[REFRESH_COOKIE_NAME] || req.body?.refreshToken;
+  const result = await authService.getSessions(req.user.sub, currentRawToken);
+  res.success(result);
+};
+

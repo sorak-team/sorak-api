@@ -275,6 +275,190 @@ export class AuthService {
       message: 'Đăng xuất thành công',
     };
   }
+
+  async getMe(publicId) {
+    const account = await prisma.account.findUnique({
+      where: { public_id: publicId },
+      include: {
+        teacher: {
+          include: {
+            teacher_classes: {
+              where: { left_at: null },
+              include: {
+                class: {
+                  include: {
+                    school_year: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+        student: {
+          include: {
+            parents: true,
+            student_enrollments: {
+              where: { left_at: null },
+              include: {
+                class: {
+                  include: {
+                    teacher_classes: {
+                      where: { left_at: null },
+                      include: {
+                        teacher: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!account || !account.is_active || account.deleted_at) {
+      throw NotFound('Không tìm thấy tài khoản');
+    }
+
+    return {
+      user: this._formatUser(account, account.last_login_at === null),
+    };
+  }
+
+  _parseUserAgent(ua = '') {
+    let browser = 'Trình duyệt Web';
+    let os = 'Thiết bị';
+    let deviceType = 'desktop';
+
+    if (/windows nt 10\.0/i.test(ua)) os = 'Windows 10/11';
+    else if (/windows nt 6\.3/i.test(ua)) os = 'Windows 8.1';
+    else if (/windows nt 6\.1/i.test(ua)) os = 'Windows 7';
+    else if (/windows/i.test(ua)) os = 'Windows';
+    else if (/macintosh|mac os x/i.test(ua)) os = 'macOS';
+    else if (/iphone/i.test(ua)) {
+      os = 'iOS (iPhone)';
+      deviceType = 'mobile';
+    } else if (/ipad/i.test(ua)) {
+      os = 'iPadOS';
+      deviceType = 'tablet';
+    } else if (/android/i.test(ua)) {
+      os = 'Android';
+      deviceType = 'mobile';
+    } else if (/linux/i.test(ua)) {
+      os = 'Linux';
+    }
+
+    if (/edg\//i.test(ua)) browser = 'Microsoft Edge';
+    else if (/opr\/|opera\//i.test(ua)) browser = 'Opera';
+    else if (/chrome|crios/i.test(ua)) browser = 'Google Chrome';
+    else if (/firefox|fxios/i.test(ua)) browser = 'Mozilla Firefox';
+    else if (/safari/i.test(ua)) browser = 'Apple Safari';
+
+    return {
+      browser,
+      os,
+      deviceType,
+      display: `${browser} · ${os}`,
+    };
+  }
+
+  _formatLocation(ip = '') {
+    const cleanIp = ip ? ip.replace(/^::ffff:/, '') : '';
+    const isLocal =
+      !cleanIp ||
+      cleanIp === '::1' ||
+      cleanIp === '127.0.0.1' ||
+      cleanIp.startsWith('192.168.') ||
+      cleanIp.startsWith('10.') ||
+      cleanIp.startsWith('172.16.') ||
+      cleanIp.startsWith('172.17.') ||
+      cleanIp.startsWith('172.18.') ||
+      cleanIp.startsWith('172.19.') ||
+      cleanIp.startsWith('172.2') ||
+      cleanIp.startsWith('172.30.') ||
+      cleanIp.startsWith('172.31.');
+
+    if (isLocal) {
+      return 'Cơ sở Sorak Cao Lãnh (Mạng trường)';
+    }
+    return `Cơ sở Sorak Cao Lãnh · IP ${cleanIp}`;
+  }
+
+  async getSessions(publicId, currentRawToken = null) {
+    const account = await prisma.account.findUnique({
+      where: { public_id: publicId },
+      select: {
+        account_id: true,
+        last_login_at: true,
+      },
+    });
+
+    if (!account) {
+      throw NotFound('Không tìm thấy tài khoản');
+    }
+
+    let currentHash = null;
+    if (currentRawToken) {
+      currentHash = crypto.createHash('sha256').update(currentRawToken).digest('hex');
+    }
+
+    const tokens = await prisma.refreshToken.findMany({
+      where: {
+        account_id: account.account_id,
+        is_revoked: false,
+        expires_at: { gt: new Date() },
+      },
+      orderBy: { created_at: 'desc' },
+      take: 10,
+    });
+
+    const sessions = tokens.map((token, index) => {
+      const parsedDevice = this._parseUserAgent(token.device_info);
+      const isCurrent = currentHash
+        ? token.token_hash === currentHash
+        : index === 0;
+
+      return {
+        id: token.token_id.toString(),
+        deviceInfo: token.device_info,
+        browser: parsedDevice.browser,
+        os: parsedDevice.os,
+        deviceType: parsedDevice.deviceType,
+        deviceDisplay: parsedDevice.display,
+        ipAddress: token.ip_address,
+        location: this._formatLocation(token.ip_address),
+        createdAt: token.created_at,
+        lastActive: isCurrent ? (account.last_login_at || token.created_at) : token.created_at,
+        lastActiveAt: isCurrent ? (account.last_login_at || token.created_at) : token.created_at,
+        isCurrent,
+      };
+    });
+
+    // If no active refresh token record exists in DB, fallback to a virtual current session
+    if (sessions.length === 0) {
+      const now = new Date();
+      sessions.push({
+        id: 'current',
+        deviceInfo: 'Web Browser',
+        browser: 'Trình duyệt Web',
+        os: 'Thiết bị này',
+        deviceType: 'desktop',
+        deviceDisplay: 'Trình duyệt Web · Windows',
+        ipAddress: '127.0.0.1',
+        location: 'Cơ sở Sorak Cao Lãnh (Mạng trường)',
+        createdAt: account.last_login_at || now,
+        lastActive: account.last_login_at || now,
+        lastActiveAt: account.last_login_at || now,
+        isCurrent: true,
+      });
+    }
+
+    return {
+      lastLoginAt: account.last_login_at,
+      sessions,
+    };
+  }
 }
 export const authService = new AuthService();
 export default authService;
