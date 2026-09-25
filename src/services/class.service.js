@@ -1532,6 +1532,26 @@ export class ClassService {
       };
     }
 
+  async createGlobalTransferRequest(body, creatorAccountId) {
+      let fromClassId = body.fromClassId || body.classId;
+      if (!fromClassId && body.studentId) {
+        const student = await prisma.student.findFirst({
+          where: { ...this._parseStudentId(body.studentId), deleted_at: null },
+        });
+        if (student) {
+          const active = await prisma.studentEnrollment.findFirst({
+            where: { student_id: student.student_id, left_at: null },
+            orderBy: { enrolled_at: 'desc' },
+          });
+          if (active) fromClassId = active.class_id.toString();
+        }
+      }
+      if (!fromClassId) {
+        throw new BadRequest('Học sinh chưa được xếp vào lớp nào hoặc chưa chọn lớp hiện tại');
+      }
+      return this.createTransferRequest(fromClassId, body, creatorAccountId);
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
