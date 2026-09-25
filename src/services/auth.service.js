@@ -459,6 +459,86 @@ export class AuthService {
       sessions,
     };
   }
+
+  async revokeSession(publicId, sessionId) {
+    const account = await prisma.account.findUnique({
+      where: { public_id: publicId },
+      select: { account_id: true },
+    });
+
+    if (!account) {
+      throw NotFound('Không tìm thấy tài khoản');
+    }
+
+    await prisma.refreshToken.updateMany({
+      where: {
+        account_id: account.account_id,
+        token_id: BigInt(sessionId),
+      },
+      data: { is_revoked: true },
+    });
+
+    return { message: 'Đã thu hồi phiên đăng nhập thành công' };
+  }
+
+  async revokeOtherSessions(publicId, currentRawToken = null) {
+    const account = await prisma.account.findUnique({
+      where: { public_id: publicId },
+      select: { account_id: true },
+    });
+
+    if (!account) {
+      throw NotFound('Không tìm thấy tài khoản');
+    }
+
+    let currentHash = null;
+    if (currentRawToken) {
+      currentHash = crypto.createHash('sha256').update(currentRawToken).digest('hex');
+    }
+
+    const whereClause = {
+      account_id: account.account_id,
+      is_revoked: false,
+    };
+
+    if (currentHash) {
+      whereClause.token_hash = { not: currentHash };
+    }
+
+    const result = await prisma.refreshToken.updateMany({
+      where: whereClause,
+      data: { is_revoked: true },
+    });
+
+    return {
+      message: 'Đã thu hồi tất cả các phiên đăng nhập khác thành công',
+      revokedCount: result.count,
+    };
+  }
+
+  async revokeAllSessions(publicId) {
+    const account = await prisma.account.findUnique({
+      where: { public_id: publicId },
+      select: { account_id: true },
+    });
+
+    if (!account) {
+      throw NotFound('Không tìm thấy tài khoản');
+    }
+
+    const result = await prisma.refreshToken.updateMany({
+      where: {
+        account_id: account.account_id,
+        is_revoked: false,
+      },
+      data: { is_revoked: true },
+    });
+
+    return {
+      message: 'Đã thu hồi tất cả phiên đăng nhập thành công',
+      revokedCount: result.count,
+    };
+  }
 }
 export const authService = new AuthService();
 export default authService;

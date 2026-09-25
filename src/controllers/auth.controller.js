@@ -89,3 +89,30 @@ export const getSessions = async (req, res) => {
   res.success(result);
 };
 
+export const revokeSession = async (req, res) => {
+  const { sessionId } = req.params;
+  const result = await authService.revokeSession(req.user.sub, sessionId);
+  res.success(result);
+};
+
+export const revokeOtherSessions = async (req, res) => {
+  const currentRawToken = req.cookies?.[REFRESH_COOKIE_NAME] || req.body?.refreshToken;
+  const result = await authService.revokeOtherSessions(req.user.sub, currentRawToken);
+  res.success(result);
+};
+
+export const revokeAllSessions = async (req, res) => {
+  const result = await authService.revokeAllSessions(req.user.sub);
+  res.clearCookie(REFRESH_COOKIE_NAME, {
+    httpOnly: true,
+    secure: env.isProd,
+    sameSite: 'lax',
+  });
+  res.clearCookie('sorak_access', {
+    httpOnly: true,
+    secure: env.isProd,
+    sameSite: 'lax',
+  });
+  res.success(result);
+};
+
