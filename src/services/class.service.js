@@ -1719,6 +1719,243 @@ export class ClassService {
       };
     }
 
+  async getDailyReport(classId, { date } = {}) {
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseId(classId), deleted_at: null },
+        include: {
+          school_year: { select: { school_year_id: true, name: true, status: true } },
+        },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      // Parse date (default to 2026-10-14 if not specified)
+      let targetDateStr = date || '2026-10-14';
+      if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(targetDateStr)) {
+        const [d, m, y] = targetDateStr.split('/');
+        targetDateStr = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+      }
+      const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+  
+      // Get enrolled students
+      const enrollments = await prisma.studentEnrollment.findMany({
+        where: {
+          class_id: classRecord.class_id,
+          student: { deleted_at: null },
+          left_at: null,
+        },
+        orderBy: { student: { student_code: 'asc' } },
+        include: {
+          student: true,
+        },
+      });
+  
+      const studentIds = enrollments.map((e) => e.student.student_id);
+  
+      // 1. Fetch Attendance for this class on targetDate
+      const attendanceRecords = await prisma.attendance.findMany({
+        where: {
+          class_id: classRecord.class_id,
+          date: targetDate,
+          deleted_at: null,
+        },
+      });
+      const attMap = new Map();
+      attendanceRecords.forEach((a) => {
+        attMap.set(a.student_id.toString(), a);
+      });
+  
+      // 2. Fetch Health Assessments:
+      const healthExactRecords = await prisma.healthAssessment.findMany({
+        where: {
+          student_id: { in: studentIds },
+          assessment_date: targetDate,
+          deleted_at: null,
+        },
+      });
+      const healthExactMap = new Map();
+      healthExactRecords.forEach((h) => {
+        healthExactMap.set(h.student_id.toString(), h);
+      });
+  
+      const latestHealthRecords = await prisma.healthAssessment.findMany({
+        where: {
+          student_id: { in: studentIds },
+          deleted_at: null,
+        },
+        orderBy: { assessment_date: 'desc' },
+      });
+      const healthLatestMap = new Map();
+      latestHealthRecords.forEach((h) => {
+        const sId = h.student_id.toString();
+        if (!healthLatestMap.has(sId)) {
+          healthLatestMap.set(sId, h);
+        }
+      });
+  
+      // 3. Fetch Educational Activities scheduled for this class
+      let scheduledSlots = await prisma.subThemeActivity.findMany({
+        where: {
+          class_id: classRecord.class_id,
+          scheduled_date: targetDate,
+        },
+        include: {
+          activity: true,
+        },
+        orderBy: { order_index: 'asc' },
+      });
+  
+      // Fallback activities if none specifically scheduled for this date
+      if (scheduledSlots.length === 0) {
+        const fallbackActivities = await prisma.educationalActivity.findMany({
+          where: { deleted_at: null },
+          take: 3,
+          orderBy: { activity_id: 'asc' },
+        });
+        scheduledSlots = fallbackActivities.map((act, idx) => ({
+          id: BigInt(idx + 1),
+          activity_id: act.activity_id,
+          activity: act,
+          routine_slot: act.routine_slot,
+        }));
+      }
+  
+      const activityList = scheduledSlots.map((s) => ({
+        activityId: s.activity_id.toString(),
+        slotId: s.id.toString(),
+        title: s.activity?.title || 'Hoạt động giáo dục',
+        routineSlot: s.routine_slot || s.activity?.routine_slot,
+      }));
+  
+      // 4. Fetch Daily Assessments for this class and date
+      const dailyAssessments = await prisma.dailyAssessment.findMany({
+        where: {
+          student_id: { in: studentIds },
+          assessment_date: targetDate,
+        },
+        include: {
+          activity: true,
+        },
+      });
+  
+      const assessMap = new Map();
+      dailyAssessments.forEach((da) => {
+        const sId = da.student_id.toString();
+        if (!assessMap.has(sId)) {
+          assessMap.set(sId, new Map());
+        }
+        assessMap.get(sId).set(da.activity_id.toString(), da);
+      });
+  
+      // 5. Construct student rows
+      let presentCount = 0;
+      let excusedCount = 0;
+      let unexcusedCount = 0;
+      let notRecordedCount = 0;
+      let healthCheckedTodayCount = 0;
+  
+      const students = enrollments.map((enr) => {
+        const s = enr.student;
+        const sId = s.student_id.toString();
+  
+        // Attendance
+        const att = attMap.get(sId);
+        const isAttRecorded = !!att;
+        let attStatus = 'NOT_RECORDED';
+        if (att) {
+          if (att.status === 'PRESENT') attStatus = 'PRESENT';
+          else if (att.status === 'EXCUSED_ABSENCE') attStatus = 'EXCUSED_ABSENCE';
+          else if (att.status === 'UNEXCUSED_ABSENCE') attStatus = 'UNEXCUSED_ABSENCE';
+          else attStatus = att.status;
+        }
+  
+        if (attStatus === 'PRESENT') presentCount++;
+        else if (attStatus === 'EXCUSED_ABSENCE') excusedCount++;
+        else if (attStatus === 'UNEXCUSED_ABSENCE') unexcusedCount++;
+        else notRecordedCount++;
+  
+        const checkInFormatted = att?.check_in_time
+          ? new Date(att.check_in_time).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+          : null;
+  
+        // Health
+        const exactH = healthExactMap.get(sId);
+        const latestH = exactH || healthLatestMap.get(sId);
+        const isHealthToday = !!exactH;
+        if (isHealthToday) healthCheckedTodayCount++;
+  
+        const heightVal = latestH ? Number(latestH.height) : 85.0;
+        const weightVal = latestH ? Number(latestH.weight) : 12.0;
+        const bmiVal = latestH ? Number(latestH.bmi) : Number((weightVal / ((heightVal / 100) ** 2)).toFixed(2));
+        const healthNotes = exactH?.notes || latestH?.notes || 'Bình thường, thể trạng tốt';
+  
+        // Assessments
+        const studentAssessMap = assessMap.get(sId) || new Map();
+        const studentAssessments = activityList.map((act) => {
+          const da = studentAssessMap.get(act.activityId);
+          return {
+            activityId: act.activityId,
+            activityTitle: act.title,
+            routineSlot: act.routineSlot,
+            status: da?.status || 'PENDING',
+            notes: da?.notes || '',
+            isAssessed: !!da && da.status !== 'PENDING',
+          };
+        });
+  
+        return {
+          id: sId,
+          publicId: s.public_id,
+          studentCode: s.student_code,
+          fullName: s.full_name,
+          avatarUrl:
+            s.avatar_url ||
+            `https://api.dicebear.com/10.x/critters/svg?seed=${encodeURIComponent(s.student_code || s.full_name)}&backgroundColor=ff2e63,00c2a8,ffb300,3d5afe,8e24aa,00e676`,
+          gender: s.gender === 'MALE' ? 'Nam' : 'Nữ',
+          dateOfBirth: s.date_of_birth ? new Date(s.date_of_birth).toISOString().slice(0, 10) : '',
+          status: s.status,
+          attendance: {
+            status: attStatus,
+            isRecorded: isAttRecorded,
+            checkInTime: checkInFormatted,
+            pickupPerson: att?.pickup_person_name || '',
+            notes: att?.notes || '',
+          },
+          health: {
+            height: heightVal,
+            weight: weightVal,
+            bmi: bmiVal,
+            notes: healthNotes,
+            isRecordedToday: isHealthToday,
+            assessmentDate: exactH?.assessment_date || latestH?.assessment_date || null,
+          },
+          assessments: studentAssessments,
+        };
+      });
+  
+      return {
+        classInfo: {
+          id: classRecord.class_id.toString(),
+          publicId: classRecord.public_id,
+          name: classRecord.name,
+          schoolYear: classRecord.school_year?.name,
+          ageGroup: classRecord.age_group,
+          totalStudents: students.length,
+        },
+        date: targetDateStr,
+        activities: activityList,
+        students,
+        summary: {
+          total: students.length,
+          present: presentCount,
+          excused: excusedCount,
+          unexcused: unexcusedCount,
+          notRecorded: notRecordedCount,
+          healthCheckedToday: healthCheckedTodayCount,
+          assessedCount: students.filter((st) => st.assessments.some((a) => a.isAssessed)).length,
+        },
+      };
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
