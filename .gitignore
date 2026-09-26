@@ -39,3 +39,10 @@ Thumbs.db
 # scratch & temp scripts
 scratch/
 scratch_db.sql
+
+# ignore developer scratch files, local scripts and public assets
+scripts/
+public/
+scratch/
+scratch_db.sql
+src/scripts/
