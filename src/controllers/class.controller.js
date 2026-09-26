@@ -99,3 +99,23 @@ export const getClassExportData = async (req, res) => {
   res.success(result);
 };
 
+export const getDailyReport = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.getDailyReport(id, req.query);
+  res.success(result);
+};
+
+export const getStudentReport = async (req, res) => {
+  const { id } = req.params;
+  const { studentId, semester } = req.query;
+  const result = await classService.getStudentReport(id, studentId, semester);
+  res.success(result);
+};
+
+export const batchSaveDailyReport = async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user?.accountId || req.user?.id || 1n;
+  const result = await classService.batchSaveDailyReport(id, req.body, userId);
+  res.success(result);
+};
+
