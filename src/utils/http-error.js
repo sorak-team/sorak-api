@@ -7,8 +7,24 @@ export class HttpError extends Error {
   }
 }
 
-export const BadRequest = (msg, details) => new HttpError(400, 'VALIDATION_ERROR', msg, details);
-export const Unauthorized = (msg = 'Unauthorized') => new HttpError(401, 'UNAUTHORIZED', msg);
-export const Forbidden = (msg = 'Forbidden') => new HttpError(403, 'FORBIDDEN', msg);
-export const NotFound = (msg = 'Not found') => new HttpError(404, 'NOT_FOUND', msg);
-export const Conflict = (msg, details) => new HttpError(409, 'CONFLICT', msg, details);
+function createHttpError(status, code, defaultMsg) {
+  function HttpErrorInstance(msg = defaultMsg, details) {
+    if (!(this instanceof HttpErrorInstance)) {
+      return new HttpErrorInstance(msg, details);
+    }
+    const err = new HttpError(status, code, msg, details);
+    Object.setPrototypeOf(err, HttpErrorInstance.prototype);
+    return err;
+  }
+  Object.setPrototypeOf(HttpErrorInstance.prototype, HttpError.prototype);
+  HttpErrorInstance.prototype.name = code;
+  return HttpErrorInstance;
+}
+
+export const BadRequest = createHttpError(400, 'VALIDATION_ERROR', 'Yêu cầu không hợp lệ');
+export const Unauthorized = createHttpError(401, 'UNAUTHORIZED', 'Chưa xác thực');
+export const Forbidden = createHttpError(403, 'FORBIDDEN', 'Không có quyền truy cập');
+export const NotFound = createHttpError(404, 'NOT_FOUND', 'Không tìm thấy tài nguyên');
+export const Conflict = createHttpError(409, 'CONFLICT', 'Dữ liệu đã tồn tại hoặc xung đột');
+export const Locked = createHttpError(423, 'ACCOUNT_LOCKED', 'Tài khoản đã bị khóa');
+
