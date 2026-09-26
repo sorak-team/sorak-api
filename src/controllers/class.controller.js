@@ -93,3 +93,9 @@ export const updateTransferStatus = async (req, res) => {
   res.success(result);
 };
 
+export const getClassExportData = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.getClassExportData(id);
+  res.success(result);
+};
+
