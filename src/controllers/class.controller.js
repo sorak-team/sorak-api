@@ -77,3 +77,8 @@ export const getClassTransfers = async (req, res) => {
   res.success(result);
 };
 
+export const getAllTransfers = async (req, res) => {
+  const result = await classService.getAllTransfers(req.query);
+  res.success(result);
+};
+
