@@ -22,3 +22,10 @@ export const updateAccount = async (req, res) => {
   res.success(result);
 };
 
+export const toggleAccountStatus = async (req, res) => {
+  const { id } = req.params;
+  const { isActive } = req.body;
+  const result = await accountService.changeStatus(id, !!isActive);
+  res.success(result);
+};
+
