@@ -71,9 +71,3 @@ export const updateTeacherRole = async (req, res) => {
   res.success(result);
 };
 
-export const getClassTransfers = async (req, res) => {
-  const { id } = req.params;
-  const result = await classService.getClassTransfers(id, req.query);
-  res.success(result);
-};
-
