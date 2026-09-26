@@ -29,3 +29,16 @@ export const toggleAccountStatus = async (req, res) => {
   res.success(result);
 };
 
+export const resetAccountPassword = async (req, res) => {
+  const { id } = req.params;
+  const { newPassword } = req.body;
+  const result = await accountService.resetPassword(id, newPassword);
+  res.success(result);
+};
+
+export const deleteAccount = async (req, res) => {
+  const { id } = req.params;
+  const result = await accountService.deleteAccount(id);
+  res.success(result);
+};
+
