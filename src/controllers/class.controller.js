@@ -82,3 +82,14 @@ export const getAllTransfers = async (req, res) => {
   res.success(result);
 };
 
+export const updateTransferStatus = async (req, res) => {
+  const { id, transferId } = req.params;
+  const result = await classService.updateTransferStatus(
+    id,
+    transferId,
+    req.body,
+    req.user?.accountId,
+  );
+  res.success(result);
+};
+
