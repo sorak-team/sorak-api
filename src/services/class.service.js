@@ -2398,6 +2398,145 @@ export class ClassService {
       };
     }
 
+  async saveStudentDailyReport(classId, { date, studentId, attendance, health, assessments }, userId = 1n) {
+      const classRecord = await prisma.class.findFirst({
+        where: { ...this._parseId(classId), deleted_at: null },
+      });
+      if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+  
+      const sId = BigInt(studentId);
+      let targetDateStr = date || '2026-10-14';
+      if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(targetDateStr)) {
+        const [d, m, y] = targetDateStr.split('/');
+        targetDateStr = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+      }
+      const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+  
+      // 1. Save Attendance
+      if (attendance) {
+        let status = attendance.status || 'PRESENT';
+        if (status === 'ABSENT' || status === 'ABSENT_EXCUSED') status = 'EXCUSED_ABSENCE';
+        if (status === 'ABSENT_UNEXCUSED') status = 'UNEXCUSED_ABSENCE';
+  
+        const existingAtt = await prisma.attendance.findFirst({
+          where: {
+            student_id: sId,
+            class_id: classRecord.class_id,
+            date: targetDate,
+          },
+        });
+  
+        if (existingAtt) {
+          await prisma.attendance.update({
+            where: { attendance_id: existingAtt.attendance_id },
+            data: {
+              status,
+              notes: attendance.notes !== undefined ? attendance.notes : existingAtt.notes,
+              check_in_time: attendance.checkInTime ? new Date(`${targetDateStr}T${attendance.checkInTime}:00.000Z`) : existingAtt.check_in_time,
+              pickup_person_name: attendance.pickupPerson !== undefined ? attendance.pickupPerson : existingAtt.pickup_person_name,
+              updated_at: new Date(),
+            },
+          });
+        } else {
+          await prisma.attendance.create({
+            data: {
+              student_id: sId,
+              class_id: classRecord.class_id,
+              date: targetDate,
+              status,
+              notes: attendance.notes || null,
+              check_in_by: BigInt(userId || 40),
+              check_in_time: attendance.checkInTime ? new Date(`${targetDateStr}T${attendance.checkInTime}:00.000Z`) : new Date(),
+              pickup_person_name: attendance.pickupPerson || null,
+            },
+          });
+        }
+      }
+  
+      // 2. Save Health
+      if (health) {
+        const height = Number(health.height) || 85.0;
+        const weight = Number(health.weight) || 12.0;
+        const bmi = Number((weight / ((height / 100) ** 2)).toFixed(2));
+        const notes = health.notes || 'Bình thường, thể trạng tốt';
+  
+        const existingHealth = await prisma.healthAssessment.findFirst({
+          where: {
+            student_id: sId,
+            assessment_date: targetDate,
+            deleted_at: null,
+          },
+        });
+  
+        if (existingHealth) {
+          await prisma.healthAssessment.update({
+            where: { assessment_id: existingHealth.assessment_id },
+            data: {
+              height,
+              weight,
+              bmi,
+              notes,
+              updated_at: new Date(),
+            },
+          });
+        } else {
+          await prisma.healthAssessment.create({
+            data: {
+              student_id: sId,
+              assessment_date: targetDate,
+              height,
+              weight,
+              bmi,
+              height_for_age_zscore: 0.2,
+              weight_for_age_zscore: 0.2,
+              bmi_for_age_zscore: 0.1,
+              notes,
+              recorded_by: BigInt(userId || 40),
+            },
+          });
+        }
+      }
+  
+      // 3. Save Assessments
+      if (Array.isArray(assessments)) {
+        for (const ass of assessments) {
+          if (!ass.activityId) continue;
+          const actId = BigInt(ass.activityId);
+          const status = ass.status || 'ACHIEVED';
+          const notes = ass.notes || null;
+  
+          await prisma.dailyAssessment.upsert({
+            where: {
+              student_id_activity_id_assessment_date: {
+                student_id: sId,
+                activity_id: actId,
+                assessment_date: targetDate,
+              },
+            },
+            update: {
+              status,
+              notes,
+              evaluated_by: BigInt(userId || 40),
+              updated_at: new Date(),
+            },
+            create: {
+              student_id: sId,
+              activity_id: actId,
+              assessment_date: targetDate,
+              status,
+              notes,
+              evaluated_by: BigInt(userId || 40),
+            },
+          });
+        }
+      }
+  
+      return {
+        success: true,
+        message: 'Cập nhật thông tin học sinh trong ngày thành công',
+      };
+    }
+
 }
 export const classService = new ClassService();
 export default classService;
