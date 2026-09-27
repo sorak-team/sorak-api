@@ -11,3 +11,8 @@ export const getStudentById = async (req, res) => {
   res.success(result);
 };
 
+export const createStudent = async (req, res) => {
+  const result = await studentService.createStudent(req.body);
+  res.status(201).success(result);
+};
+
