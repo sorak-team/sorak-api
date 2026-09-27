@@ -1,6 +1,5 @@
 import { curriculumService } from '../services/curriculum.service.js';
 
-
 export const listThemeOverview = async (req, res) => {
   const result = await curriculumService.listThemeOverview(req.query);
   res.success(result);
@@ -41,3 +40,31 @@ export const updateGoalBankStatus = async (req, res) => {
   res.success(result);
 };
 
+export const getSingleGoalDetail = async (req, res) => {
+  const { year, ageGroup, goalId } = req.query;
+  const result = await curriculumService.getSingleGoalDetail({ year, ageGroup, goalId });
+  res.success(result);
+};
+
+export const updateGoalContents = async (req, res) => {
+  const { year, ageGroup, goalId, contents } = req.body;
+  const result = await curriculumService.updateGoalContents({ year, ageGroup, goalId, contents });
+  res.success(result);
+};
+
+export const updateGoal = async (req, res) => {
+  const { year, ageGroup, goalId, data } = req.body;
+  const result = await curriculumService.updateGoal({ year, ageGroup, goalId, data });
+  res.success(result);
+};
+
+export const deleteGoal = async (req, res) => {
+  const { year, ageGroup, goalId } = req.body;
+  const result = await curriculumService.deleteGoal({ year, ageGroup, goalId });
+  res.success(result);
+};
+
+export const queryAiAssistant = async (req, res) => {
+  const result = await curriculumService.queryAiAssistant(req.body);
+  res.success(result);
+};
