@@ -1028,6 +1028,106 @@ export default curriculumService;export class CurriculumService {
       };
     }
 
+  async getThemeSetDetail({ year = '2026–2027', ageGroup = 'nhatre' }) {
+      const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
+      const normalizedYear = (year || '2026–2027').replace('-', '–');
+  
+      // Find school year ID
+      const schoolYear = await prisma.schoolYear.findFirst({
+        where: {
+          OR: [
+            { name: { contains: normalizedYear } },
+            { name: { contains: normalizedYear.replace('–', '-') } },
+            { school_year_id: 1n },
+          ],
+          deleted_at: null,
+        },
+      });
+  
+      const schoolYearId = schoolYear?.school_year_id || 1n;
+  
+      const dbThemes = await prisma.curriculumTheme.findMany({
+        where: {
+          school_year_id: schoolYearId,
+          age_group: ageGroupInfo.dbKey,
+          deleted_at: null,
+        },
+        include: {
+          sub_themes: {
+            where: { deleted_at: null },
+            orderBy: { start_date: 'asc' },
+          },
+        },
+        orderBy: { start_date: 'asc' },
+      });
+  
+      if (dbThemes && dbThemes.length > 0) {
+        const mappedThemes = dbThemes.map((t, idx) => ({
+          id: t.public_id || t.theme_id.toString(),
+          code: String(idx + 1).padStart(2, '0'),
+          name: t.name,
+          startDate: t.start_date.toISOString().slice(0, 10),
+          endDate: t.end_date.toISOString().slice(0, 10),
+          weeks: t.sub_themes.length,
+          status: t.status,
+          note: t.description || '',
+          description: t.description || '',
+          subThemes: t.sub_themes.map((st) => ({
+            id: st.public_id || st.sub_theme_id.toString(),
+            name: st.name,
+            startDate: st.start_date.toISOString().slice(0, 10),
+            endDate: st.end_date.toISOString().slice(0, 10),
+          })),
+        }));
+  
+        const publishedCount = mappedThemes.filter((t) => t.status === 'PUBLISHED').length;
+        const draftCount = mappedThemes.filter((t) => t.status === 'DRAFT').length;
+        const totalSubThemes = mappedThemes.reduce((acc, t) => acc + (t.subThemes?.length || 0), 0);
+  
+        return {
+          info: {
+            year: normalizedYear,
+            schoolYearId: schoolYearId.toString(),
+            startDate: schoolYear?.start_date ? schoolYear.start_date.toISOString().slice(0, 10) : '2026-09-05',
+            endDate: schoolYear?.end_date ? schoolYear.end_date.toISOString().slice(0, 10) : '2027-05-31',
+            ageGroup: ageGroupInfo.key,
+            ageGroupLabel: ageGroupInfo.label,
+            status: draftCount > 0 ? 'DRAFT' : 'PUBLISHED',
+            statusLabel: draftCount > 0 ? 'Bản nháp' : 'Đã công bố',
+            updatedAt: '13/10/2026',
+          },
+          themes: mappedThemes,
+          summary: {
+            totalThemes: mappedThemes.length,
+            publishedCount,
+            draftCount,
+            totalSubThemes,
+          },
+        };
+      }
+  
+      return {
+        info: {
+          year: normalizedYear,
+          schoolYearId: schoolYearId.toString(),
+          startDate: schoolYear?.start_date ? schoolYear.start_date.toISOString().slice(0, 10) : '2026-09-05',
+          endDate: schoolYear?.end_date ? schoolYear.end_date.toISOString().slice(0, 10) : '2027-05-31',
+          ageGroup: ageGroupInfo.key,
+          ageGroupLabel: ageGroupInfo.label,
+          status: 'DRAFT',
+          statusLabel: 'Chưa có dữ liệu',
+          updatedAt: 'Chưa có dữ liệu',
+        },
+        themes: [],
+        summary: {
+          totalThemes: 0,
+          publishedCount: 0,
+          draftCount: 0,
+          totalSubThemes: 0,
+        },
+      };
+    }
+
 }
 export const curriculumService = new CurriculumService();
 export default curriculumService;
