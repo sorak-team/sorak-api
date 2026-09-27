@@ -1760,6 +1760,22 @@ export default curriculumService;export class CurriculumService {
       return { success: true, goal: { id: goalId, ...data } };
     }
 
+  async deleteGoal({ year = '2026–2027', ageGroup = 'nhatre', goalId }) {
+      let targetGoal = null;
+      if (!isNaN(Number(goalId))) {
+        targetGoal = await prisma.educationalGoal.findFirst({ where: { goal_id: BigInt(goalId) } });
+      } else {
+        targetGoal = await prisma.educationalGoal.findFirst({ where: { public_id: String(goalId) } });
+      }
+      if (targetGoal) {
+        await prisma.educationalGoal.update({
+          where: { goal_id: targetGoal.goal_id },
+          data: { deleted_at: new Date() },
+        });
+      }
+      return { success: true, goalId };
+    }
+
 }
 export const curriculumService = new CurriculumService();
 export default curriculumService;
