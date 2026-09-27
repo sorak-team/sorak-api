@@ -1619,6 +1619,10 @@ export default curriculumService;export class CurriculumService {
       };
     }
 
+  async updateGoalBankStatus({ year = '2026–2027', ageGroup = 'nhatre', status = 'DRAFT' }) {
+      return this.getGoalBankDetail({ year, ageGroup });
+    }
+
 }
 export const curriculumService = new CurriculumService();
 export default curriculumService;
