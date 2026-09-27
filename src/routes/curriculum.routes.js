@@ -19,20 +19,21 @@ import {
 const router = Router();
 
 // Themes endpoints
-
 router.get('/themes/overview', authMiddleware, asyncHandler(listThemeOverview));
 router.get('/themes/detail', authMiddleware, asyncHandler(getThemeSetDetail));
 router.patch('/themes/status', authMiddleware, asyncHandler(updateThemeSetStatus));
 router.put('/themes/detail', authMiddleware, asyncHandler(updateThemeSetDetail));
+
+// Goals endpoints
 router.get('/goals/overview', authMiddleware, asyncHandler(listGoalBanksOverview));
 router.get('/goals/detail', authMiddleware, asyncHandler(getGoalBankDetail));
 router.patch('/goals/status', authMiddleware, asyncHandler(updateGoalBankStatus));
 router.get('/goals/single-detail', authMiddleware, asyncHandler(getSingleGoalDetail));
 router.put('/goals/single-detail/contents', authMiddleware, asyncHandler(updateGoalContents));
-
-
-// Goals endpoints
+router.put('/goals/item', authMiddleware, asyncHandler(updateGoal));
+router.delete('/goals/item', authMiddleware, asyncHandler(deleteGoal));
 
 // AI Assistant endpoint
+router.post('/goals/ai-assistant', authMiddleware, asyncHandler(queryAiAssistant));
 
 export default router;
