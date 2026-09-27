@@ -21,6 +21,7 @@ const router = Router();
 // Themes endpoints
 
 router.get('/themes/overview', authMiddleware, asyncHandler(listThemeOverview));
+router.get('/themes/detail', authMiddleware, asyncHandler(getThemeSetDetail));
 
 
 // Goals endpoints
