@@ -1544,6 +1544,81 @@ export default curriculumService;export class CurriculumService {
       };
     }
 
+  async getGoalBankDetail({ year = '2026–2027', ageGroup = 'nhatre' }) {
+      const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
+      const normalizedYear = (year || '2026–2027').replace('-', '–');
+  
+      const dbGoals = await prisma.educationalGoal.findMany({
+        where: {
+          school_year_id: 1n,
+          age_group: ageGroupInfo.dbKey,
+          deleted_at: null,
+        },
+        include: {
+          contents: { where: { deleted_at: null } },
+        },
+        orderBy: { goal_id: 'asc' },
+      });
+  
+      if (dbGoals && dbGoals.length > 0) {
+        const domainMap = {
+          PHYSICAL: { id: 'g1', code: '1.', title: 'Phát triển thể chất', domain: 'PHYSICAL', domainLabel: 'Thể chất', children: [] },
+          COGNITIVE: { id: 'g2', code: '2.', title: 'Phát triển nhận thức', domain: 'COGNITIVE', domainLabel: 'Nhận thức', children: [] },
+          LANGUAGE: { id: 'g3', code: '3.', title: 'Phát triển ngôn ngữ', domain: 'LANGUAGE', domainLabel: 'Ngôn ngữ', children: [] },
+          SOCIO_EMOTIONAL: { id: 'g4', code: '4.', title: 'Phát triển tình cảm - KNXH', domain: 'SOCIO_EMOTIONAL', domainLabel: 'Tình cảm - KNXH', children: [] },
+          AESTHETIC: { id: 'g5', code: '5.', title: 'Phát triển thẩm mỹ', domain: 'AESTHETIC', domainLabel: 'Thẩm mỹ', children: [] },
+        };
+  
+        dbGoals.forEach((g) => {
+          const target = domainMap[g.domain] || domainMap.PHYSICAL;
+          target.children.push({
+            id: g.public_id || g.goal_id.toString(),
+            code: g.goal_code,
+            indicatorCode: g.indicator_code || '',
+            title: g.title,
+            type: 'Mục tiêu học tập',
+            contentsCount: g.contents.length,
+            contents: (g.contents || []).map((c) => ({
+              id: c.public_id || c.content_id.toString(),
+              title: c.title,
+            })),
+          });
+        });
+  
+        const activeDomains = Object.values(domainMap)
+          .map((d) => ({ ...d, count: d.children.length }))
+          .filter((d) => d.children.length > 0);
+  
+        return {
+          info: {
+            year: normalizedYear,
+            ageGroup: ageGroupInfo.key,
+            ageGroupLabel: ageGroupInfo.label,
+            status: 'PUBLISHED',
+            statusLabel: 'Đã công bố',
+            totalGoals: dbGoals.length,
+            domainCount: activeDomains.length,
+            updatedAt: '13/10/2026',
+          },
+          tree: activeDomains,
+        };
+      }
+  
+      return {
+        info: {
+          year: normalizedYear,
+          ageGroup: ageGroupInfo.key,
+          ageGroupLabel: ageGroupInfo.label,
+          status: 'DRAFT',
+          statusLabel: 'Chưa có dữ liệu',
+          totalGoals: 0,
+          domainCount: 0,
+          updatedAt: 'Chưa có dữ liệu',
+        },
+        tree: [],
+      };
+    }
+
 }
 export const curriculumService = new CurriculumService();
 export default curriculumService;
