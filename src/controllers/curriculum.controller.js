@@ -35,3 +35,9 @@ export const getGoalBankDetail = async (req, res) => {
   res.success(result);
 };
 
+export const updateGoalBankStatus = async (req, res) => {
+  const { year, ageGroup, status } = req.body;
+  const result = await curriculumService.updateGoalBankStatus({ year, ageGroup, status });
+  res.success(result);
+};
+
