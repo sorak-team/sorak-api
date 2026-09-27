@@ -24,3 +24,8 @@ export const updateThemeSetDetail = async (req, res) => {
   res.success(result);
 };
 
+export const listGoalBanksOverview = async (req, res) => {
+  const result = await curriculumService.listGoalBanksOverview(req.query);
+  res.success(result);
+};
+
