@@ -16,3 +16,9 @@ export const createStudent = async (req, res) => {
   res.status(201).success(result);
 };
 
+export const updateStudent = async (req, res) => {
+  const { id } = req.params;
+  const result = await studentService.updateStudent(id, req.body);
+  res.success(result);
+};
+
