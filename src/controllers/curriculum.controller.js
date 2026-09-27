@@ -47,3 +47,9 @@ export const getSingleGoalDetail = async (req, res) => {
   res.success(result);
 };
 
+export const updateGoalContents = async (req, res) => {
+  const { year, ageGroup, goalId, contents } = req.body;
+  const result = await curriculumService.updateGoalContents({ year, ageGroup, goalId, contents });
+  res.success(result);
+};
+
