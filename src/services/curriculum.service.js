@@ -1623,6 +1623,79 @@ export default curriculumService;export class CurriculumService {
       return this.getGoalBankDetail({ year, ageGroup });
     }
 
+  async getSingleGoalDetail({ year = '2026–2027', ageGroup = 'nhatre', goalId }) {
+      const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
+      const normalizedYear = (year || '2026–2027').replace('-', '–');
+  
+      let gId = null;
+      const isUuid = typeof goalId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(goalId);
+      if (goalId && !isNaN(Number(goalId))) {
+        gId = BigInt(goalId);
+      }
+  
+      const dbGoal = await prisma.educationalGoal.findFirst({
+        where: {
+          OR: [
+            gId ? { goal_id: gId } : undefined,
+            isUuid ? { public_id: goalId } : undefined,
+            { goal_code: goalId },
+          ].filter(Boolean),
+          school_year_id: 1n,
+          age_group: ageGroupInfo.dbKey,
+          deleted_at: null,
+        },
+        include: {
+          contents: { where: { deleted_at: null } },
+        },
+      });
+  
+      if (!dbGoal) {
+        throw new NotFound('Không tìm thấy mục tiêu giáo dục trong cơ sở dữ liệu.');
+      }
+  
+      const allDbGoals = await prisma.educationalGoal.findMany({
+        where: {
+          school_year_id: 1n,
+          age_group: ageGroupInfo.dbKey,
+          deleted_at: null,
+        },
+        include: { contents: true },
+        orderBy: { goal_id: 'asc' },
+      });
+  
+      const allGoals = allDbGoals.map((g) => ({
+        id: g.public_id || g.goal_id.toString(),
+        code: g.goal_code,
+        indicatorCode: g.indicator_code || '',
+        title: g.title,
+        domain: g.domain,
+        contentsCount: g.contents.length,
+      }));
+  
+      const contents = dbGoal.contents.map((c) => ({
+        id: c.public_id || c.content_id.toString(),
+        title: c.title,
+      }));
+  
+      return {
+        info: {
+          year: normalizedYear,
+          ageGroup: ageGroupInfo.key,
+          ageGroupLabel: ageGroupInfo.label,
+        },
+        goal: {
+          id: dbGoal.public_id || dbGoal.goal_id.toString(),
+          code: dbGoal.goal_code,
+          indicatorCode: dbGoal.indicator_code || '',
+          title: dbGoal.title,
+          domain: dbGoal.domain,
+          contentsCount: contents.length,
+        },
+        allGoals,
+        contents,
+      };
+    }
+
 }
 export const curriculumService = new CurriculumService();
 export default curriculumService;
