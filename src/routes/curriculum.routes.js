@@ -30,6 +30,7 @@ router.patch('/goals/status', authMiddleware, asyncHandler(updateGoalBankStatus)
 router.get('/goals/single-detail', authMiddleware, asyncHandler(getSingleGoalDetail));
 router.put('/goals/single-detail/contents', authMiddleware, asyncHandler(updateGoalContents));
 router.put('/goals/item', authMiddleware, asyncHandler(updateGoal));
+router.delete('/goals/item', authMiddleware, asyncHandler(deleteGoal));
 
 
 // Goals endpoints
