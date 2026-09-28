@@ -31,6 +31,7 @@ router.get('/goals/single-detail', authMiddleware, asyncHandler(getSingleGoalDet
 router.put('/goals/single-detail/contents', authMiddleware, asyncHandler(updateGoalContents));
 router.put('/goals/item', authMiddleware, asyncHandler(updateGoal));
 router.delete('/goals/item', authMiddleware, asyncHandler(deleteGoal));
+router.post('/goals/ai-assistant', authMiddleware, asyncHandler(queryAiAssistant));
 
 
 // Goals endpoints
