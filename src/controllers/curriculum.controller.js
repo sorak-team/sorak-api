@@ -65,8 +65,3 @@ export const deleteGoal = async (req, res) => {
   res.success(result);
 };
 
-export const queryAiAssistant = async (req, res) => {
-  const result = await curriculumService.queryAiAssistant(req.body);
-  res.success(result);
-};
-
