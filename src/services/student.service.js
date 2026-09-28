@@ -457,6 +457,109 @@ export class StudentService {
     logger.info(`[StudentService] Created student ${created.student_code} (${created.full_name})`);
     return this.getStudentById(created.public_id || created.student_id.toString());
   }
+
+  async updateStudent(id, payload) {
+    const student = await prisma.student.findFirst({
+      where: { ...this._parseId(id), deleted_at: null },
+    });
+    if (!student) {
+      throw new NotFound('Hồ sơ học sinh không tồn tại');
+    }
+
+    const {
+      fullName,
+      dateOfBirth,
+      gender,
+      ethnic,
+      nationality,
+      placeOfBirth,
+      permanentResidence,
+      currentResidence,
+      status,
+      enrollmentDate,
+      allergyNotes,
+      medicalNotes,
+      notes,
+      avatarUrl,
+      phone,
+    } = payload;
+
+    const studentUpdateData = {};
+    if (fullName !== undefined) studentUpdateData.full_name = fullName;
+    if (dateOfBirth !== undefined) studentUpdateData.date_of_birth = new Date(dateOfBirth);
+    if (gender !== undefined) studentUpdateData.gender = gender;
+    if (ethnic !== undefined) studentUpdateData.ethnic = ethnic || null;
+    if (nationality !== undefined) studentUpdateData.nationality = nationality;
+    if (placeOfBirth !== undefined) studentUpdateData.place_of_birth = placeOfBirth || null;
+    if (avatarUrl !== undefined) studentUpdateData.avatar_url = avatarUrl || null;
+    if (permanentResidence !== undefined)
+      studentUpdateData.permanent_residence = permanentResidence || null;
+    if (currentResidence !== undefined)
+      studentUpdateData.current_residence = currentResidence || null;
+    if (status !== undefined) studentUpdateData.status = status;
+    if (enrollmentDate !== undefined) studentUpdateData.enrollment_date = new Date(enrollmentDate);
+    if (allergyNotes !== undefined) studentUpdateData.allergy_notes = allergyNotes || null;
+    if (medicalNotes !== undefined) studentUpdateData.medical_notes = medicalNotes || null;
+    if (payload.previousSchool !== undefined || notes !== undefined) {
+      studentUpdateData.previous_school = payload.previousSchool || notes || null;
+    }
+
+    if (Object.keys(studentUpdateData).length > 0) {
+      await prisma.student.update({
+        where: { student_id: student.student_id },
+        data: studentUpdateData,
+      });
+
+      // Synchronize active enrollment status if global student status changes
+      if (status !== undefined) {
+        if (status === 'RESERVED') {
+          await prisma.studentEnrollment.updateMany({
+            where: { student_id: student.student_id, left_at: null },
+            data: { left_at: new Date(), status: 'RESERVED', leave_reason: payload.leaveReason || 'Bảo lưu' },
+          });
+        } else if (status === 'TRANSFERRED') {
+          await prisma.studentEnrollment.updateMany({
+            where: { student_id: student.student_id, left_at: null },
+            data: { left_at: new Date(), status: 'TRANSFERRED_SCHOOL', leave_reason: payload.leaveReason || 'Chuyển trường' },
+          });
+        } else if (status === 'DROPPED_OUT') {
+          await prisma.studentEnrollment.updateMany({
+            where: { student_id: student.student_id, left_at: null },
+            data: { left_at: new Date(), status: 'DROPPED_OUT', leave_reason: payload.leaveReason || 'Thôi học' },
+          });
+        } else if (status === 'STUDYING') {
+          // If returning to studying and has an active enrollment
+          await prisma.studentEnrollment.updateMany({
+            where: { student_id: student.student_id, left_at: null },
+            data: { status: 'ENROLLED', leave_reason: null },
+          });
+        }
+      }
+    }
+
+    if (Array.isArray(payload.parents)) {
+      await prisma.$transaction(async (tx) => {
+        await tx.parent.deleteMany({
+          where: { student_id: student.student_id },
+        });
+        for (const p of payload.parents) {
+          if (p.fullName && p.fullName.trim()) {
+            await tx.parent.create({
+              data: {
+                student_id: student.student_id,
+                full_name: p.fullName.trim(),
+                relationship: p.relationship || 'Bố',
+                phone: p.phone || '',
+                can_pickup: p.canPickup !== undefined ? Boolean(p.canPickup) : true,
+              },
+            });
+          }
+        }
+      });
+    }
+
+    return this.getStudentById(student.public_id || student.student_id.toString());
+  }
 }
 export const studentService = new StudentService();
 export default studentService;

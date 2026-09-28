@@ -22,3 +22,9 @@ export const updateStudent = async (req, res) => {
   res.success(result);
 };
 
+export const enrollStudent = async (req, res) => {
+  const { id } = req.params;
+  const result = await studentService.enrollStudent(id, req.body);
+  res.status(201).success(result);
+};
+
