@@ -28,3 +28,9 @@ export const enrollStudent = async (req, res) => {
   res.status(201).success(result);
 };
 
+export const addParent = async (req, res) => {
+  const { id } = req.params;
+  const result = await studentService.addParent(id, req.body);
+  res.status(201).success(result);
+};
+

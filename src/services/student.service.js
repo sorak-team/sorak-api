@@ -560,6 +560,45 @@ export class StudentService {
 
     return this.getStudentById(student.public_id || student.student_id.toString());
   }
+
+  async enrollStudent(id, { classId, enrolledAt = new Date() }) {
+    const student = await prisma.student.findFirst({
+      where: { ...this._parseId(id), deleted_at: null },
+    });
+    if (!student) throw new NotFound('Hồ sơ học sinh không tồn tại');
+
+    const isNumeric = /^\d+$/.test(String(classId));
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      String(classId),
+    );
+    const targetClass = await prisma.class.findFirst({
+      where: isNumeric
+        ? { class_id: BigInt(classId), deleted_at: null }
+        : isUuid
+          ? { public_id: String(classId), deleted_at: null }
+          : { deleted_at: null },
+    });
+    if (!targetClass) throw new NotFound('Lớp học không tồn tại');
+
+    // Close any previous active enrollment
+    await prisma.$transaction(async (tx) => {
+      await tx.studentEnrollment.updateMany({
+        where: { student_id: student.student_id, left_at: null },
+        data: { left_at: new Date(enrolledAt), status: 'COMPLETED', leave_reason: 'Phân lớp mới' },
+      });
+
+      await tx.studentEnrollment.create({
+        data: {
+          student_id: student.student_id,
+          class_id: targetClass.class_id,
+          enrolled_at: new Date(enrolledAt),
+          status: 'ENROLLED',
+        },
+      });
+    });
+
+    return this.getStudentById(student.student_id.toString());
+  }
 }
 export const studentService = new StudentService();
 export default studentService;
