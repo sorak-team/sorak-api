@@ -27,6 +27,7 @@ router.put('/themes/detail', authMiddleware, asyncHandler(updateThemeSetDetail))
 router.get('/goals/overview', authMiddleware, asyncHandler(listGoalBanksOverview));
 router.get('/goals/detail', authMiddleware, asyncHandler(getGoalBankDetail));
 router.patch('/goals/status', authMiddleware, asyncHandler(updateGoalBankStatus));
+router.get('/goals/single-detail', authMiddleware, asyncHandler(getSingleGoalDetail));
 
 
 // Goals endpoints
