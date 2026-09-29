@@ -29,6 +29,19 @@ class PlanningController {
       }
     }
 
+  async deleteEducationalActivity(req, res, next) {
+      try {
+        const { classId, activityId } = req.params;
+        const data = await planningService.deleteEducationalActivity({
+          classId,
+          activityId,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const planningController = new PlanningController();
 export default planningController;
