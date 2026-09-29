@@ -1770,6 +1770,35 @@ export default planningService;export class PlanningService {
       };
     }
 
+  async deleteEducationalActivity({ classId, activityId }) {
+      if (!activityId) {
+        throw new BadRequest('Mã hoạt động không hợp lệ.');
+      }
+  
+      const isNum = typeof activityId === 'number' || (typeof activityId === 'string' && /^\d+$/.test(String(activityId).trim()));
+      const existing = await prisma.educationalActivity.findFirst({
+        where: {
+          OR: [
+            ...(isNum ? [{ activity_id: BigInt(activityId) }] : []),
+            { public_id: String(activityId) },
+          ],
+        },
+      });
+  
+      if (existing) {
+        // Delete any scheduled slots first
+        await prisma.subThemeActivity.deleteMany({
+          where: { activity_id: existing.activity_id },
+        });
+  
+        await prisma.educationalActivity.delete({
+          where: { activity_id: existing.activity_id },
+        });
+      }
+  
+      return { success: true, activityId };
+    }
+
 }
 export const planningService = new PlanningService();
 export default planningService;
