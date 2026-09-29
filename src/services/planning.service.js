@@ -1506,6 +1506,191 @@ export default planningService;export class PlanningService {
       return defaultClass;
     }
 
+  async getThemeActivities({ classId, themeCode }) {
+      const targetClass = await this.resolveClass(classId);
+      const ageGroup = targetClass?.age_group || 'NHA_TRE';
+  
+      // 1. Query real themes from PostgreSQL
+      let themes = [];
+      let selectedTheme = null;
+      let subThemes = [];
+  
+      try {
+        const dbThemes = await prisma.curriculumTheme.findMany({
+          where: {
+            school_year_id: targetClass?.school_year_id || 1n,
+            age_group: ageGroup,
+            deleted_at: null,
+          },
+          include: {
+            sub_themes: {
+              where: { deleted_at: null },
+              orderBy: { start_date: 'asc' },
+            },
+          },
+          orderBy: { start_date: 'asc' },
+        });
+  
+        if (dbThemes && dbThemes.length > 0) {
+          themes = dbThemes.map((th, idx) => {
+            const code = String(idx + 1).padStart(2, '0');
+            const pad = (n) => String(n).padStart(2, '0');
+            const sDate = `${pad(th.start_date.getDate())}/${pad(th.start_date.getMonth() + 1)}`;
+            const eDate = `${pad(th.end_date.getDate())}/${pad(th.end_date.getMonth() + 1)}/${th.end_date.getFullYear()}`;
+            return {
+              id: th.public_id || th.theme_id.toString(),
+              code,
+              name: th.name,
+              status: th.status,
+              dateRange: `${sDate} – ${eDate}`,
+              weeksCount: th.sub_themes.length,
+              subThemes: th.sub_themes.map((st, sIdx) => ({
+                id: st.public_id || st.sub_theme_id.toString(),
+                themeCode: code,
+                name: st.name,
+                weekNumber: sIdx + 1,
+                weekLabel: `Tuần ${sIdx + 1}`,
+                startDate: st.start_date.toISOString().slice(0, 10),
+                endDate: st.end_date.toISOString().slice(0, 10),
+              })),
+            };
+          });
+  
+          selectedTheme = (themeCode && themes.find((t) => t.code === themeCode || t.id === themeCode)) || themes[0];
+          subThemes = selectedTheme?.subThemes || [];
+        }
+      } catch (err) {
+        logger.error('Error fetching themes for planning:', err);
+      }
+  
+      // 2. Query scheduled slots from sub_theme_activities for this class
+      const scheduledRecords = targetClass
+        ? await prisma.subThemeActivity.findMany({
+            where: { class_id: targetClass.class_id },
+            include: { activity: true },
+          })
+        : [];
+  
+      const scheduledMap = new Map();
+      scheduledRecords.forEach((slot) => {
+        const actId = slot.activity_id.toString();
+        const slotItem = {
+          slotId: slot.id.toString(),
+          day: ENUM_TO_DAY_KEY[slot.day_of_week] || 'T2',
+          routineSlot: slot.routine_slot,
+          date: slot.scheduled_date ? slot.scheduled_date.toISOString().slice(0, 10) : '',
+        };
+        const list = scheduledMap.get(actId) || [];
+        list.push(slotItem);
+        scheduledMap.set(actId, list);
+        if (slot.activity?.public_id) {
+          const pubList = scheduledMap.get(slot.activity.public_id) || [];
+          pubList.push(slotItem);
+          scheduledMap.set(slot.activity.public_id, pubList);
+        }
+      });
+  
+      // 3. Query real goals, contents, activities from PostgreSQL
+      let goalsWithActivities = [];
+      try {
+        const dbGoals = await prisma.educationalGoal.findMany({
+          where: {
+            school_year_id: targetClass?.school_year_id || 1n,
+            age_group: ageGroup,
+            deleted_at: null,
+          },
+          include: {
+            contents: {
+              where: { deleted_at: null },
+              include: {
+                activities: {
+                  where: { deleted_at: null },
+                },
+              },
+            },
+          },
+          orderBy: { goal_id: 'asc' },
+        });
+  
+        if (dbGoals && dbGoals.length > 0) {
+          goalsWithActivities = dbGoals.map((g) => {
+            const contentsWithActs = g.contents.map((cnt) => {
+              const activities = cnt.activities.map((act) => {
+                const actId = act.public_id || act.activity_id.toString();
+                const scheduledSlots = scheduledMap.get(act.public_id) || scheduledMap.get(act.activity_id.toString()) || [];
+                return {
+                  id: actId,
+                  contentId: cnt.public_id || cnt.content_id.toString(),
+                  goalCode: g.goal_code,
+                  domain: g.domain,
+                  routineSlot: act.routine_slot,
+                  title: act.title,
+                  objective: act.objective || '',
+                  preparation: act.preparation || '',
+                  procedure: act.procedure || '',
+                  evaluationCriteria: act.evaluation_criteria || '',
+                  scheduledSlots,
+                  slotsCount: scheduledSlots.length,
+                  isScheduled: scheduledSlots.length > 0,
+                  scheduledSlot: scheduledSlots[0] || null,
+                  scheduleInfo: scheduledSlots[0] || null,
+                };
+              });
+  
+              return {
+                id: cnt.public_id || cnt.content_id.toString(),
+                title: cnt.title,
+                goalCode: g.goal_code,
+                domain: g.domain,
+                domainLabel: g.domain,
+                activities,
+                activitiesCount: activities.length,
+              };
+            });
+  
+            return {
+              id: g.public_id || g.goal_id.toString(),
+              goalCode: g.goal_code,
+              indicatorCode: g.indicator_code || '',
+              domain: g.domain,
+              domainCode: '',
+              domainLabel: g.domain,
+              title: g.title,
+              contents: contentsWithActs,
+            };
+          });
+        }
+      } catch (err) {
+        logger.error('Error fetching goals and activities for planning:', err);
+      }
+  
+      // Summary statistics
+      let totalContents = 0;
+      let coveredContents = 0;
+      let totalActivities = 0;
+  
+      goalsWithActivities.forEach((g) => {
+        g.contents.forEach((c) => {
+          totalContents += 1;
+          totalActivities += (c.activities || []).length;
+          if ((c.activities || []).length > 0) coveredContents += 1;
+        });
+      });
+  
+      return {
+        themes,
+        selectedTheme,
+        subThemes,
+        goals: goalsWithActivities,
+        stats: {
+          totalContents,
+          coveredContents,
+          totalActivities,
+          percentage: totalContents > 0 ? Math.round((coveredContents / totalContents) * 100) : 0,
+        },
+      };
+    }
+
 }
 export const planningService = new PlanningService();
 export default planningService;
