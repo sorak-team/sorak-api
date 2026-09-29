@@ -42,6 +42,24 @@ class PlanningController {
       }
     }
 
+  async getWeeklyTimetable(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const { themeCode, subThemeId, startDate, endDate, weekId } = req.query;
+        const data = await planningService.getWeeklyTimetable({
+          classId,
+          themeCode,
+          subThemeId,
+          startDate,
+          endDate,
+          weekId,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const planningController = new PlanningController();
 export default planningController;
