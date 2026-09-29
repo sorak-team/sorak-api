@@ -60,6 +60,28 @@ class PlanningController {
       }
     }
 
+  async assignActivityToSlot(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const { activityId, day, routineSlot, date, slotId, isAdd, weekId, subThemeId, orderIndex, order_index } = req.body;
+        const data = await planningService.assignActivityToSlot({
+          classId,
+          activityId,
+          day,
+          routineSlot,
+          date,
+          slotId,
+          isAdd,
+          weekId,
+          subThemeId,
+          orderIndex: orderIndex !== undefined ? orderIndex : order_index,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const planningController = new PlanningController();
 export default planningController;
