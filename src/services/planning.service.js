@@ -1799,6 +1799,325 @@ export default planningService;export class PlanningService {
       return { success: true, activityId };
     }
 
+  async getWeeklyTimetable({ classId, themeCode, subThemeId, weekId, startDate, endDate }) {
+      const targetClass = await this.resolveClass(classId);
+      const ageGroup = targetClass?.age_group || 'NHA_TRE';
+      const schoolYearId = targetClass?.school_year_id || 1n;
+  
+      // Resolve date range of requested week
+      let effectiveStartDate = startDate || null;
+      let effectiveEndDate = endDate || null;
+  
+      if ((!effectiveStartDate || !effectiveEndDate) && weekId) {
+        const resolved = resolveAcademicWeekDates(weekId);
+        if (resolved) {
+          effectiveStartDate = resolved.startDate;
+          effectiveEndDate = resolved.endDate;
+        }
+      }
+  
+      // 1. Query themes & subThemes for this age group
+      let themes = [];
+      let selectedTheme = null;
+      let subThemes = [];
+      let selectedSubTheme = null;
+  
+      try {
+        const dbThemes = await prisma.curriculumTheme.findMany({
+          where: {
+            school_year_id: schoolYearId,
+            age_group: ageGroup,
+            deleted_at: null,
+          },
+          include: {
+            sub_themes: {
+              where: { deleted_at: null },
+              orderBy: { start_date: 'asc' },
+            },
+          },
+          orderBy: { start_date: 'asc' },
+        });
+  
+        if (dbThemes && dbThemes.length > 0) {
+          themes = dbThemes.map((th, idx) => {
+            const code = String(idx + 1).padStart(2, '0');
+            const pad = (n) => String(n).padStart(2, '0');
+            const sDate = `${pad(th.start_date.getDate())}/${pad(th.start_date.getMonth() + 1)}`;
+            const eDate = `${pad(th.end_date.getDate())}/${pad(th.end_date.getMonth() + 1)}/${th.end_date.getFullYear()}`;
+            return {
+              id: th.public_id || th.theme_id.toString(),
+              code,
+              name: th.name,
+              status: th.status,
+              dateRange: `${sDate} – ${eDate}`,
+              weeksCount: th.sub_themes.length,
+              subThemes: th.sub_themes.map((st, sIdx) => ({
+                id: st.public_id || st.sub_theme_id.toString(),
+                _sub_theme_id: st.sub_theme_id,
+                themeCode: code,
+                name: st.name,
+                weekNumber: sIdx + 1,
+                weekLabel: `Tuần ${sIdx + 1}`,
+                startDate: st.start_date.toISOString().slice(0, 10),
+                endDate: st.end_date.toISOString().slice(0, 10),
+              })),
+            };
+          });
+  
+          if (subThemeId) {
+            for (const th of themes) {
+              const foundSt = th.subThemes.find((s) => s.id === subThemeId || s.id === String(subThemeId));
+              if (foundSt) {
+                selectedTheme = th;
+                subThemes = th.subThemes;
+                selectedSubTheme = foundSt;
+                break;
+              }
+            }
+          } else if (themeCode) {
+            selectedTheme = themes.find((t) => t.code === themeCode || t.id === themeCode) || themes[0];
+            subThemes = selectedTheme?.subThemes || [];
+            selectedSubTheme = subThemes[0] || null;
+          } else if (effectiveStartDate && effectiveEndDate) {
+            for (const th of themes) {
+              for (const st of th.subThemes) {
+                if (st.startDate <= effectiveEndDate && st.endDate >= effectiveStartDate) {
+                  selectedTheme = th;
+                  selectedSubTheme = st;
+                  break;
+                }
+              }
+              if (selectedSubTheme) break;
+            }
+            if (!selectedTheme) selectedTheme = themes[0];
+            subThemes = selectedTheme?.subThemes || [];
+            if (!selectedSubTheme) selectedSubTheme = subThemes[0] || null;
+          } else {
+            for (const th of themes) {
+              for (const st of th.subThemes) {
+                if (st.startDate <= '2026-10-14' && st.endDate >= '2026-10-14') {
+                  selectedTheme = th;
+                  selectedSubTheme = st;
+                  break;
+                }
+              }
+              if (selectedSubTheme) break;
+            }
+            if (!selectedTheme) selectedTheme = themes[0];
+            subThemes = selectedTheme?.subThemes || [];
+            if (!selectedSubTheme) selectedSubTheme = subThemes[0] || null;
+          }
+        }
+      } catch (err) {
+        logger.error('Error fetching themes for weekly timetable:', err);
+      }
+  
+      // 2. Query scheduled slots from sub_theme_activities for this class
+      const slotWhere = {
+        class_id: targetClass?.class_id || 5n,
+      };
+  
+      if (effectiveStartDate && effectiveEndDate) {
+        slotWhere.scheduled_date = {
+          gte: new Date(`${effectiveStartDate}T00:00:00.000Z`),
+          lte: new Date(`${effectiveEndDate}T23:59:59.999Z`),
+        };
+      } else if (subThemeId) {
+        const isNum = typeof subThemeId === 'number' || (typeof subThemeId === 'string' && /^\d+$/.test(String(subThemeId).trim()));
+        const st = await prisma.subTheme.findFirst({
+          where: {
+            OR: [
+              ...(isNum ? [{ sub_theme_id: BigInt(subThemeId) }] : []),
+              { public_id: String(subThemeId) },
+            ],
+          },
+        });
+        if (st) slotWhere.sub_theme_id = st.sub_theme_id;
+      } else if (selectedTheme?.subThemes?.length) {
+        slotWhere.sub_theme_id = {
+          in: selectedTheme.subThemes.map((st) => st._sub_theme_id || BigInt(st.id)),
+        };
+      } else if (selectedSubTheme) {
+        slotWhere.sub_theme_id = selectedSubTheme._sub_theme_id || BigInt(selectedSubTheme.id);
+      }
+  
+      const scheduledRecords = await prisma.subThemeActivity.findMany({
+        where: slotWhere,
+        include: {
+          activity: {
+            include: {
+              content: {
+                include: { goal: true },
+              },
+            },
+          },
+          sub_theme: true,
+        },
+        orderBy: [
+          { scheduled_date: 'asc' },
+          { order_index: 'asc' },
+        ],
+      });
+  
+      const scheduledMap = new Map();
+      const mappedSlots = scheduledRecords.map((rec) => {
+        const dayKey = ENUM_TO_DAY_KEY[rec.day_of_week] || 'T2';
+        const times = SLOT_TIMES[rec.routine_slot] || { start: '08:30', end: '09:15' };
+        const dateStr = rec.scheduled_date ? rec.scheduled_date.toISOString().slice(0, 10) : '';
+        const dateFormatted = dateStr ? `${dateStr.slice(8, 10)}/${dateStr.slice(5, 7)}` : '';
+        const act = rec.activity;
+        const content = act?.content;
+        const goal = content?.goal;
+        const actId = act?.public_id || rec.activity_id.toString();
+  
+        const slotObj = {
+          id: rec.id.toString(),
+          subThemeId: rec.sub_theme?.public_id || rec.sub_theme_id.toString(),
+          weekId: weekId || rec.sub_theme?.public_id || rec.sub_theme?.sub_theme_id?.toString() || 'w-1',
+          activityId: actId,
+          day: dayKey,
+          routineSlot: rec.routine_slot,
+          orderIndex: rec.order_index,
+          order_index: rec.order_index,
+          date: dateFormatted,
+          startTime: times.start,
+          endTime: times.end,
+          title: act?.title || '',
+          status: rec.status,
+          domain: goal?.domain || '',
+          domainLabel: DOMAIN_LABELS[goal?.domain] || goal?.domain || '',
+          goalCode: goal?.goal_code || '',
+          goalTitle: goal?.title || '',
+          indicatorCode: goal?.indicator_code || '',
+          contentTitle: content?.title || '',
+          objective: act?.objective || '',
+          planObjective: act?.objective || '',
+          preparation: act?.preparation || '',
+          procedure: act?.procedure || '',
+          evaluation: act?.evaluation_criteria || '',
+          evaluationCriteria: act?.evaluation_criteria || '',
+          criteria: act ? {
+            domain: goal?.domain || '',
+            domainLabel: DOMAIN_LABELS[goal?.domain] || goal?.domain || '',
+            goal: goal?.goal_code ? `${goal.goal_code} - ${goal.title || ''}` : '',
+            goalCode: goal?.goal_code || '',
+            goalTitle: goal?.title || '',
+            indicator: goal?.indicator_code || '',
+            indicatorCode: goal?.indicator_code || '',
+            content: content?.title || '',
+            objective: act.objective || '',
+            planObjective: act.objective || '',
+            preparation: act.preparation || '',
+            procedure: act.procedure || '',
+            expectedAssessment: act.evaluation_criteria || '',
+            evaluationCriteria: act.evaluation_criteria || '',
+          } : null,
+        };
+  
+        const list = scheduledMap.get(actId) || [];
+        list.push({
+          slotId: slotObj.id,
+          day: slotObj.day,
+          routineSlot: slotObj.routineSlot,
+          date: slotObj.date,
+          dayLabel: slotObj.date,
+        });
+        scheduledMap.set(actId, list);
+        if (act?.activity_id) {
+          const numList = scheduledMap.get(act.activity_id.toString()) || [];
+          numList.push(list[list.length - 1]);
+          scheduledMap.set(act.activity_id.toString(), numList);
+        }
+  
+        return slotObj;
+      });
+  
+      // 3. Query available activities & goals from PostgreSQL
+      let availableActivities = [];
+      let goalsWithActivities = [];
+  
+      try {
+        const dbGoals = await prisma.educationalGoal.findMany({
+          where: {
+            school_year_id: schoolYearId,
+            age_group: ageGroup,
+            deleted_at: null,
+          },
+          include: {
+            contents: {
+              where: { deleted_at: null },
+              include: {
+                activities: {
+                  where: { deleted_at: null },
+                },
+              },
+            },
+          },
+          orderBy: { goal_id: 'asc' },
+        });
+  
+        if (dbGoals && dbGoals.length > 0) {
+          goalsWithActivities = dbGoals.map((g) => {
+            const contentsWithActs = g.contents.map((cnt) => {
+              const activities = cnt.activities.map((act) => {
+                const actId = act.public_id || act.activity_id.toString();
+                const slots = scheduledMap.get(act.public_id) || scheduledMap.get(act.activity_id.toString()) || [];
+                const actPayload = {
+                  id: actId,
+                  contentId: cnt.public_id || cnt.content_id.toString(),
+                  goalCode: g.goal_code,
+                  goalTitle: g.title,
+                  domain: g.domain,
+                  domainCode: '',
+                  domainLabel: g.domain,
+                  contentTitle: cnt.title,
+                  routineSlot: act.routine_slot,
+                  title: act.title,
+                  objective: act.objective || '',
+                  preparation: act.preparation || '',
+                  procedure: act.procedure || '',
+                  evaluationCriteria: act.evaluation_criteria || '',
+                  scheduledSlots: slots,
+                  slotsCount: slots.length,
+                  isScheduled: slots.length > 0,
+                  scheduleInfo: slots[0] || null,
+                };
+  
+                availableActivities.push(actPayload);
+                return actPayload;
+              });
+  
+              return {
+                id: cnt.public_id || cnt.content_id.toString(),
+                title: cnt.title,
+                activities,
+              };
+            });
+  
+            return {
+              id: g.public_id || g.goal_id.toString(),
+              goalCode: g.goal_code,
+              title: g.title,
+              domain: g.domain,
+              contents: contentsWithActs,
+            };
+          });
+        }
+      } catch (err) {
+        logger.error('Error fetching goals for weekly timetable:', err);
+      }
+  
+      return {
+        theme: selectedTheme || null,
+        selectedTheme: selectedTheme || null,
+        subThemes,
+        selectedSubTheme,
+        slots: mappedSlots,
+        availableActivities,
+        goals: goalsWithActivities,
+      };
+    }
+
 }
 export const planningService = new PlanningService();
 export default planningService;
