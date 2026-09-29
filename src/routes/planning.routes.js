@@ -7,6 +7,7 @@ const router = Router();
 // Require auth for all planning endpoints
 
 router.use(authMiddleware);
+router.get('/classes/:classId/activities', planningController.getThemeActivities);
 
 
 // Tab 1: Educational Activities by Theme
