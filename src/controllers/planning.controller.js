@@ -82,6 +82,19 @@ class PlanningController {
       }
     }
 
+  async saveWeeklySlot(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const data = await planningService.saveWeeklySlot({
+          classId,
+          slot: req.body,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const planningController = new PlanningController();
 export default planningController;

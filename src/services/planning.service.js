@@ -2329,6 +2329,89 @@ export default planningService;export class PlanningService {
       };
     }
 
+  async saveWeeklySlot({ classId, slot }) {
+      if (!slot.title) {
+        throw new BadRequest('Tiêu đề hoạt động không được để trống.');
+      }
+  
+      if (slot.id && !isNaN(Number(slot.id))) {
+        const times = SLOT_TIMES[slot.routineSlot] || { start: slot.startTime || '08:30', end: slot.endTime || '09:15' };
+        const updateData = {
+          notes: slot.notes || slot.title,
+          status: slot.status || 'SCHEDULED',
+          updated_at: new Date(),
+        };
+  
+        const rawOrder = slot.orderIndex !== undefined ? slot.orderIndex : slot.order_index;
+        if (rawOrder !== undefined && !isNaN(Number(rawOrder))) {
+          updateData.order_index = Number(rawOrder);
+        }
+  
+        if (slot.day) {
+          updateData.day_of_week = DAY_MAP_TO_ENUM[slot.day] || 'MONDAY';
+        }
+        if (slot.routineSlot || slot.routine_slot) {
+          updateData.routine_slot = slot.routineSlot || slot.routine_slot;
+        }
+        if (slot.date) {
+          let scheduledDate = null;
+          if (slot.date.includes('/')) {
+            const parts = slot.date.split('/');
+            const dayNum = parseInt(parts[0], 10);
+            const monthNum = parseInt(parts[1], 10);
+            const yearNum = parts[2] ? parseInt(parts[2], 10) : 2026;
+            scheduledDate = new Date(Date.UTC(yearNum, monthNum - 1, dayNum));
+          } else if (slot.date.includes('-')) {
+            const parts = slot.date.split('T')[0].split('-');
+            scheduledDate = new Date(Date.UTC(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)));
+          }
+          if (scheduledDate) {
+            updateData.scheduled_date = scheduledDate;
+          }
+        }
+  
+        const updated = await prisma.subThemeActivity.update({
+          where: { id: BigInt(slot.id) },
+          data: updateData,
+        });
+  
+        // Also update educational activity content if modified
+        if (slot.activityId) {
+          const isActNum = typeof slot.activityId === 'number' || (typeof slot.activityId === 'string' && /^\d+$/.test(String(slot.activityId).trim()));
+          const act = await prisma.educationalActivity.findFirst({
+            where: {
+              OR: [
+                ...(isActNum ? [{ activity_id: BigInt(slot.activityId) }] : []),
+                { public_id: String(slot.activityId) },
+              ],
+            },
+          });
+          if (act) {
+            await prisma.educationalActivity.update({
+              where: { activity_id: act.activity_id },
+              data: {
+                title: slot.title.trim(),
+                objective: slot.objective || '',
+                preparation: slot.preparation || '',
+                procedure: slot.procedure || '',
+                evaluation_criteria: slot.evaluationCriteria || slot.evaluation || '',
+                updated_at: new Date(),
+              },
+            }).catch((err) => logger.warn('Could not update educational activity content:', err));
+          }
+        }
+  
+        return {
+          ...slot,
+          id: updated.id.toString(),
+          orderIndex: updated.order_index,
+          order_index: updated.order_index,
+        };
+      }
+  
+      return slot;
+    }
+
 }
 export const planningService = new PlanningService();
 export default planningService;
