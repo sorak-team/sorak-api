@@ -1691,6 +1691,85 @@ export default planningService;export class PlanningService {
       };
     }
 
+  async saveEducationalActivity({ classId, activity }) {
+      if (!activity.title || !activity.title.trim()) {
+        throw new BadRequest('Tiêu đề hoạt động giáo dục không được để trống.');
+      }
+  
+      if (!activity.contentId) {
+        throw new BadRequest('Vui lòng chọn nội dung giáo dục tương ứng.');
+      }
+  
+      let targetContentId = null;
+      if (activity.contentId) {
+        const isNum = typeof activity.contentId === 'number' || (typeof activity.contentId === 'string' && /^\d+$/.test(String(activity.contentId).trim()));
+        if (isNum) {
+          targetContentId = BigInt(activity.contentId);
+        } else {
+          const cnt = await prisma.educationalContent.findFirst({
+            where: { public_id: String(activity.contentId), deleted_at: null },
+            select: { content_id: true },
+          });
+          if (cnt) targetContentId = cnt.content_id;
+        }
+      }
+  
+      if (!targetContentId) {
+        throw new BadRequest('Nội dung giáo dục không tồn tại hoặc không hợp lệ.');
+      }
+  
+      let existingActivity = null;
+      if (activity.id) {
+        const isNum = typeof activity.id === 'number' || (typeof activity.id === 'string' && /^\d+$/.test(String(activity.id).trim()));
+        existingActivity = await prisma.educationalActivity.findFirst({
+          where: {
+            OR: [
+              ...(isNum ? [{ activity_id: BigInt(activity.id) }] : []),
+              { public_id: String(activity.id) },
+            ],
+          },
+        });
+      }
+  
+      if (existingActivity) {
+        const updated = await prisma.educationalActivity.update({
+          where: { activity_id: existingActivity.activity_id },
+          data: {
+            content_id: targetContentId,
+            routine_slot: activity.routineSlot || 'DIRECTED_STUDY',
+            title: activity.title.trim(),
+            objective: activity.objective || '',
+            preparation: activity.preparation || '',
+            procedure: activity.procedure || '',
+            evaluation_criteria: activity.evaluationCriteria || '',
+            updated_at: new Date(),
+          },
+        });
+  
+        return {
+          ...activity,
+          id: updated.public_id || updated.activity_id.toString(),
+        };
+      }
+  
+      const created = await prisma.educationalActivity.create({
+        data: {
+          content_id: targetContentId,
+          routine_slot: activity.routineSlot || 'DIRECTED_STUDY',
+          title: activity.title.trim(),
+          objective: activity.objective || '',
+          preparation: activity.preparation || '',
+          procedure: activity.procedure || '',
+          evaluation_criteria: activity.evaluationCriteria || '',
+        },
+      });
+  
+      return {
+        ...activity,
+        id: created.public_id || created.activity_id.toString(),
+      };
+    }
+
 }
 export const planningService = new PlanningService();
 export default planningService;

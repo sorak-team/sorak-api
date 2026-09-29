@@ -16,6 +16,19 @@ class PlanningController {
       }
     }
 
+  async saveEducationalActivity(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const data = await planningService.saveEducationalActivity({
+          classId,
+          activity: req.body,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const planningController = new PlanningController();
 export default planningController;
