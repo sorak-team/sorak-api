@@ -46,3 +46,10 @@ export const deleteParent = async (req, res) => {
   res.success(result);
 };
 
+export const transferStudent = async (req, res) => {
+  const { id } = req.params;
+  const creatorAccountId = req.user.accountId;
+  const result = await studentService.transferStudent(id, req.body, creatorAccountId);
+  res.status(201).success(result);
+};
+
