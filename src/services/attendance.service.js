@@ -1750,6 +1750,95 @@ export default attendanceService;export class AttendanceService {
       };
     }
 
+  async recordDismissal({ classId, date, accountId, records }) {
+      const targetClass = await this._resolveClass(classId);
+      if (!targetClass) {
+        throw new NotFound('Lớp học không tồn tại hoặc mã định danh không hợp lệ');
+      }
+      const cId = targetClass.class_id;
+      const targetDateStr = date || new Date().toISOString().slice(0, 10);
+      const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+      let staffId = 40n;
+      if (accountId) {
+        try {
+          if (typeof accountId === 'string' && accountId.includes('-')) {
+            const userAcc = await prisma.account.findFirst({
+              where: { public_id: accountId },
+              select: { account_id: true },
+            });
+            if (userAcc) {
+              staffId = userAcc.account_id;
+            }
+          }
+        } catch {
+          staffId = 40n;
+        }
+      }
+  
+      if (!Array.isArray(records) || records.length === 0) {
+        throw new BadRequest('Danh sách học sinh đón trẻ không hợp lệ');
+      }
+  
+      const now = new Date();
+  
+      for (const rec of records) {
+        const rawId = rec.studentId || rec.id;
+        const std = await this._resolveStudent(rawId);
+        if (!std) continue;
+        const sId = std.student_id;
+  
+        // Verify attendance record
+        const attendance = await prisma.attendance.findFirst({
+          where: {
+            class_id: cId,
+            student_id: sId,
+            date: targetDate,
+            deleted_at: null,
+          },
+        });
+  
+        if (!attendance) {
+          throw new BadRequest(`Học sinh ID ${sId} chưa được điểm danh ngày ${targetDateStr}. Cần điểm danh trước khi đón trẻ.`);
+        }
+  
+        if (attendance.status !== 'PRESENT') {
+          throw new BadRequest(`Học sinh ID ${sId} hôm nay vắng mặt (${attendance.status}). Không thể ghi nhận đón trẻ.`);
+        }
+  
+        let checkOutDate = now;
+        if (rec.checkOutTime) {
+          const parsed = new Date(rec.checkOutTime);
+          if (!isNaN(parsed.getTime())) {
+            checkOutDate = parsed;
+          }
+        } else if (attendance.check_out_time) {
+          checkOutDate = attendance.check_out_time;
+        }
+  
+        await prisma.attendance.update({
+          where: { attendance_id: attendance.attendance_id },
+          data: {
+            check_out_time: checkOutDate,
+            check_out_by: staffId,
+            pickup_person_name: rec.pickupPersonName || rec.pickupName || 'Phụ huynh',
+            pickup_relationship: rec.pickupRelationship || 'Phụ huynh',
+            pickup_person_phone: rec.pickupPersonPhone || rec.phone || null,
+            pickup_citizen_id: rec.pickupCitizenId || null,
+            pickup_photo_url: rec.pickupPhotoUrl || null,
+            pickup_note: rec.pickupNote || rec.note || null,
+            updated_at: now,
+          },
+        });
+      }
+  
+      return {
+        success: true,
+        message: 'Ghi nhận đón trẻ thành công',
+        updatedCount: records.length,
+        date: targetDateStr,
+      };
+    }
+
 }
 export const attendanceService = new AttendanceService();
 export default attendanceService;

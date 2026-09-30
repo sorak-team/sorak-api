@@ -73,6 +73,21 @@ class AttendanceController {
       }
     }
 
+  async cancelDismissal(req, res, next) {
+      try {
+        const { classId, studentId } = req.params;
+        const { date } = req.query;
+        const data = await attendanceService.cancelDismissal({
+          classId,
+          date,
+          studentId,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const attendanceController = new AttendanceController();
 export default attendanceController;
