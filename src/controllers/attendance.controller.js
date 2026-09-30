@@ -31,6 +31,20 @@ class AttendanceController {
       }
     }
 
+  async clearAttendance(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const { date } = req.body || {};
+        const data = await attendanceService.clearAttendance({
+          classId,
+          date: date || req.query.date,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const attendanceController = new AttendanceController();
 export default attendanceController;
