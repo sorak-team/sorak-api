@@ -45,6 +45,17 @@ class AttendanceController {
       }
     }
 
+  async getDismissalOverview(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const { date } = req.query;
+        const data = await attendanceService.getDismissalOverview({ classId, date });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const attendanceController = new AttendanceController();
 export default attendanceController;
