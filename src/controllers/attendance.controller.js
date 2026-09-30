@@ -20,6 +20,17 @@ class AttendanceController {
       }
     }
 
+  async updateAttendance(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const { date, records } = req.body;
+        const data = await attendanceService.updateAttendance({ classId, date, records });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const attendanceController = new AttendanceController();
 export default attendanceController;
