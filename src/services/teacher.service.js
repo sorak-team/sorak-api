@@ -171,6 +171,96 @@ export class TeacherService {
       },
     };
   }
+
+  async getTeacherById(id) {
+    const where = { ...this._parseId(id), deleted_at: null };
+
+    const teacher = await prisma.teacher.findFirst({
+      where,
+      include: {
+        account: {
+          select: {
+            account_id: true,
+            public_id: true,
+            username: true,
+            role: true,
+            is_active: true,
+            last_login_at: true,
+          },
+        },
+        teacher_classes: {
+          orderBy: { assigned_at: 'desc' },
+          include: {
+            class: {
+              select: {
+                class_id: true,
+                public_id: true,
+                name: true,
+                room_number: true,
+                age_group: true,
+                school_year: { select: { school_year_id: true, name: true, status: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!teacher) {
+      throw new NotFound('Hồ sơ giáo viên không tồn tại trên hệ thống');
+    }
+
+    return {
+      id: teacher.public_id || teacher.teacher_id.toString(),
+      publicId: teacher.public_id,
+      employeeCode: teacher.employee_code,
+      fullName: teacher.full_name,
+      dateOfBirth: teacher.date_of_birth,
+      gender: teacher.gender,
+      citizenId: teacher.citizen_id,
+      phone: teacher.phone || '',
+      email: teacher.email || '',
+      avatarUrl: teacher.avatar_url || this._getDefaultAvatar(teacher.full_name || teacher.employee_code),
+      address: teacher.address,
+      position: teacher.position,
+      workStatus: teacher.work_status,
+      startDate: teacher.start_date,
+      endDate: teacher.end_date,
+      createdAt: teacher.created_at,
+      updatedAt: teacher.updated_at,
+      account: teacher.account
+        ? {
+            id: teacher.account.public_id || teacher.account.account_id.toString(),
+            publicId: teacher.account.public_id,
+            username: teacher.account.username,
+            isActive: teacher.account.is_active,
+            lastLoginAt: teacher.account.last_login_at,
+          }
+        : null,
+      activeClasses: teacher.teacher_classes
+        .filter((tc) => tc.left_at === null)
+        .map((tc) => ({
+          allocationId: tc.id.toString(),
+          classId: tc.class.public_id || tc.class.class_id.toString(),
+          className: tc.class.name,
+          roomNumber: tc.class.room_number,
+          ageGroup: tc.class.age_group,
+          schoolYear: tc.class.school_year?.name,
+          isPrimary: tc.is_primary,
+          assignedAt: tc.assigned_at,
+        })),
+      assignmentHistory: teacher.teacher_classes.map((tc) => ({
+        allocationId: tc.id.toString(),
+        classId: tc.class.public_id || tc.class.class_id.toString(),
+        className: tc.class.name,
+        schoolYear: tc.class.school_year?.name,
+        isPrimary: tc.is_primary,
+        assignedAt: tc.assigned_at,
+        leftAt: tc.left_at,
+        isActive: tc.left_at === null,
+      })),
+    };
+  }
 }
 export const teacherService = new TeacherService();
 export default teacherService;
