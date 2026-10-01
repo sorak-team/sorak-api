@@ -9,6 +9,7 @@ router.use(authMiddleware);
 router.get('/classes/:classId/timetable', attendanceController.getTimetableOverview);
 router.post('/classes/:classId/records', attendanceController.updateAttendance);
 router.delete('/classes/:classId/records', attendanceController.clearAttendance);
+router.get('/classes/:classId/dismissal', attendanceController.getDismissalOverview);
 
 
 
