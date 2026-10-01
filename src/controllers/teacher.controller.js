@@ -22,3 +22,9 @@ export const updateTeacher = async (req, res) => {
   res.success(result);
 };
 
+export const assignTeacherToClass = async (req, res) => {
+  const { id } = req.params;
+  const result = await teacherService.assignTeacherToClass(id, req.body);
+  res.status(201).success(result);
+};
+

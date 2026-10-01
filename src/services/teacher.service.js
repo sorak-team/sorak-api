@@ -416,6 +416,86 @@ export class TeacherService {
 
     return this.getTeacherById(teacher.public_id || teacher.teacher_id.toString());
   }
+
+  async assignTeacherToClass(teacherId, { classId, isPrimary = false, assignedAt = new Date() }) {
+    const teacher = await prisma.teacher.findFirst({
+      where: { ...this._parseId(teacherId), deleted_at: null },
+    });
+    if (!teacher) throw new NotFound('Giáo viên không tồn tại');
+
+    // Only personnel with position 'Giáo viên' can be assigned to classes (exclude Principal, Vice Principal, etc.)
+    const pos = (teacher.position || '').trim().toLowerCase();
+    if (pos.includes('hiệu trưởng') || (pos && !pos.includes('giáo viên'))) {
+      throw new Conflict(
+        `Chỉ có thể phân công nhân sự có vị trí là Giáo viên vào lớp học. Nhân sự ${teacher.full_name} có chức vụ '${teacher.position}'.`,
+      );
+    }
+
+    const classRecord = await prisma.class.findFirst({
+      where: { ...this._parseClassId(classId), deleted_at: null },
+    });
+    if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+
+    // Check if teacher is already actively assigned to any class in the same school year
+    const existingSchoolYearAssignment = await prisma.teacherClass.findFirst({
+      where: {
+        teacher_id: teacher.teacher_id,
+        left_at: null,
+        class: {
+          school_year_id: classRecord.school_year_id,
+        },
+      },
+      include: {
+        class: true,
+      },
+    });
+
+    if (existingSchoolYearAssignment) {
+      if (existingSchoolYearAssignment.class_id === classRecord.class_id) {
+        throw new Conflict('Giáo viên này hiện đang phụ trách lớp học này');
+      }
+      throw new Conflict(
+        `Trong một năm học, mỗi giáo viên chỉ được phụ trách 01 lớp. Giáo viên ${teacher.full_name} hiện đang phụ trách lớp '${existingSchoolYearAssignment.class.name}'.`,
+      );
+    }
+
+    // If isPrimary, check if class already has a primary teacher
+    if (isPrimary) {
+      const existingPrimary = await prisma.teacherClass.findFirst({
+        where: {
+          class_id: classRecord.class_id,
+          is_primary: true,
+          left_at: null,
+        },
+      });
+      if (existingPrimary) {
+        // Demote previous primary teacher to co-teacher
+        await prisma.teacherClass.update({
+          where: { id: existingPrimary.id },
+          data: { is_primary: false },
+        });
+      }
+    }
+
+    const created = await prisma.teacherClass.create({
+      data: {
+        teacher_id: teacher.teacher_id,
+        class_id: classRecord.class_id,
+        is_primary: isPrimary,
+        assigned_at: new Date(assignedAt),
+      },
+      include: { class: true },
+    });
+
+    return {
+      allocationId: created.id.toString(),
+      teacherId: teacher.public_id || teacher.teacher_id.toString(),
+      classId: created.class.public_id || created.class_id.toString(),
+      className: created.class.name,
+      isPrimary: created.is_primary,
+      assignedAt: created.assigned_at,
+    };
+  }
 }
 export const teacherService = new TeacherService();
 export default teacherService;
