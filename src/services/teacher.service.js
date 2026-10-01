@@ -496,6 +496,36 @@ export class TeacherService {
       assignedAt: created.assigned_at,
     };
   }
+
+  async removeTeacherFromClass(teacherId, classId) {
+    const teacher = await prisma.teacher.findFirst({
+      where: { ...this._parseId(teacherId), deleted_at: null },
+    });
+    if (!teacher) throw new NotFound('Giáo viên không tồn tại');
+
+    const classRecord = await prisma.class.findFirst({
+      where: { ...this._parseClassId(classId), deleted_at: null },
+    });
+    if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+
+    const active = await prisma.teacherClass.findFirst({
+      where: {
+        teacher_id: teacher.teacher_id,
+        class_id: classRecord.class_id,
+        left_at: null,
+      },
+    });
+    if (!active) {
+      throw new NotFound('Không tìm thấy bản ghi phân công lớp đang hoạt động');
+    }
+
+    await prisma.teacherClass.update({
+      where: { id: active.id },
+      data: { left_at: new Date() },
+    });
+
+    return { success: true, message: 'Đã hoàn tất phân công giáo viên rời khỏi lớp học' };
+  }
 }
 export const teacherService = new TeacherService();
 export default teacherService;
