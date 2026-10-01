@@ -377,6 +377,45 @@ export class TeacherService {
 
     return this.getTeacherById(createdTeacher.public_id || createdTeacher.teacher_id.toString());
   }
+
+  async updateTeacher(id, data) {
+    const where = { ...this._parseId(id), deleted_at: null };
+    const teacher = await prisma.teacher.findFirst({ where });
+    if (!teacher) {
+      throw new NotFound('Giáo viên không tồn tại trên hệ thống');
+    }
+
+    if (data.citizenId && data.citizenId !== teacher.citizen_id) {
+      const conflict = await prisma.teacher.findFirst({
+        where: { citizen_id: data.citizenId, deleted_at: null },
+      });
+      if (conflict) {
+        throw new Conflict(`Số CCCD '${data.citizenId}' đã được sử dụng`);
+      }
+    }
+
+    const teacherUpdate = {};
+    if (data.fullName !== undefined) teacherUpdate.full_name = data.fullName;
+    if (data.dateOfBirth !== undefined) teacherUpdate.date_of_birth = new Date(data.dateOfBirth);
+    if (data.gender !== undefined) teacherUpdate.gender = data.gender;
+    if (data.citizenId !== undefined) teacherUpdate.citizen_id = data.citizenId;
+    if (data.phone !== undefined) teacherUpdate.phone = data.phone || null;
+    if (data.email !== undefined) teacherUpdate.email = data.email || null;
+    if (data.avatarUrl !== undefined) teacherUpdate.avatar_url = data.avatarUrl || null;
+    if (data.address !== undefined) teacherUpdate.address = data.address || null;
+    if (data.position !== undefined) teacherUpdate.position = data.position || null;
+    if (data.workStatus !== undefined) teacherUpdate.work_status = data.workStatus;
+    if (data.startDate !== undefined) teacherUpdate.start_date = new Date(data.startDate);
+    if (data.endDate !== undefined)
+      teacherUpdate.end_date = data.endDate ? new Date(data.endDate) : null;
+
+    await prisma.teacher.update({
+      where: { teacher_id: teacher.teacher_id },
+      data: teacherUpdate,
+    });
+
+    return this.getTeacherById(teacher.public_id || teacher.teacher_id.toString());
+  }
 }
 export const teacherService = new TeacherService();
 export default teacherService;
