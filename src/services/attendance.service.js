@@ -1568,6 +1568,188 @@ export default attendanceService;export class AttendanceService {
       };
     }
 
+  async getDismissalOverview({ classId, date }) {
+      // 1. Resolve target class
+      let targetClass = null;
+      if (classId) {
+        targetClass = await this._resolveClass(classId);
+        if (!targetClass) {
+          throw new NotFound('Lớp học không tồn tại hoặc mã định danh không hợp lệ');
+        }
+      } else {
+        targetClass = await prisma.class.findFirst({
+          where: { deleted_at: null },
+          include: { school_year: true },
+          orderBy: { class_id: 'asc' },
+        });
+        if (!targetClass) {
+          throw new NotFound('Không tìm thấy lớp học nào');
+        }
+      }
+  
+      const targetDateStr = date || new Date().toISOString().slice(0, 10);
+      const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+  
+      // 2. Fetch enrolled students with their parents and active pickup authorizations
+      const enrollments = await prisma.studentEnrollment.findMany({
+        where: {
+          class_id: targetClass.class_id,
+          student: { deleted_at: null },
+        },
+        include: {
+          student: {
+            include: {
+              parents: {
+                where: { deleted_at: null },
+                orderBy: { parent_id: 'asc' },
+              },
+              pickup_authorizations: {
+                where: {
+                  deleted_at: null,
+                  status: 'APPROVED',
+                  start_date: { lte: new Date(`${targetDateStr}T23:59:59.999Z`) },
+                  end_date: { gte: new Date(`${targetDateStr}T00:00:00.000Z`) },
+                },
+                orderBy: { authorization_id: 'desc' },
+              },
+            },
+          },
+        },
+        orderBy: { student: { student_code: 'asc' } },
+      });
+  
+      const studentIds = enrollments.map((e) => e.student_id);
+  
+      // 3. Fetch attendance records for this date
+      const attendanceRecords = await prisma.attendance.findMany({
+        where: {
+          class_id: targetClass.class_id,
+          student_id: { in: studentIds },
+          date: targetDate,
+          deleted_at: null,
+        },
+      });
+  
+      const attendanceMap = new Map();
+      attendanceRecords.forEach((r) => {
+        attendanceMap.set(r.student_id.toString(), r);
+      });
+  
+      // 4. Map into rich student dismissal objects
+      const mappedStudents = enrollments.map((e) => {
+        const s = e.student;
+        const sId = s.student_id.toString();
+        const att = attendanceMap.get(sId);
+  
+        const attendanceStatus = att ? att.status : 'NOT_RECORDED';
+        const isPresent = attendanceStatus === 'PRESENT';
+        const isAbsent = attendanceStatus === 'EXCUSED_ABSENCE' || attendanceStatus === 'UNEXCUSED_ABSENCE';
+        const isAttendanceRecorded = Boolean(att);
+  
+        const isDismissed = Boolean(att && att.check_out_time);
+        const checkOutTime = att?.check_out_time ? att.check_out_time.toISOString() : null;
+  
+        let checkOutTimeFormatted = null;
+        if (att?.check_out_time) {
+          const d = new Date(att.check_out_time);
+          checkOutTimeFormatted = d.toLocaleTimeString('vi-VN', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+          });
+        }
+  
+        const availableParents = (s.parents || []).map((p) => ({
+          id: p.parent_id.toString(),
+          name: p.full_name,
+          relationship: p.relationship,
+          phone: p.phone,
+          canPickup: p.can_pickup,
+          avatarUrl:
+            p.avatar_url ||
+            `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(p.full_name || 'PH')}`,
+        }));
+  
+        const availableAuthorizations = (s.pickup_authorizations || []).map((pa) => ({
+          id: pa.authorization_id.toString(),
+          name: pa.pickup_person_name,
+          relationship: pa.relationship,
+          phone: pa.pickup_person_phone,
+          citizenId: pa.pickup_citizen_id,
+          photoUrl:
+            pa.photo_url ||
+            `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(pa.pickup_person_name || 'UQ')}`,
+          note: pa.note,
+          startDate: pa.start_date.toISOString().slice(0, 10),
+          endDate: pa.end_date.toISOString().slice(0, 10),
+          createdAt: pa.created_at ? pa.created_at.toISOString() : null,
+        }));
+  
+        return {
+          id: s.public_id || sId,
+          code: s.student_code,
+          name: s.full_name,
+          avatarUrl: s.avatar_url,
+          gender: s.gender,
+          attendanceStatus,
+          attendanceLabel:
+            attendanceStatus === 'PRESENT'
+              ? 'Có mặt'
+              : attendanceStatus === 'EXCUSED_ABSENCE'
+              ? 'Nghỉ có phép'
+              : attendanceStatus === 'UNEXCUSED_ABSENCE'
+              ? 'Nghỉ không phép'
+              : 'Chưa điểm danh',
+          isPresent,
+          isAbsent,
+          isAttendanceRecorded,
+          attendanceNote: att?.notes || null,
+          // Dismissal / Check-out status
+          isDismissed,
+          checkOutTime,
+          checkOutTimeFormatted,
+          pickupPersonName: att?.pickup_person_name || null,
+          pickupRelationship: att?.pickup_relationship || null,
+          pickupPersonPhone: att?.pickup_person_phone || null,
+          pickupCitizenId: att?.pickup_citizen_id || null,
+          pickupPhotoUrl: att?.pickup_photo_url || null,
+          pickupNote: att?.pickup_note || null,
+          // Contact options
+          parents: availableParents,
+          authorizations: availableAuthorizations,
+        };
+      });
+  
+      const pendingAuthCount = await prisma.pickupAuthorization.count({
+        where: {
+          student_id: { in: studentIds },
+          status: 'PENDING',
+          deleted_at: null,
+        },
+      });
+  
+      const summary = {
+        totalStudents: mappedStudents.length,
+        presentCount: mappedStudents.filter((s) => s.isPresent).length,
+        dismissedCount: mappedStudents.filter((s) => s.isDismissed).length,
+        remainingInClassCount: mappedStudents.filter((s) => s.isPresent && !s.isDismissed).length,
+        absentCount: mappedStudents.filter((s) => s.isAbsent).length,
+        unrecordedCount: mappedStudents.filter((s) => !s.isAttendanceRecorded).length,
+        pendingAuthorizationsCount: pendingAuthCount,
+      };
+  
+      return {
+        classInfo: {
+          id: targetClass.public_id || targetClass.class_id.toString(),
+          name: targetClass.name,
+          yearName: targetClass.school_year?.name || 'Năm học 2026–2027',
+        },
+        date: targetDateStr,
+        summary,
+        students: mappedStudents,
+      };
+    }
+
 }
 export const attendanceService = new AttendanceService();
 export default attendanceService;
