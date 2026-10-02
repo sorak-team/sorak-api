@@ -7,6 +7,7 @@ import studentRouter from './student.routes.js';
 import classRouter from './class.routes.js';
 import curriculumRouter from './curriculum.routes.js';
 import planningRouter from './planning.routes.js';
+import attendanceRouter from './attendance.routes.js';
 
 const router = Router();
 
@@ -18,5 +19,6 @@ router.use('/students', studentRouter);
 router.use('/classes', classRouter);
 router.use('/curriculum', curriculumRouter);
 router.use('/planning', planningRouter);
+router.use('/attendance', attendanceRouter);
 
 export default router;
