@@ -526,6 +526,40 @@ export class TeacherService {
 
     return { success: true, message: 'Đã hoàn tất phân công giáo viên rời khỏi lớp học' };
   }
+
+  async deleteTeacher(id) {
+    const where = { ...this._parseId(id), deleted_at: null };
+    const teacher = await prisma.teacher.findFirst({ where });
+    if (!teacher) throw new NotFound('Giáo viên không tồn tại');
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Soft delete teacher
+      await tx.teacher.update({
+        where: { teacher_id: teacher.teacher_id },
+        data: {
+          deleted_at: new Date(),
+          work_status: 'RESIGNED',
+          end_date: new Date(),
+        },
+      });
+
+      // 2. Terminate active class allocations
+      await tx.teacherClass.updateMany({
+        where: { teacher_id: teacher.teacher_id, left_at: null },
+        data: { left_at: new Date() },
+      });
+
+      // 3. Deactivate associated account if exists
+      if (teacher.account_id) {
+        await tx.account.update({
+          where: { account_id: teacher.account_id },
+          data: { is_active: false, deleted_at: new Date() },
+        });
+      }
+    });
+
+    return { success: true, message: 'Đã xóa hồ sơ giáo viên thành công' };
+  }
 }
 export const teacherService = new TeacherService();
 export default teacherService;

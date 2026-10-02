@@ -34,3 +34,9 @@ export const removeTeacherFromClass = async (req, res) => {
   res.success(result);
 };
 
+export const deleteTeacher = async (req, res) => {
+  const { id } = req.params;
+  const result = await teacherService.deleteTeacher(id);
+  res.success(result);
+};
+
