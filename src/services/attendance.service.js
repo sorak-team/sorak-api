@@ -1839,6 +1839,61 @@ export default attendanceService;export class AttendanceService {
       };
     }
 
+  async cancelDismissal({ classId, date, studentId }) {
+      const cId = BigInt(classId || 5);
+      const targetDateStr = date || new Date().toISOString().slice(0, 10);
+      const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+      let sId;
+      try {
+        if (typeof studentId === 'string' && studentId.includes('-')) {
+          const std = await prisma.student.findFirst({
+            where: { public_id: studentId },
+            select: { student_id: true },
+          });
+          sId = std ? std.student_id : BigInt(studentId);
+        } else {
+          sId = BigInt(studentId);
+        }
+      } catch {
+        sId = BigInt(studentId);
+      }
+  
+      const attendance = await prisma.attendance.findFirst({
+        where: {
+          class_id: cId,
+          student_id: sId,
+          date: targetDate,
+          deleted_at: null,
+        },
+      });
+  
+      if (!attendance) {
+        throw new NotFound('Không tìm thấy bản ghi điểm danh');
+      }
+  
+      await prisma.attendance.update({
+        where: { attendance_id: attendance.attendance_id },
+        data: {
+          check_out_time: null,
+          check_out_by: null,
+          pickup_person_name: null,
+          pickup_relationship: null,
+          pickup_person_phone: null,
+          pickup_citizen_id: null,
+          pickup_photo_url: null,
+          pickup_note: null,
+          updated_at: new Date(),
+        },
+      });
+  
+      return {
+        success: true,
+        message: 'Đã hoàn tác trạng thái đón trẻ',
+        studentId: sId.toString(),
+        date: targetDateStr,
+      };
+    }
+
 }
 export const attendanceService = new AttendanceService();
 export default attendanceService;
