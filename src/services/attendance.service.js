@@ -1926,6 +1926,136 @@ export default attendanceService;export class AttendanceService {
       };
     }
 
+  async getPickupAuthorizations({ classId, status, date }) {
+      let targetClassId;
+      if (classId) {
+        const cls = await this._resolveClass(classId);
+        if (!cls) {
+          throw new NotFound('Lớp học không tồn tại hoặc mã định danh không hợp lệ');
+        }
+        targetClassId = cls.class_id;
+      } else {
+        const defaultCls = await prisma.class.findFirst({
+          where: { deleted_at: null },
+          orderBy: { class_id: 'asc' },
+        });
+        if (!defaultCls) {
+          throw new NotFound('Không tìm thấy lớp học nào');
+        }
+        targetClassId = defaultCls.class_id;
+      }
+  
+      const enrollments = await prisma.studentEnrollment.findMany({
+        where: {
+          class_id: targetClassId,
+          student: { deleted_at: null },
+        },
+        select: { student_id: true },
+      });
+      const studentIds = enrollments.map((e) => e.student_id);
+  
+      const whereClause = {
+        student_id: { in: studentIds },
+        deleted_at: null,
+      };
+  
+      if (status && status !== 'ALL') {
+        whereClause.status = status;
+      }
+  
+      const auths = await prisma.pickupAuthorization.findMany({
+        where: whereClause,
+        include: {
+          student: {
+            select: {
+              student_id: true,
+              student_code: true,
+              full_name: true,
+              avatar_url: true,
+            },
+          },
+          authorizer: {
+            select: {
+              account_id: true,
+              username: true,
+            },
+          },
+          approver: {
+            select: {
+              account_id: true,
+              username: true,
+            },
+          },
+        },
+        orderBy: [
+          { created_at: 'desc' },
+        ],
+      });
+  
+      const [pendingCount, approvedCount, rejectedCount] = await Promise.all([
+        prisma.pickupAuthorization.count({
+          where: { student_id: { in: studentIds }, status: 'PENDING', deleted_at: null },
+        }),
+        prisma.pickupAuthorization.count({
+          where: { student_id: { in: studentIds }, status: 'APPROVED', deleted_at: null },
+        }),
+        prisma.pickupAuthorization.count({
+          where: { student_id: { in: studentIds }, status: 'REJECTED', deleted_at: null },
+        }),
+      ]);
+  
+      const targetDateStr = date || new Date().toISOString().slice(0, 10);
+      const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+  
+      const mapped = auths.map((a) => {
+        const s = a.student;
+        const isDateActive = a.start_date <= targetDate && a.end_date >= targetDate;
+  
+        return {
+          id: a.public_id || a.authorization_id.toString(),
+          publicId: a.public_id,
+          student: {
+            id: s.public_id || s.student_id.toString(),
+            code: s.student_code,
+            name: s.full_name,
+            avatarUrl: s.avatar_url,
+          },
+          pickupPersonName: a.pickup_person_name,
+          pickupPersonPhone: a.pickup_person_phone,
+          pickupCitizenId: a.pickup_citizen_id,
+          relationship: a.relationship,
+          photoUrl: a.photo_url,
+          note: a.note,
+          startDate: a.start_date.toISOString().slice(0, 10),
+          endDate: a.end_date.toISOString().slice(0, 10),
+          status: a.status,
+          isDateActive,
+          authorizer: {
+            id: a.authorizer?.account_id?.toString() || null,
+            username: a.authorizer?.username || null,
+            phone: a.authorizer?.phone || null,
+          },
+          approver: a.approver ? {
+            id: a.approver?.account_id?.toString() || null,
+            username: a.approver?.username || null,
+          } : null,
+          approvedAt: a.approved_at ? a.approved_at.toISOString() : null,
+          rejectedReason: a.rejected_reason,
+          createdAt: a.created_at.toISOString(),
+        };
+      });
+  
+      return {
+        authorizations: mapped,
+        stats: {
+          pendingCount,
+          approvedCount,
+          rejectedCount,
+          totalCount: pendingCount + approvedCount + rejectedCount,
+        },
+      };
+    }
+
 }
 export const attendanceService = new AttendanceService();
 export default attendanceService;
