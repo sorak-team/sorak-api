@@ -14,6 +14,7 @@ router.post('/classes/:classId/dismissal', attendanceController.recordDismissal)
 router.delete('/classes/:classId/dismissal', attendanceController.clearAllDismissals);
 router.delete('/classes/:classId/dismissal/:studentId', attendanceController.cancelDismissal);
 router.get('/classes/:classId/authorizations', attendanceController.getPickupAuthorizations);
+router.post('/classes/:classId/authorizations', attendanceController.createPickupAuthorization);
 
 
 
