@@ -321,6 +321,41 @@ export class ClassService {
 
     return this.getClassById(created.public_id || created.class_id.toString());
   }
+
+  async updateClass(id, data) {
+    const where = { ...this._parseId(id), deleted_at: null };
+    const classRecord = await prisma.class.findFirst({ where });
+    if (!classRecord) {
+      throw new NotFound('Lớp học không tồn tại');
+    }
+
+    if (data.name && data.name.trim() !== classRecord.name) {
+      const conflict = await prisma.class.findFirst({
+        where: {
+          school_year_id: classRecord.school_year_id,
+          name: data.name.trim(),
+          class_id: { not: classRecord.class_id },
+          deleted_at: null,
+        },
+      });
+      if (conflict) {
+        throw new Conflict(`Tên lớp '${data.name.trim()}' đã tồn tại trong năm học`);
+      }
+    }
+
+    const updateData = {};
+    if (data.name !== undefined) updateData.name = data.name.trim();
+    if (data.ageGroup !== undefined) updateData.age_group = data.ageGroup;
+    if (data.roomNumber !== undefined) updateData.room_number = data.roomNumber?.trim() || null;
+    if (data.description !== undefined) updateData.description = data.description?.trim() || null;
+
+    const updated = await prisma.class.update({
+      where: { class_id: classRecord.class_id },
+      data: updateData,
+    });
+
+    return this.getClassById(updated.public_id || updated.class_id.toString());
+  }
 }
 export const classService = new ClassService();
 export default classService;

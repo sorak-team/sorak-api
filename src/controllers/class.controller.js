@@ -22,3 +22,9 @@ export const updateClass = async (req, res) => {
   res.success(result);
 };
 
+export const deleteClass = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.deleteClass(id);
+  res.success(result);
+};
+
