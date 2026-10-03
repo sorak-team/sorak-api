@@ -16,3 +16,9 @@ export const createClass = async (req, res) => {
   res.status(201).success(result);
 };
 
+export const updateClass = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.updateClass(id, req.body);
+  res.success(result);
+};
+
