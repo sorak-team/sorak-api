@@ -11,3 +11,8 @@ export const getClassById = async (req, res) => {
   res.success(result);
 };
 
+export const createClass = async (req, res) => {
+  const result = await classService.createClass(req.body);
+  res.status(201).success(result);
+};
+
