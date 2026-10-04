@@ -380,6 +380,152 @@ export class ClassService {
 
     return { success: true, message: 'Đã xóa lớp học thành công' };
   }
+
+  async assignTeacher(classId, body = {}) {
+    const classRecord = await prisma.class.findFirst({
+      where: { ...this._parseId(classId), deleted_at: null },
+    });
+    if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+
+    if (Array.isArray(body.teacherIds) && body.teacherIds.length > 0) {
+      const results = [];
+      for (const tId of body.teacherIds) {
+        const res = await teacherService.assignTeacherToClass(tId, {
+          classId: classRecord.class_id,
+          isPrimary: false,
+          assignedAt: body.assignedAt,
+        });
+        results.push(res);
+      }
+      return results;
+    }
+
+    const targetTeacherId = body.teacherId || body.id;
+    return teacherService.assignTeacherToClass(targetTeacherId, {
+      classId: classRecord.class_id,
+      isPrimary: Boolean(body.isPrimary),
+      assignedAt: body.assignedAt,
+    });
+  }
+
+  async getClassTeachers(classId) {
+    const classRecord = await prisma.class.findFirst({
+      where: { ...this._parseId(classId), deleted_at: null },
+      include: { school_year: true },
+    });
+    if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+
+    // 1. Current active teachers for this class
+    const activeAllocations = await prisma.teacherClass.findMany({
+      where: {
+        class_id: classRecord.class_id,
+        left_at: null,
+        teacher: { deleted_at: null },
+      },
+      include: {
+        teacher: {
+          include: { account: { select: { is_active: true, username: true } } },
+        },
+      },
+      orderBy: [{ is_primary: 'desc' }, { assigned_at: 'asc' }],
+    });
+
+    const activeTeachers = activeAllocations.map((tc) => ({
+      allocationId: tc.id.toString(),
+      teacherId: tc.teacher.public_id || tc.teacher.teacher_id.toString(),
+      employeeCode: tc.teacher.employee_code,
+      fullName: tc.teacher.full_name,
+      isPrimary: tc.is_primary,
+      assignedAt: tc.assigned_at,
+      phone: tc.teacher.phone || '',
+      email: tc.teacher.email || '',
+      position: tc.teacher.position || 'Giáo viên',
+      workStatus: tc.teacher.work_status,
+      avatarUrl:
+        tc.teacher.avatar_url ||
+        `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(tc.teacher.full_name)}`,
+    }));
+
+    // 2. Candidate teachers pool:
+    // Only active teachers (not resigned)
+    const allTeachers = await prisma.teacher.findMany({
+      where: {
+        deleted_at: null,
+        work_status: { not: 'RESIGNED' },
+      },
+      include: {
+        teacher_classes: {
+          where: {
+            left_at: null,
+            class: { school_year_id: classRecord.school_year_id },
+          },
+          include: { class: true },
+        },
+      },
+      orderBy: { employee_code: 'asc' },
+    });
+
+    const activeTeacherIds = new Set(activeTeachers.map((t) => t.teacherId));
+
+    const poolTeachers = allTeachers
+      .filter((t) => {
+        // Position rule: strictly 'Giáo viên', excluding 'Hiệu trưởng', 'Phó hiệu trưởng', etc.
+        const pos = (t.position || '').trim().toLowerCase();
+        if (pos.includes('hiệu trưởng') || (pos && !pos.includes('giáo viên'))) {
+          return false;
+        }
+
+        // Academic year rule: 1 teacher can only teach 1 class per school year
+        // Exclude teachers who already have an active class in this school year
+        if (t.teacher_classes.length > 0) {
+          return false;
+        }
+
+        // Exclude teachers already assigned to this class
+        if (activeTeacherIds.has(t.teacher_id.toString())) {
+          return false;
+        }
+
+        return true;
+      })
+      .map((t) => ({
+        teacherId: t.public_id || t.teacher_id.toString(),
+        employeeCode: t.employee_code,
+        fullName: t.full_name,
+        phone: t.phone || '',
+        email: t.email || '',
+        position: t.position || 'Giáo viên',
+        workStatus: t.work_status,
+        avatarUrl:
+          t.avatar_url ||
+          `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(t.full_name)}`,
+        isAssignedHere: false,
+        isAssignedElsewhere: false,
+        assignedClassName: null,
+        canAssign: true,
+      }));
+
+    const primaryTeacher = activeTeachers.find((t) => t.isPrimary) || null;
+    const assistantTeachers = activeTeachers.filter((t) => !t.isPrimary);
+
+    return {
+      class: {
+        id: classRecord.public_id || classRecord.class_id.toString(),
+        name: classRecord.name,
+        gradeLabel: GRADE_LABELS[classRecord.age_group] || classRecord.age_group,
+        academicYear: classRecord.school_year?.name,
+      },
+      summary: {
+        total: activeTeachers.length,
+        hasPrimary: !!primaryTeacher,
+        primaryTeacherName: primaryTeacher?.fullName || 'Chưa phân công',
+        assistantCount: assistantTeachers.length,
+        recommendedCount: 2,
+      },
+      activeTeachers,
+      poolTeachers,
+    };
+  }
 }
 export const classService = new ClassService();
 export default classService;

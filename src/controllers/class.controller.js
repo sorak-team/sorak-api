@@ -40,3 +40,15 @@ export const getClassTeachers = async (req, res) => {
   res.success(result);
 };
 
+export const removeTeacher = async (req, res) => {
+  const { id, teacherId } = req.params;
+  const result = await classService.removeTeacher(id, teacherId);
+  res.success(result);
+};
+
+export const updateTeacherRole = async (req, res) => {
+  const { id, teacherId } = req.params;
+  const result = await classService.updateTeacherRole(id, teacherId, req.body);
+  res.success(result);
+};
+
