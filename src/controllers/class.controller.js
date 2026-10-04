@@ -28,3 +28,15 @@ export const deleteClass = async (req, res) => {
   res.success(result);
 };
 
+export const assignTeacher = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.assignTeacher(id, req.body);
+  res.status(201).success(result);
+};
+
+export const getClassTeachers = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.getClassTeachers(id);
+  res.success(result);
+};
+
