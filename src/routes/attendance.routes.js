@@ -15,6 +15,7 @@ router.delete('/classes/:classId/dismissal', attendanceController.clearAllDismis
 router.delete('/classes/:classId/dismissal/:studentId', attendanceController.cancelDismissal);
 router.get('/classes/:classId/authorizations', attendanceController.getPickupAuthorizations);
 router.post('/classes/:classId/authorizations', attendanceController.createPickupAuthorization);
+router.patch('/classes/:classId/authorizations/:authId/approve', attendanceController.approvePickupAuthorization);
 
 
 
