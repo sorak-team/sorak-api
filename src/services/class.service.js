@@ -526,6 +526,59 @@ export class ClassService {
       poolTeachers,
     };
   }
+
+  async removeTeacher(classId, teacherId) {
+    const classRecord = await prisma.class.findFirst({
+      where: { ...this._parseId(classId), deleted_at: null },
+    });
+    if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+
+    return teacherService.removeTeacherFromClass(teacherId, classRecord.class_id);
+  }
+
+  async updateTeacherRole(classId, teacherId, { isPrimary }) {
+    const classRecord = await prisma.class.findFirst({
+      where: { ...this._parseId(classId), deleted_at: null },
+    });
+    if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+
+    const teacher = await prisma.teacher.findFirst({
+      where: { ...this._parseTeacherId(teacherId), deleted_at: null },
+    });
+    if (!teacher) throw new NotFound('Giáo viên không tồn tại');
+
+    const allocation = await prisma.teacherClass.findFirst({
+      where: {
+        class_id: classRecord.class_id,
+        teacher_id: teacher.teacher_id,
+        left_at: null,
+      },
+    });
+    if (!allocation) {
+      throw new NotFound('Giáo viên chưa được phân công vào lớp này');
+    }
+
+    await prisma.$transaction(async (tx) => {
+      if (isPrimary) {
+        // Demote existing primary teachers in this class
+        await tx.teacherClass.updateMany({
+          where: {
+            class_id: classRecord.class_id,
+            left_at: null,
+            is_primary: true,
+          },
+          data: { is_primary: false },
+        });
+      }
+
+      await tx.teacherClass.update({
+        where: { id: allocation.id },
+        data: { is_primary: !!isPrimary },
+      });
+    });
+
+    return this.getClassTeachers(classRecord.public_id || classRecord.class_id.toString());
+  }
 }
 export const classService = new ClassService();
 export default classService;

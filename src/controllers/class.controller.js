@@ -52,3 +52,9 @@ export const updateTeacherRole = async (req, res) => {
   res.success(result);
 };
 
+export const getClassStudents = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.getClassStudents(id, req.query);
+  res.success(result);
+};
+
