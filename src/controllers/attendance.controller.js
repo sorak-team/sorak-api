@@ -132,6 +132,23 @@ class AttendanceController {
       }
     }
 
+  async rejectPickupAuthorization(req, res, next) {
+      try {
+        const { classId, authId } = req.params;
+        const { reason } = req.body || {};
+        const accountId = req.user?.sub;
+        const data = await attendanceService.rejectPickupAuthorization({
+          classId,
+          authId,
+          accountId,
+          reason,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const attendanceController = new AttendanceController();
 export default attendanceController;
