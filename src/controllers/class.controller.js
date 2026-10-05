@@ -58,3 +58,21 @@ export const getClassStudents = async (req, res) => {
   res.success(result);
 };
 
+export const getStudentPool = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.getStudentPool(id, req.query);
+  res.success(result);
+};
+
+export const allocateStudents = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.allocateStudents(id, req.body);
+  res.status(200).success(result);
+};
+
+export const removeStudents = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.removeStudents(id, req.body);
+  res.success(result);
+};
+
