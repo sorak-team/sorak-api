@@ -719,6 +719,285 @@ export class ClassService {
       students,
     };
   }
+
+  async getStudentPool(classId, { search, previousClassGroup = 'ALL', ageGroup = 'ALL', status = 'UNASSIGNED', page = 1, limit = 100 } = {}) {
+    const classRecord = await prisma.class.findFirst({
+      where: { ...this._parseId(classId), deleted_at: null },
+      include: { school_year: true },
+    });
+    if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+
+    const schoolYearId = classRecord.school_year_id;
+
+    // Immediately preceding school year before this class's school year (e.g. 2025-2026 for 2026-2027)
+    const previousSchoolYear = await prisma.schoolYear.findFirst({
+      where: {
+        start_date: { lt: classRecord.school_year.start_date },
+        deleted_at: null,
+      },
+      orderBy: { start_date: 'desc' },
+    });
+
+    const where = {
+      deleted_at: null,
+      status: { notIn: ['RESERVED', 'DROPPED_OUT', 'TRANSFERRED', 'GRADUATED'] },
+    };
+
+    if (search && search.trim()) {
+      const q = search.trim();
+      where.OR = [
+        { full_name: { contains: q, mode: 'insensitive' } },
+        { student_code: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+
+    const allStudents = await prisma.student.findMany({
+      where,
+      orderBy: { student_code: 'asc' },
+      include: {
+        student_enrollments: {
+          include: {
+            class: {
+              include: { school_year: true },
+            },
+          },
+          orderBy: { enrolled_at: 'desc' },
+        },
+      },
+    });
+
+    const poolItems = [];
+
+    for (const s of allStudents) {
+      // Exclude students who ALREADY have an active class in this school year
+      const activeEnrollmentThisYear = s.student_enrollments.find(
+        (e) => e.left_at === null && e.class?.school_year_id === schoolYearId
+      );
+      if (activeEnrollmentThisYear) {
+        continue;
+      }
+
+      const suitable = this._calculateSuitableGrade(s.date_of_birth);
+
+      // Previous class lookup (Must display the class from the previous school year, e.g. 2025-2026 for 2026-2027)
+      let previousClass = null;
+      let prevEnrollment = null;
+
+      if (previousSchoolYear) {
+        prevEnrollment = s.student_enrollments.find(
+          (e) => e.class?.school_year_id === previousSchoolYear.school_year_id
+        );
+      }
+
+      if (!prevEnrollment) {
+        prevEnrollment = s.student_enrollments.find(
+          (e) =>
+            e.class?.school_year &&
+            e.class.school_year.start_date < classRecord.school_year.start_date
+        );
+      }
+
+      let previousClassAgeGroup = 'NONE';
+
+      if (prevEnrollment && prevEnrollment.class) {
+        const yearShort = prevEnrollment.class.school_year?.name
+          ? prevEnrollment.class.school_year.name.replace('Năm học ', '').replace('–', '-')
+          : '';
+        previousClass = `${prevEnrollment.class.name}${yearShort ? ` · ${yearShort}` : ''}`;
+        previousClassAgeGroup = prevEnrollment.class.age_group || 'NONE';
+      } else if (s.previous_school) {
+        previousClass = s.previous_school;
+        const prevLower = s.previous_school.toLowerCase();
+        if (prevLower.includes('nhà trẻ') || prevLower.includes('nha tre')) {
+          previousClassAgeGroup = 'NHA_TRE';
+        } else if (prevLower.includes('mầm') || prevLower.includes('mam')) {
+          previousClassAgeGroup = 'MAM';
+        } else if (prevLower.includes('chồi') || prevLower.includes('choi')) {
+          previousClassAgeGroup = 'CHOI';
+        } else if (prevLower.includes('lá') || prevLower.includes('la')) {
+          previousClassAgeGroup = 'LA';
+        } else {
+          previousClassAgeGroup = 'EXTERNAL';
+        }
+      }
+
+      // Filter by previous class tier if specified
+      if (previousClassGroup && previousClassGroup !== 'ALL') {
+        if (previousClassGroup === 'NONE') {
+          if (previousClassAgeGroup !== 'NONE' && previousClassAgeGroup !== 'EXTERNAL') {
+            continue;
+          }
+        } else if (previousClassAgeGroup !== previousClassGroup) {
+          const pLower = (previousClass || '').toLowerCase();
+          const matchesFallback =
+            (previousClassGroup === 'NHA_TRE' && (pLower.includes('nhà trẻ') || pLower.includes('nha tre'))) ||
+            (previousClassGroup === 'MAM' && (pLower.includes('mầm') || pLower.includes('mam'))) ||
+            (previousClassGroup === 'CHOI' && (pLower.includes('chồi') || pLower.includes('choi'))) ||
+            (previousClassGroup === 'LA' && (pLower.includes('lá') || pLower.includes('la')));
+          if (!matchesFallback) {
+            continue;
+          }
+        }
+      }
+
+      // Age group filter (only if explicitly specified and not ALL)
+      if (ageGroup && ageGroup !== 'ALL' && suitable.key !== ageGroup) {
+        continue;
+      }
+
+      poolItems.push({
+        id: s.public_id || s.student_id.toString(),
+        publicId: s.public_id,
+        studentCode: s.student_code,
+        fullName: s.full_name,
+        avatarUrl:
+          s.avatar_url ||
+          `https://api.dicebear.com/10.x/critters/svg?seed=${encodeURIComponent(s.student_code || s.full_name)}&backgroundColor=ff2e63,00c2a8,ffb300,3d5afe,8e24aa,00e676`,
+        dateOfBirth: s.date_of_birth,
+        gender: s.gender,
+        suitableGrade: suitable.label,
+        suitableAgeGroup: suitable.key,
+        previousClass,
+        previousClassAgeGroup,
+        allocationStatus: 'UNASSIGNED',
+        allocationStatusLabel: 'Chưa phân lớp',
+        currentClass: null,
+      });
+    }
+
+    const total = poolItems.length;
+    const skip = (Math.max(1, page) - 1) * limit;
+    const paginatedItems = poolItems.slice(skip, skip + limit);
+
+    return {
+      items: paginatedItems,
+      total,
+      page: Number(page),
+      limit: Number(limit),
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  async allocateStudents(classId, { studentIds }) {
+    const classRecord = await prisma.class.findFirst({
+      where: { ...this._parseId(classId), deleted_at: null },
+      include: {
+        school_year: true,
+        student_enrollments: {
+          where: { left_at: null, student: { deleted_at: null } },
+        },
+      },
+    });
+    if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+
+    const capacity = 24;
+    const currentCount = classRecord.student_enrollments.length;
+    const remainingSlots = Math.max(0, capacity - currentCount);
+
+    if (studentIds.length > remainingSlots) {
+      throw new BadRequest(
+        `Lớp học chỉ còn ${remainingSlots} chỗ trống (sĩ số tối đa ${capacity}). Không thể thêm ${studentIds.length} học sinh.`
+      );
+    }
+
+    // Resolve student records
+    const students = await prisma.student.findMany({
+      where: {
+        OR: studentIds.map((id) =>
+          /^\d+$/.test(String(id)) ? { student_id: BigInt(id) } : { public_id: String(id) }
+        ),
+        deleted_at: null,
+      },
+      select: { student_id: true, public_id: true, full_name: true },
+    });
+
+    if (students.length === 0) {
+      throw new BadRequest('Không tìm thấy học sinh hợp lệ để thêm vào lớp');
+    }
+
+    const now = new Date();
+    await prisma.$transaction(async (tx) => {
+      for (const s of students) {
+        // Close active enrollments in other classes for this school year
+        await tx.studentEnrollment.updateMany({
+          where: {
+            student_id: s.student_id,
+            left_at: null,
+            class: {
+              school_year_id: classRecord.school_year_id,
+              class_id: { not: classRecord.class_id },
+            },
+          },
+          data: { left_at: now },
+        });
+
+        // Upsert into target class
+        const existing = await tx.studentEnrollment.findUnique({
+          where: {
+            student_id_class_id: {
+              student_id: s.student_id,
+              class_id: classRecord.class_id,
+            },
+          },
+        });
+
+        if (existing) {
+          await tx.studentEnrollment.update({
+            where: { enrollment_id: existing.enrollment_id },
+            data: { left_at: null, enrolled_at: now },
+          });
+        } else {
+          await tx.studentEnrollment.create({
+            data: {
+              student_id: s.student_id,
+              class_id: classRecord.class_id,
+              enrolled_at: now,
+              left_at: null,
+            },
+          });
+        }
+
+        // Ensure student status is STUDYING when admitted into active class
+        await tx.student.update({
+          where: { student_id: s.student_id },
+          data: { status: 'STUDYING' },
+        });
+      }
+    });
+
+    return this.getClassStudents(classRecord.public_id || classRecord.class_id.toString());
+  }
+
+  async removeStudents(classId, { studentIds }) {
+    const classRecord = await prisma.class.findFirst({
+      where: { ...this._parseId(classId), deleted_at: null },
+    });
+    if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+
+    const students = await prisma.student.findMany({
+      where: {
+        OR: studentIds.map((id) =>
+          /^\d+$/.test(String(id)) ? { student_id: BigInt(id) } : { public_id: String(id) }
+        ),
+      },
+      select: { student_id: true },
+    });
+
+    const targetStudentIds = students.map((s) => s.student_id);
+
+    await prisma.studentEnrollment.updateMany({
+      where: {
+        class_id: classRecord.class_id,
+        student_id: { in: targetStudentIds },
+        left_at: null,
+      },
+      data: {
+        left_at: new Date(),
+      },
+    });
+
+    return this.getClassStudents(classRecord.public_id || classRecord.class_id.toString());
+  }
 }
 export const classService = new ClassService();
 export default classService;

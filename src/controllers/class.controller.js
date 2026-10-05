@@ -76,3 +76,15 @@ export const removeStudents = async (req, res) => {
   res.success(result);
 };
 
+export const getHistorySources = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.getHistorySources(id);
+  res.success(result);
+};
+
+export const getHistoryStudents = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.getHistoryStudents(id, req.query);
+  res.success(result);
+};
+
