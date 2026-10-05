@@ -94,3 +94,20 @@ export const importStudents = async (req, res) => {
   res.status(200).success(result);
 };
 
+export const getClassTransfers = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.getClassTransfers(id, req.query);
+  res.success(result);
+};
+
+export const getAllTransfers = async (req, res) => {
+  const result = await classService.getAllTransfers(req.query);
+  res.success(result);
+};
+
+export const getTransferById = async (req, res) => {
+  const { transferId } = req.params;
+  const result = await classService.getTransferById(transferId);
+  res.success(result);
+};
+
