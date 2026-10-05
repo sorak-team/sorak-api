@@ -998,6 +998,163 @@ export class ClassService {
 
     return this.getClassStudents(classRecord.public_id || classRecord.class_id.toString());
   }
+
+  async getHistorySources(classId) {
+    const classRecord = await prisma.class.findFirst({
+      where: { ...this._parseId(classId), deleted_at: null },
+      include: { school_year: true },
+    });
+    if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+
+    const schoolYears = await prisma.schoolYear.findMany({
+      where: {
+        deleted_at: null,
+      },
+      orderBy: { start_date: 'desc' },
+      include: {
+        classes: {
+          where: { deleted_at: null },
+          orderBy: { name: 'asc' },
+          select: {
+            class_id: true,
+            public_id: true,
+            name: true,
+            age_group: true,
+            room_number: true,
+          },
+        },
+      },
+    });
+
+    const years = schoolYears.map((sy) => ({
+      id: sy.school_year_id.toString(),
+      name: sy.name,
+      displayName: sy.name.replace('Năm học ', ''),
+      status: sy.status,
+      isCurrent: sy.school_year_id === classRecord.school_year_id,
+      classes: sy.classes.map((c) => ({
+        id: c.public_id || c.class_id.toString(),
+        publicId: c.public_id,
+        name: c.name,
+        ageGroup: c.age_group,
+        gradeLabel: GRADE_LABELS[c.age_group] || c.age_group,
+      })),
+    }));
+
+    return { years };
+  }
+
+  async getHistoryStudents(classId, { previousClassId, search } = {}) {
+    const currentClassRecord = await prisma.class.findFirst({
+      where: { ...this._parseId(classId), deleted_at: null },
+      include: { school_year: true },
+    });
+    if (!currentClassRecord) throw new NotFound('Lớp học không tồn tại');
+
+    if (!previousClassId) {
+      return { students: [], summary: { total: 0, assignedThisYear: 0, unassignedThisYear: 0 } };
+    }
+
+    const previousClass = await prisma.class.findFirst({
+      where: { ...this._parseId(previousClassId), deleted_at: null },
+      include: { school_year: true },
+    });
+    if (!previousClass) throw new NotFound('Lớp cũ không tồn tại');
+
+    const enrollments = await prisma.studentEnrollment.findMany({
+      where: {
+        class_id: previousClass.class_id,
+        student: { deleted_at: null },
+      },
+      include: {
+        student: {
+          include: {
+            student_enrollments: {
+              where: { left_at: null },
+              include: {
+                class: {
+                  include: { school_year: true },
+                },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { enrolled_at: 'asc' },
+    });
+
+    const currentSchoolYearId = currentClassRecord.school_year_id;
+    let assignedCount = 0;
+    let unassignedCount = 0;
+
+    const students = [];
+
+    for (const e of enrollments) {
+      const s = e.student;
+      if (search && search.trim()) {
+        const q = search.trim().toLowerCase();
+        const match =
+          s.full_name.toLowerCase().includes(q) ||
+          s.student_code.toLowerCase().includes(q);
+        if (!match) continue;
+      }
+
+      // Check current year active enrollment
+      const activeEnrollmentThisYear = s.student_enrollments.find(
+        (en) => en.class?.school_year_id === currentSchoolYearId
+      );
+
+      let currentStatus = 'UNASSIGNED';
+      let currentStatusLabel = 'Chưa phân lớp';
+      let currentClassName = null;
+
+      if (activeEnrollmentThisYear) {
+        if (activeEnrollmentThisYear.class_id === currentClassRecord.class_id) {
+          currentStatus = 'IN_THIS_CLASS';
+          currentStatusLabel = 'Đã vào lớp này';
+          currentClassName = currentClassRecord.name;
+        } else {
+          currentStatus = 'IN_OTHER_CLASS';
+          currentStatusLabel = 'Đã vào lớp khác';
+          currentClassName = activeEnrollmentThisYear.class.name;
+          assignedCount++;
+        }
+      } else {
+        unassignedCount++;
+      }
+
+      students.push({
+        id: s.public_id || s.student_id.toString(),
+        publicId: s.public_id,
+        studentCode: s.student_code,
+        fullName: s.full_name,
+        avatarUrl:
+          s.avatar_url ||
+          `https://api.dicebear.com/10.x/critters/svg?seed=${encodeURIComponent(s.student_code || s.full_name)}&backgroundColor=ff2e63,00c2a8,ffb300,3d5afe,8e24aa,00e676`,
+        dateOfBirth: s.date_of_birth,
+        gender: s.gender,
+        previousClassName: previousClass.name,
+        previousSchoolYear: previousClass.school_year?.name?.replace('Năm học ', '') || '',
+        currentStatus,
+        currentStatusLabel,
+        currentClassName,
+      });
+    }
+
+    return {
+      previousClass: {
+        id: previousClass.public_id || previousClass.class_id.toString(),
+        name: previousClass.name,
+        schoolYear: previousClass.school_year?.name,
+      },
+      summary: {
+        total: students.length,
+        assignedThisYear: assignedCount,
+        unassignedThisYear: unassignedCount,
+      },
+      students,
+    };
+  }
 }
 export const classService = new ClassService();
 export default classService;
