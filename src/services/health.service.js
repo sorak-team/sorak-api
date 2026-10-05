@@ -300,6 +300,23 @@ export default healthService;export class HealthService {
       });
     }
 
+  async _resolveStudent(studentId) {
+      if (!studentId) return null;
+      const str = String(studentId).trim();
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+      if (isUuid) {
+        return prisma.student.findFirst({
+          where: { public_id: str, deleted_at: null },
+        });
+      }
+      if (/^[A-Za-z0-9_-]+$/.test(str) && !/^\d+$/.test(str)) {
+        return prisma.student.findFirst({
+          where: { student_code: str, deleted_at: null },
+        });
+      }
+      return null;
+    }
+
 }
 export const healthService = new HealthService();
 export default healthService;
