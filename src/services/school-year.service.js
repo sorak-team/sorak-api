@@ -112,6 +112,118 @@ export class SchoolYearService {
       },
     };
   }
+
+  async getSchoolYearById(id) {
+    const bigId = BigInt(id);
+    const item = await prisma.schoolYear.findFirst({
+      where: {
+        school_year_id: bigId,
+        deleted_at: null,
+      },
+      include: {
+        classes: {
+          where: { deleted_at: null },
+          select: {
+            class_id: true,
+            public_id: true,
+            name: true,
+            age_group: true,
+            room_number: true,
+            max_capacity: true,
+            description: true,
+          },
+          orderBy: { name: 'asc' },
+        },
+      },
+    });
+
+    if (!item) {
+      throw NotFound('Không tìm thấy năm học');
+    }
+
+    const [attendanceCount, themeCount, goalCount] = await Promise.all([
+      prisma.attendance.count({
+        where: {
+          class: { school_year_id: bigId, deleted_at: null },
+          deleted_at: null,
+        },
+      }),
+      prisma.curriculumTheme.count({
+        where: { school_year_id: bigId, deleted_at: null },
+      }),
+      prisma.educationalGoal.count({
+        where: { school_year_id: bigId, deleted_at: null },
+      }),
+    ]);
+
+    const isUsed = Boolean(
+      item.classes.length > 0 ||
+      themeCount > 0 ||
+      goalCount > 0 ||
+      attendanceCount > 0
+    );
+
+    return {
+      id: item.school_year_id.toString(),
+      name: item.name,
+      startDate: item.start_date.toISOString().split('T')[0],
+      semester1EndDate: item.semester_1_end_date ? item.semester_1_end_date.toISOString().split('T')[0] : null,
+      endDate: item.end_date.toISOString().split('T')[0],
+      status: item.status,
+      colorTheme: item.color_theme || 'blue',
+      isActive: item.status === 'ACTIVE',
+      totalClasses: item.classes.length,
+      isUsed,
+      usageSummary: {
+        classes: item.classes.length,
+        themes: themeCount,
+        goals: goalCount,
+        attendances: attendanceCount,
+      },
+      classes: item.classes.map((c) => ({
+        id: c.public_id || c.class_id.toString(),
+        publicId: c.public_id,
+        name: c.name,
+        ageGroup: c.age_group,
+        roomNumber: c.room_number,
+        description: c.description,
+      })),
+      createdAt: item.created_at,
+      updatedAt: item.updated_at,
+    };
+  }
+
+  async getActiveSchoolYear() {
+    const item = await prisma.schoolYear.findFirst({
+      where: {
+        status: 'ACTIVE',
+        deleted_at: null,
+      },
+      include: {
+        _count: {
+          select: { classes: { where: { deleted_at: null } } },
+        },
+      },
+    });
+
+    if (!item) {
+      return null;
+    }
+
+    return {
+      id: item.school_year_id.toString(),
+      name: item.name,
+      startDate: item.start_date.toISOString().split('T')[0],
+      semester1EndDate: item.semester_1_end_date ? item.semester_1_end_date.toISOString().split('T')[0] : null,
+      endDate: item.end_date.toISOString().split('T')[0],
+      status: item.status,
+      colorTheme: item.color_theme || 'blue',
+      isActive: true,
+      totalClasses: item._count.classes,
+      createdAt: item.created_at,
+      updatedAt: item.updated_at,
+    };
+  }
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;

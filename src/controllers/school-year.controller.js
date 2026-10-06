@@ -16,3 +16,8 @@ export const getActiveSchoolYear = async (req, res) => {
   res.success(result);
 };
 
+export const createSchoolYear = async (req, res) => {
+  const result = await schoolYearService.createSchoolYear(req.body);
+  res.status(201).success(result);
+};
+
