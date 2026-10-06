@@ -533,6 +533,29 @@ export default healthService;export class HealthService {
       };
     }
 
+  async clearHealthRecords({ classId, date }) {
+      const targetClass = await this._resolveClass(classId);
+  
+      if (targetClass) {
+        const enrollments = await prisma.studentEnrollment.findMany({
+          where: { class_id: targetClass.class_id, student: { deleted_at: null } },
+          select: { student_id: true },
+        });
+        const sIds = enrollments.map((e) => e.student_id);
+        await prisma.healthAssessment.deleteMany({
+          where: {
+            student_id: { in: sIds },
+            ...(date ? { assessment_date: new Date(`${date}T00:00:00.000Z`) } : {}),
+          },
+        });
+      }
+  
+      return {
+        success: true,
+        message: 'Đã xóa toàn bộ dữ liệu sức khoẻ',
+      };
+    }
+
 }
 export const healthService = new HealthService();
 export default healthService;
