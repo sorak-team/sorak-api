@@ -8,6 +8,7 @@ const router = Router();
 router.use(authMiddleware);
 router.get('/classes/:classId', healthController.getHealthOverview);
 router.post('/classes/:classId/records', healthController.saveHealthRecords);
+router.delete('/classes/:classId/records', healthController.clearHealthRecords);
 
 
 
