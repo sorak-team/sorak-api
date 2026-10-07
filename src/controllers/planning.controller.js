@@ -122,6 +122,21 @@ class PlanningController {
       }
     }
 
+  async generateActivityAi(req, res, next) {
+      try {
+        const { title, domain, goalCode, contentTitle } = req.body;
+        const data = await planningService.generateActivityAi({
+          title,
+          domain,
+          goalCode,
+          contentTitle,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const planningController = new PlanningController();
 export default planningController;
