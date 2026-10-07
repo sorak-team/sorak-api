@@ -2442,6 +2442,41 @@ export default planningService;export class PlanningService {
       return { success: true, updatedCount: updates.length };
     }
 
+  async deleteWeeklySlot({ classId, slotId }) {
+      if (slotId && !isNaN(Number(slotId))) {
+        const parsedSlotId = BigInt(slotId);
+        const existing = await prisma.subThemeActivity.findUnique({
+          where: { id: parsedSlotId },
+        });
+  
+        if (existing) {
+          await prisma.subThemeActivity.delete({
+            where: { id: parsedSlotId },
+          });
+  
+          // Re-normalize remaining activities in the same cell
+          const remaining = await prisma.subThemeActivity.findMany({
+            where: {
+              class_id: existing.class_id,
+              scheduled_date: existing.scheduled_date,
+              routine_slot: existing.routine_slot,
+            },
+            orderBy: { order_index: 'asc' },
+          });
+  
+          for (let i = 0; i < remaining.length; i++) {
+            if (remaining[i].order_index !== i + 1) {
+              await prisma.subThemeActivity.update({
+                where: { id: remaining[i].id },
+                data: { order_index: i + 1 },
+              }).catch(() => {});
+            }
+          }
+        }
+      }
+      return { success: true, slotId };
+    }
+
 }
 export const planningService = new PlanningService();
 export default planningService;
