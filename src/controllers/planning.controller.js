@@ -109,6 +109,19 @@ class PlanningController {
       }
     }
 
+  async deleteWeeklySlot(req, res, next) {
+      try {
+        const { classId, slotId } = req.params;
+        const data = await planningService.deleteWeeklySlot({
+          classId,
+          slotId,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const planningController = new PlanningController();
 export default planningController;
