@@ -395,6 +395,10 @@ export class SchoolYearService {
       };
     });
   }
+
+  async activateSchoolYear(id) {
+    return this.updateSchoolYear(id, { status: 'ACTIVE' });
+  }
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;
