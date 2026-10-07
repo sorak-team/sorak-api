@@ -147,6 +147,23 @@ class PlanningController {
       }
     }
 
+  async saveTargetAllocation(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const { themeId, themeCode, branchId, goalIds } = req.body;
+        const data = await planningService.saveTargetAllocation({
+          classId,
+          themeId,
+          themeCode,
+          branchId,
+          goalIds,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const planningController = new PlanningController();
 export default planningController;
