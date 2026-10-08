@@ -17,6 +17,7 @@ router.post('/classes/:classId/timetable/reorder', planningController.reorderWee
 router.delete('/classes/:classId/timetable/slots/:slotId', planningController.deleteWeeklySlot);
 router.get('/classes/:classId/allocation', planningController.getTargetAllocation);
 router.post('/classes/:classId/allocation', planningController.saveTargetAllocation);
+router.post('/classes/:classId/allocation/publish', planningController.publishAllocation);
 
 
 // Tab 1: Educational Activities by Theme
