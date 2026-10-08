@@ -69,3 +69,15 @@ export const importHolidays = async (req, res) => {
   res.success(result);
 };
 
+export const getTransitionReadiness = async (req, res) => {
+  const { id } = req.params;
+  const result = await schoolYearService.getTransitionReadiness(id);
+  res.success(result);
+};
+
+export const closeRemainingEnrollments = async (req, res) => {
+  const { id } = req.params;
+  const result = await schoolYearService.closeRemainingEnrollments(id, req.user?.sub);
+  res.success(result);
+};
+

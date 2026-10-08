@@ -699,6 +699,40 @@ export class SchoolYearService {
       message: 'Đã xóa ngày nghỉ / sự kiện thành công!',
     };
   }
+
+  async importHolidays(id, accountId, items) {
+    const bigId = BigInt(id);
+    if (!Array.isArray(items) || items.length === 0) {
+      throw BadRequest('Danh sách ngày nghỉ để import không hợp lệ.');
+    }
+
+    const createdList = [];
+    for (const item of items) {
+      if (!item.name || !item.startDate) continue;
+      const sDate = new Date(item.startDate);
+      const eDate = item.endDate ? new Date(item.endDate) : sDate;
+
+      const created = await prisma.schoolHoliday.create({
+        data: {
+          school_year_id: bigId,
+          name: item.name.trim(),
+          start_date: sDate,
+          end_date: eDate,
+          is_teaching_allowed: Boolean(item.isTeachingAllowed),
+          target_grades: Array.isArray(item.targetGrades) ? item.targetGrades : [],
+          description: item.description?.trim() || null,
+          created_by: accountId ? BigInt(accountId) : 1n,
+        },
+      });
+      createdList.push(created);
+    }
+
+    return {
+      success: true,
+      count: createdList.length,
+      message: `Đã import thành công ${createdList.length} sự kiện/ngày nghỉ vào lịch năm học!`,
+    };
+  }
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;
