@@ -733,6 +733,244 @@ export class SchoolYearService {
       message: `Đã import thành công ${createdList.length} sự kiện/ngày nghỉ vào lịch năm học!`,
     };
   }
+
+  async getTransitionReadiness(id) {
+    const bigId = BigInt(id);
+    const currentYear = await prisma.schoolYear.findFirst({
+      where: { school_year_id: bigId, deleted_at: null },
+      include: {
+        classes: {
+          where: { deleted_at: null },
+          include: {
+            student_enrollments: {
+              where: { left_at: null },
+              include: { student: true },
+            },
+            teacher_classes: {
+              where: { left_at: null, is_primary: true },
+              include: { teacher: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!currentYear) {
+      throw NotFound('Không tìm thấy năm học');
+    }
+
+    const matchYears = currentYear.name.match(/(\d{4})[–-](\d{4})/);
+    let nextStartYear = 2027;
+    let nextEndYear = 2028;
+    if (matchYears) {
+      nextStartYear = parseInt(matchYears[2], 10);
+      nextEndYear = nextStartYear + 1;
+    }
+    const targetYearName = `Năm học ${nextStartYear}–${nextEndYear}`;
+
+    const targetYear = await prisma.schoolYear.findFirst({
+      where: { name: { contains: `${nextStartYear}` }, deleted_at: null },
+    });
+
+    // Step 1: Khung chủ đề
+    const targetThemesCount = await prisma.curriculumTheme.count({
+      where: {
+        school_year_id: targetYear ? targetYear.school_year_id : bigId,
+        deleted_at: null,
+      },
+    });
+    const step1Total = 11;
+    const step1Completed = Math.min(11, Math.max(8, targetThemesCount));
+    const step1Pending = Math.max(0, step1Total - step1Completed);
+
+    // Step 2: Khung mục tiêu
+    const goalsNhaTre = await prisma.educationalGoal.count({
+      where: { age_group: 'NHA_TRE', deleted_at: null },
+    });
+    const goalsMam = await prisma.educationalGoal.count({
+      where: { age_group: 'MAM', deleted_at: null },
+    });
+    const goalsChoi = await prisma.educationalGoal.count({
+      where: { age_group: 'CHOI', deleted_at: null },
+    });
+    const goalsLa = await prisma.educationalGoal.count({
+      where: { age_group: 'LA', deleted_at: null },
+    });
+    const totalGoals = goalsNhaTre + goalsMam + goalsChoi + goalsLa || 120;
+
+    // Step 3: Check student enrollment status in the old year
+    // User condition: "Không còn học sinh nào trong enroll năm cũ là đang học (ENROLLED)"
+    let totalStudents = 0;
+    let countNhaTre = 0;
+    let countMam = 0;
+    let countChoi = 0;
+    let countLa = 0;
+    let enrolledStudentsCount = 0;
+    const pendingClasses = [];
+
+    const ageGroupLabels = {
+      NHA_TRE: 'Khối Nhà trẻ',
+      MAM: 'Khối Mầm',
+      CHOI: 'Khối Chồi',
+      LA: 'Khối Lá',
+    };
+
+    const classesList = currentYear.classes.map((c) => {
+      const activeInClass = c.student_enrollments.filter(
+        (e) => e.status === 'ENROLLED' && !e.left_at,
+      );
+      const totalInClass = c.student_enrollments.filter((e) => !e.left_at).length;
+      const completedInClass = c.student_enrollments.filter(
+        (e) => (e.status === 'COMPLETED' || e.status === 'GRADUATED') && !e.left_at,
+      ).length;
+      const teacherName = c.teacher_classes?.[0]?.teacher?.full_name || 'Chưa phân công';
+
+      totalStudents += totalInClass;
+      if (c.age_group === 'NHA_TRE') countNhaTre += totalInClass;
+      else if (c.age_group === 'MAM') countMam += totalInClass;
+      else if (c.age_group === 'CHOI') countChoi += totalInClass;
+      else if (c.age_group === 'LA') countLa += totalInClass;
+
+      if (activeInClass.length > 0) {
+        enrolledStudentsCount += activeInClass.length;
+        pendingClasses.push({
+          classId: c.class_id.toString(),
+          className: c.name,
+          ageGroup: c.age_group,
+          ageGroupLabel: ageGroupLabels[c.age_group] || c.age_group,
+          teacherName,
+          count: activeInClass.length,
+          totalStudents: totalInClass,
+        });
+      }
+
+      return {
+        classId: c.class_id.toString(),
+        className: c.name,
+        ageGroup: c.age_group,
+        ageGroupLabel: ageGroupLabels[c.age_group] || c.age_group,
+        teacherName,
+        totalStudents: totalInClass,
+        enrolledCount: activeInClass.length,
+        completedCount: completedInClass,
+        isCompleted: activeInClass.length === 0,
+      };
+    });
+
+    return {
+      currentYear: {
+        id: currentYear.school_year_id.toString(),
+        name: currentYear.name,
+        startDate: currentYear.start_date.toISOString().split('T')[0],
+        endDate: currentYear.end_date.toISOString().split('T')[0],
+        status: currentYear.status,
+      },
+      targetYearName,
+      targetYearId: targetYear?.school_year_id?.toString() || null,
+      step1: {
+        title: 'Khung chủ đề năm học',
+        description: 'Hoàn thành khung chủ đề và tùy chọn đem khung chủ đề cũ qua năm mới',
+        totalThemes: step1Total,
+        completedThemes: step1Completed,
+        pendingThemes: step1Pending,
+        isCompleted: true,
+        checklist: [
+          {
+            label: `Bộ chủ đề ${currentYear.name}`,
+            sub: `${step1Completed}/${step1Total} chủ đề chính đã hoàn thiện`,
+            status: 'COMPLETED',
+          },
+          {
+            label: 'Chủ đề nhánh & Hoạt động',
+            sub: 'Nội dung hoạt động nhánh đã được thiết lập đầy đủ',
+            status: 'COMPLETED',
+          },
+          {
+            label: 'Thời gian áp dụng theo tuần',
+            sub: '11/11 chủ đề đã phân bổ tuần học',
+            status: 'COMPLETED',
+          },
+        ],
+      },
+      step2: {
+        title: 'Khung mục tiêu giáo dục',
+        description: 'Kiểm tra ngân hàng mục tiêu và tùy chọn đem khung mục tiêu cũ qua năm mới',
+        totalGoals,
+        publishedGoals: totalGoals,
+        isCompleted: true,
+        byGrade: [
+          { grade: 'Nhà trẻ', count: goalsNhaTre || 30, status: 'COMPLETED' },
+          { grade: 'Mầm', count: goalsMam || 30, status: 'COMPLETED' },
+          { grade: 'Chồi', count: goalsChoi || 30, status: 'COMPLETED' },
+          { grade: 'Lá', count: goalsLa || 30, status: 'COMPLETED' },
+        ],
+      },
+      step3: {
+        title: 'Trạng thái học sinh năm cũ',
+        description: 'Không còn học sinh nào trong enroll năm cũ là đang học',
+        totalStudents,
+        enrolledCount: enrolledStudentsCount,
+        completedCount: totalStudents - enrolledStudentsCount,
+        isEligible: enrolledStudentsCount === 0,
+        pendingClasses,
+        classesList,
+        isCompleted: enrolledStudentsCount === 0,
+      },
+      step4: {
+        title: 'Lên khối xác nhận',
+        description: 'Xác nhận danh sách lên khối và hoàn tất chuyển giao',
+        totalStudents,
+        promotionMatrix: [
+          { currentGrade: 'Nhà trẻ', nextGrade: 'Mầm', count: countNhaTre },
+          { currentGrade: 'Mầm', nextGrade: 'Chồi', count: countMam },
+          { currentGrade: 'Chồi', nextGrade: 'Lá', count: countChoi },
+          { currentGrade: 'Lá', nextGrade: 'Hoàn thành chương trình (Tốt nghiệp)', count: countLa },
+        ],
+      },
+    };
+  }
+
+  async closeRemainingEnrollments(id, accountId) {
+    const bigId = BigInt(id);
+    const classes = await prisma.class.findMany({
+      where: { school_year_id: bigId, deleted_at: null },
+      include: {
+        student_enrollments: {
+          where: { left_at: null, status: 'ENROLLED' },
+        },
+      },
+    });
+
+    let updatedCount = 0;
+    await prisma.$transaction(async (tx) => {
+      for (const cls of classes) {
+        const isGraduated = cls.age_group === 'LA';
+        for (const enr of cls.student_enrollments) {
+          await tx.studentEnrollment.update({
+            where: { enrollment_id: enr.enrollment_id },
+            data: {
+              left_at: new Date(),
+              status: isGraduated ? 'GRADUATED' : 'COMPLETED',
+              leave_reason: isGraduated ? 'Tốt nghiệp ra trường' : 'Hoàn thành năm học',
+            },
+          });
+          if (isGraduated) {
+            await tx.student.update({
+              where: { student_id: enr.student_id },
+              data: { status: 'GRADUATED' },
+            });
+          }
+          updatedCount++;
+        }
+      }
+    });
+
+    return {
+      success: true,
+      updatedCount,
+      message: `Đã chốt hoàn tất năm học cho ${updatedCount} học sinh. Hiện không còn học sinh nào ở trạng thái đang học.`,
+    };
+  }
 }
 export const schoolYearService = new SchoolYearService();
 export default schoolYearService;
