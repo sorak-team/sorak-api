@@ -63,3 +63,9 @@ export const deleteHoliday = async (req, res) => {
   res.success(result);
 };
 
+export const importHolidays = async (req, res) => {
+  const { id } = req.params;
+  const result = await schoolYearService.importHolidays(id, req.user?.sub, req.body.items || req.body);
+  res.success(result);
+};
+
