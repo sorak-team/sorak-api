@@ -2477,6 +2477,18 @@ export default planningService;export class PlanningService {
       return { success: true, slotId };
     }
 
+  async generateActivityAi({ title, domain, goalCode, contentTitle }) {
+      const cleanTitle = title || 'Hoạt động giáo dục mầm non';
+      const ctx = contentTitle ? `Nội dung: ${contentTitle}. ` : '';
+  
+      return {
+        objective: `Trẻ hào hứng tham gia hoạt động "${cleanTitle}". ${ctx}Phát triển kỹ năng nhận biết, khả năng ngôn ngữ và thói quen sinh hoạt tốt theo lứa tuổi.`,
+        preparation: `Hình ảnh, tranh minh hoạ và đồ chơi trực quan liên quan đến "${cleanTitle}". Loa bluetooth, phách tre và không gian lớp học sạch sẽ, an toàn.`,
+        procedure: `1. Ổn định và gây hứng thú: Cho trẻ hát bài hát hoặc nghe câu đố ngắn.\n2. Nội dung trọng tâm: Hướng dẫn trẻ quan sát, gọi tên và đàm thoại về nội dung hoạt động.\n3. Trò chơi vận động / củng cố: Tổ chức trò chơi gắn với nội dung vừa học.\n4. Kết thúc và nhận xét: Tuyên dương trẻ chăm ngoan và chuyển hoạt động tiếp theo.`,
+        evaluation: `Đa số trẻ tham gia hào hứng, trả lời được câu hỏi của cô và đạt yêu cầu bài dạy.`,
+      };
+    }
+
 }
 export const planningService = new PlanningService();
 export default planningService;
