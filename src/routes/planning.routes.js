@@ -10,6 +10,7 @@ router.use(authMiddleware);
 router.get('/classes/:classId/activities', planningController.getThemeActivities);
 router.post('/classes/:classId/activities', planningController.saveEducationalActivity);
 router.delete('/classes/:classId/activities/:activityId', planningController.deleteEducationalActivity);
+router.get('/classes/:classId/timetable', planningController.getWeeklyTimetable);
 
 
 // Tab 1: Educational Activities by Theme
