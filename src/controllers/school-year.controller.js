@@ -51,3 +51,15 @@ export const createHoliday = async (req, res) => {
   res.status(201).success(result);
 };
 
+export const updateHoliday = async (req, res) => {
+  const { id, holidayId } = req.params;
+  const result = await schoolYearService.updateHoliday(id, holidayId, req.user?.sub, req.body);
+  res.success(result);
+};
+
+export const deleteHoliday = async (req, res) => {
+  const { id, holidayId } = req.params;
+  const result = await schoolYearService.deleteHoliday(id, holidayId);
+  res.success(result);
+};
+
