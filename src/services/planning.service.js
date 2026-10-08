@@ -2751,6 +2751,95 @@ export default planningService;export class PlanningService {
       };
     }
 
+  async saveTargetAllocation({ classId, themeId, themeCode, branchId, goalIds }) {
+      const targetClass = await this.resolveClass(classId);
+      if (!targetClass) throw new NotFound('Không tìm thấy lớp học');
+  
+      let resolvedThemeId = null;
+      if (themeId) {
+        const isNum = typeof themeId === 'number' || (typeof themeId === 'string' && /^\d+$/.test(String(themeId).trim()));
+        if (isNum) {
+          resolvedThemeId = BigInt(themeId);
+        } else {
+          const th = await prisma.curriculumTheme.findFirst({
+            where: { public_id: String(themeId), deleted_at: null },
+            select: { theme_id: true },
+          });
+          if (th) resolvedThemeId = th.theme_id;
+        }
+      } else if (themeCode) {
+        const themes = await prisma.curriculumTheme.findMany({
+          where: {
+            school_year_id: targetClass.school_year_id,
+            age_group: targetClass.age_group,
+            deleted_at: null,
+          },
+          orderBy: [{ start_date: 'asc' }, { theme_id: 'asc' }],
+        });
+        const idx = parseInt(themeCode, 10) - 1;
+        if (idx >= 0 && idx < themes.length) {
+          resolvedThemeId = themes[idx].theme_id;
+        }
+      }
+  
+      if (!resolvedThemeId) {
+        throw new BadRequest('Chủ đề không hợp lệ');
+      }
+  
+      let validGoalIds = [];
+      if (Array.isArray(goalIds) && goalIds.length > 0) {
+        const rawIds = goalIds.map((id) => String(id).trim()).filter(Boolean);
+        const numericIds = rawIds.filter((id) => /^\d+$/.test(id)).map((id) => BigInt(id));
+        const uuidIds = rawIds.filter((id) => !/^\d+$/.test(id));
+  
+        const matchedGoals = await prisma.educationalGoal.findMany({
+          where: {
+            OR: [
+              ...(numericIds.length > 0 ? [{ goal_id: { in: numericIds } }] : []),
+              ...(uuidIds.length > 0 ? [{ public_id: { in: uuidIds } }] : []),
+            ],
+          },
+          select: { goal_id: true },
+        });
+        validGoalIds = matchedGoals.map((g) => g.goal_id);
+      }
+  
+      // Atomically persist to PostgreSQL class_theme_goals
+      await prisma.$transaction(async (tx) => {
+        await tx.classThemeGoal.deleteMany({
+          where: {
+            class_id: targetClass.class_id,
+            theme_id: resolvedThemeId,
+          },
+        });
+  
+        if (validGoalIds.length > 0) {
+          await tx.classThemeGoal.createMany({
+            data: validGoalIds.map((gId) => ({
+              class_id: targetClass.class_id,
+              theme_id: resolvedThemeId,
+              goal_id: gId,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      });
+  
+      const themeRecord = await prisma.curriculumTheme.findUnique({
+        where: { theme_id: resolvedThemeId },
+        select: { public_id: true },
+      });
+  
+      return {
+        success: true,
+        classId: targetClass.public_id || targetClass.class_id.toString(),
+        themeId: themeRecord?.public_id || resolvedThemeId.toString(),
+        themeCode: themeCode || '01',
+        branchId,
+        allocatedCount: validGoalIds.length,
+      };
+    }
+
 }
 export const planningService = new PlanningService();
 export default planningService;
