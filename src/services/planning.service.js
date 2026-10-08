@@ -2840,6 +2840,10 @@ export default planningService;export class PlanningService {
       };
     }
 
+  async publishAllocation({ classId }) {
+      return { success: true, status: 'PUBLISHED', statusLabel: 'Đã công bố' };
+    }
+
 }
 export const planningService = new PlanningService();
 export default planningService;
