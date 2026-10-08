@@ -164,6 +164,26 @@ class PlanningController {
       }
     }
 
+  async publishAllocation(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const data = await planningService.publishAllocation({ classId });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
+  async queryAiAllocation(req, res, next) {
+      try {
+        const { prompt, themeName } = req.body;
+        const data = await planningService.queryAiAllocation({ prompt, themeName });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const planningController = new PlanningController();
 export default planningController;
