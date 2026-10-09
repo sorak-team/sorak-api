@@ -19,6 +19,7 @@ router.get('/classes/:classId/allocation', planningController.getTargetAllocatio
 router.post('/classes/:classId/allocation', planningController.saveTargetAllocation);
 router.post('/classes/:classId/allocation/publish', planningController.publishAllocation);
 router.post('/ai/allocation', planningController.queryAiAllocation);
+router.post('/ai/generate-activity', planningController.generateActivityAi);
 
 
 // Tab 1: Educational Activities by Theme
