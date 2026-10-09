@@ -12,14 +12,6 @@ router.post('/classes/:classId/activities', planningController.saveEducationalAc
 router.delete('/classes/:classId/activities/:activityId', planningController.deleteEducationalActivity);
 router.get('/classes/:classId/timetable', planningController.getWeeklyTimetable);
 router.post('/classes/:classId/timetable/assign-activity', planningController.assignActivityToSlot);
-router.post('/classes/:classId/timetable/slots', planningController.saveWeeklySlot);
-router.post('/classes/:classId/timetable/reorder', planningController.reorderWeeklySlots);
-router.delete('/classes/:classId/timetable/slots/:slotId', planningController.deleteWeeklySlot);
-router.get('/classes/:classId/allocation', planningController.getTargetAllocation);
-router.post('/classes/:classId/allocation', planningController.saveTargetAllocation);
-router.post('/classes/:classId/allocation/publish', planningController.publishAllocation);
-router.post('/ai/allocation', planningController.queryAiAllocation);
-router.post('/ai/generate-activity', planningController.generateActivityAi);
 
 
 // Tab 1: Educational Activities by Theme
