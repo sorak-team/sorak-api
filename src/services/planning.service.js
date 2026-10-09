@@ -2844,6 +2844,17 @@ export default planningService;export class PlanningService {
       return { success: true, status: 'PUBLISHED', statusLabel: 'Đã công bố' };
     }
 
+  async queryAiAllocation({ prompt, themeName }) {
+      return {
+        reply: `Đã phân tích và đề xuất phân bổ mục tiêu phù hợp với chủ đề ${themeName || 'được chọn'}.`,
+        proposals: [
+          { branchName: 'Chủ đề nhánh 1', goalsCount: 5 },
+          { branchName: 'Chủ đề nhánh 2', goalsCount: 6 },
+          { branchName: 'Chủ đề nhánh 3', goalsCount: 5 },
+        ],
+      };
+    }
+
 }
 export const planningService = new PlanningService();
 export default planningService;
