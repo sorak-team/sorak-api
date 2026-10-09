@@ -2412,6 +2412,36 @@ export default planningService;export class PlanningService {
       return slot;
     }
 
+  async reorderWeeklySlots({ classId, slots = [] }) {
+      if (!Array.isArray(slots) || slots.length === 0) {
+        return { success: true, updatedCount: 0 };
+      }
+  
+      const updates = [];
+      for (const item of slots) {
+        if (item.id && !isNaN(Number(item.id))) {
+          const orderVal = item.orderIndex !== undefined ? item.orderIndex : item.order_index;
+          if (orderVal !== undefined && !isNaN(Number(orderVal))) {
+            updates.push(
+              prisma.subThemeActivity.update({
+                where: { id: BigInt(item.id) },
+                data: {
+                  order_index: Number(orderVal),
+                  updated_at: new Date(),
+                },
+              })
+            );
+          }
+        }
+      }
+  
+      if (updates.length > 0) {
+        await prisma.$transaction(updates);
+      }
+  
+      return { success: true, updatedCount: updates.length };
+    }
+
 }
 export const planningService = new PlanningService();
 export default planningService;

@@ -12,6 +12,7 @@ router.post('/classes/:classId/activities', planningController.saveEducationalAc
 router.delete('/classes/:classId/activities/:activityId', planningController.deleteEducationalActivity);
 router.get('/classes/:classId/timetable', planningController.getWeeklyTimetable);
 router.post('/classes/:classId/timetable/assign-activity', planningController.assignActivityToSlot);
+router.post('/classes/:classId/timetable/slots', planningController.saveWeeklySlot);
 
 
 // Tab 1: Educational Activities by Theme
