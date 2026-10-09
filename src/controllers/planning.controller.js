@@ -137,6 +137,16 @@ class PlanningController {
       }
     }
 
+  async getTargetAllocation(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const data = await planningService.getTargetAllocation({ classId });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const planningController = new PlanningController();
 export default planningController;
