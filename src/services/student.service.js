@@ -670,6 +670,97 @@ export class StudentService {
 
     return { success: true, message: 'Đã xóa thông tin phụ huynh' };
   }
+
+  async transferStudent(
+    id,
+    { fromClassId, toClassId, transferDate = new Date(), reason, autoApprove = false },
+    creatorAccountId,
+  ) {
+    const student = await prisma.student.findFirst({
+      where: { ...this._parseId(id), deleted_at: null },
+    });
+    if (!student) throw new NotFound('Hồ sơ học sinh không tồn tại');
+
+    const fromClass = await this._findClass(fromClassId);
+    if (!fromClass) throw new NotFound('Lớp chuyển đi không tồn tại');
+
+    const toClass = await this._findClass(toClassId);
+    if (!toClass) throw new NotFound('Lớp chuyển đến không tồn tại');
+
+    if (fromClass.class_id === toClass.class_id) {
+      throw new BadRequest('Lớp chuyển đi và lớp chuyển đến không được trùng nhau');
+    }
+
+    let creatorId = creatorAccountId;
+    if (!creatorId) {
+      const defaultAdmin = await prisma.account.findFirst({ where: { role: 'PRINCIPAL_BGH' } });
+      creatorId = defaultAdmin?.account_id || 1n;
+    }
+
+    const tDate = new Date(transferDate);
+
+    if (autoApprove) {
+      await prisma.$transaction(async (tx) => {
+        // 1. Close active enrollment in from_class
+        await tx.studentEnrollment.updateMany({
+          where: {
+            student_id: student.student_id,
+            class_id: fromClass.class_id,
+            left_at: null,
+          },
+          data: { left_at: tDate, status: 'TRANSFERRED_CLASS', leave_reason: reason || 'Chuyển lớp' },
+        });
+
+        // 2. Open new enrollment in to_class
+        await tx.studentEnrollment.create({
+          data: {
+            student_id: student.student_id,
+            class_id: toClass.class_id,
+            enrolled_at: tDate,
+            status: 'ENROLLED',
+          },
+        });
+
+        // 3. Create ClassTransfer audit log as APPROVED
+        await tx.classTransfer.create({
+          data: {
+            student_id: student.student_id,
+            from_class_id: fromClass.class_id,
+            to_class_id: toClass.class_id,
+            transfer_date: tDate,
+            reason: reason || null,
+            created_by: BigInt(creatorId),
+            status: 'APPROVED',
+            approved_by: BigInt(creatorId),
+            approved_at: tDate,
+          },
+        });
+      });
+
+      logger.info(
+        `[StudentService] Transferred student ${student.student_code} from class ${fromClass.name} to ${toClass.name}`,
+      );
+    } else {
+      // Create transfer request as PENDING without touching current student enrollment
+      await prisma.classTransfer.create({
+        data: {
+          student_id: student.student_id,
+          from_class_id: fromClass.class_id,
+          to_class_id: toClass.class_id,
+          transfer_date: tDate,
+          reason: reason || null,
+          created_by: BigInt(creatorId),
+          status: 'PENDING',
+        },
+      });
+
+      logger.info(
+        `[StudentService] Created PENDING transfer request for student ${student.student_code} from class ${fromClass.name} to ${toClass.name}`,
+      );
+    }
+
+    return this.getStudentById(student.student_id.toString());
+  }
 }
 export const studentService = new StudentService();
 export default studentService;
