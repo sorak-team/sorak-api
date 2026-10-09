@@ -95,6 +95,20 @@ class PlanningController {
       }
     }
 
+  async reorderWeeklySlots(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const { slots } = req.body;
+        const data = await planningService.reorderWeeklySlots({
+          classId,
+          slots,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const planningController = new PlanningController();
 export default planningController;
