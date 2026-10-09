@@ -2489,6 +2489,268 @@ export default planningService;export class PlanningService {
       };
     }
 
+  async getTargetAllocation({ classId }) {
+      const targetClass = await this.resolveClass(classId);
+  
+      const themes = await prisma.curriculumTheme.findMany({
+        where: {
+          school_year_id: targetClass.school_year_id,
+          age_group: targetClass.age_group,
+          deleted_at: null,
+        },
+        include: {
+          sub_themes: {
+            where: { deleted_at: null },
+            include: {
+              activities: {
+                where: { class_id: targetClass.class_id },
+                include: {
+                  activity: {
+                    include: {
+                      content: {
+                        include: {
+                          goal: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            orderBy: [{ start_date: 'asc' }, { sub_theme_id: 'asc' }],
+          },
+        },
+        orderBy: [{ start_date: 'asc' }, { theme_id: 'asc' }],
+      });
+  
+      const allGoals = await prisma.educationalGoal.findMany({
+        where: {
+          school_year_id: targetClass.school_year_id,
+          age_group: targetClass.age_group,
+          deleted_at: null,
+        },
+        include: {
+          contents: {
+            where: { deleted_at: null },
+            orderBy: { content_id: 'asc' },
+          },
+        },
+        orderBy: [{ domain: 'asc' }, { goal_code: 'asc' }],
+      });
+  
+      const formatGoal = (g) => ({
+        id: g.public_id || g.goal_id.toString(),
+        code: g.goal_code + (g.indicator_code ? ` (${g.indicator_code})` : ''),
+        title: g.title,
+        domain: g.domain,
+        domainLabel: DOMAIN_LABELS[g.domain] || g.domain,
+        contents: (g.contents || []).map((c) => ({
+          id: c.public_id || c.content_id.toString(),
+          title: c.title,
+        })),
+      });
+  
+      const AGE_GROUP_LABELS = {
+        NHA_TRE: 'Khối Nhà Trẻ (24–36T)',
+        MAM: 'Khối Lớp Mầm (3–4T)',
+        CHOI: 'Khối Lớp Chồi (4–5T)',
+        LA: 'Khối Lớp Lá (5–6T)',
+      };
+  
+      // Load real persisted allocations from PostgreSQL
+      let dbAllocations = await prisma.classThemeGoal.findMany({
+        where: {
+          class_id: targetClass.class_id,
+        },
+        include: {
+          goal: {
+            include: {
+              contents: {
+                where: { deleted_at: null },
+                orderBy: { content_id: 'asc' },
+              },
+            },
+          },
+        },
+      });
+  
+      // If completely empty for this class, auto-initialize default allocations into PostgreSQL
+      if (dbAllocations.length === 0 && themes.length > 0 && allGoals.length > 0) {
+        const initialInserts = [];
+        themes.forEach((t, idx) => {
+          const goalsPerTheme = Math.max(10, Math.min(16, Math.ceil(allGoals.length / themes.length) + 3));
+          const offset = (idx * 11) % allGoals.length;
+          for (let k = 0; k < goalsPerTheme; k++) {
+            const g = allGoals[(offset + k) % allGoals.length];
+            if (g) {
+              initialInserts.push({
+                class_id: targetClass.class_id,
+                theme_id: t.theme_id,
+                goal_id: g.goal_id,
+              });
+            }
+          }
+        });
+        if (initialInserts.length > 0) {
+          await prisma.classThemeGoal.createMany({
+            data: initialInserts,
+            skipDuplicates: true,
+          });
+          dbAllocations = await prisma.classThemeGoal.findMany({
+            where: { class_id: targetClass.class_id },
+            include: {
+              goal: {
+                include: {
+                  contents: {
+                    where: { deleted_at: null },
+                    orderBy: { content_id: 'asc' },
+                  },
+                },
+              },
+            },
+          });
+        }
+      }
+  
+      // Group allocations by theme_id (as string)
+      const dbAllocationsByTheme = new Map();
+      dbAllocations.forEach((alloc) => {
+        const tId = alloc.theme_id.toString();
+        if (!dbAllocationsByTheme.has(tId)) {
+          dbAllocationsByTheme.set(tId, []);
+        }
+        dbAllocationsByTheme.get(tId).push(alloc);
+      });
+  
+      let globalWeekIndex = 1;
+      const publishedThemes = themes.map((t, idx) => {
+        const code = String(idx + 1).padStart(2, '0');
+        const startStr = t.start_date.toISOString().slice(0, 10);
+        const endStr = t.end_date.toISOString().slice(0, 10);
+  
+        // Collect goals for each sub-theme
+        const themeGoalMap = new Map();
+        const subThemes = t.sub_themes.map((st) => {
+          const weekNum = globalWeekIndex++;
+          const stStart = st.start_date.toISOString().slice(0, 10);
+          const stEnd = st.end_date.toISOString().slice(0, 10);
+  
+          const branchGoalMap = new Map();
+          st.activities.forEach((sta) => {
+            const g = sta.activity?.content?.goal;
+            if (g) {
+              const fullGoal = allGoals.find((ag) => ag.goal_id.toString() === g.goal_id.toString()) || g;
+              const goalObj = formatGoal(fullGoal);
+              branchGoalMap.set(g.goal_id.toString(), goalObj);
+              themeGoalMap.set(g.goal_id.toString(), goalObj);
+            }
+          });
+  
+          return {
+            id: st.public_id || st.sub_theme_id.toString(),
+            name: st.name,
+            startDate: stStart,
+            endDate: stEnd,
+            weekLabel: `${stStart.split('-').reverse().slice(0, 2).join('/')} – ${stEnd.split('-').reverse().slice(0, 2).join('/')} · Tuần ${weekNum}`,
+            count: branchGoalMap.size,
+            allocatedGoals: Array.from(branchGoalMap.values()),
+          };
+        });
+  
+        // Check if user has explicitly saved allocations for this theme in PostgreSQL
+        const savedRecords = dbAllocationsByTheme.get(t.theme_id.toString()) || [];
+  
+        if (savedRecords.length > 0) {
+          themeGoalMap.clear();
+          savedRecords.forEach((rec) => {
+            if (rec.goal) {
+              themeGoalMap.set(rec.goal.goal_id.toString(), formatGoal(rec.goal));
+            }
+          });
+        } else if (themeGoalMap.size === 0 && allGoals.length > 0) {
+          // Fallback distribution if not in DB and no activities
+          const goalsPerTheme = Math.max(10, Math.min(16, Math.ceil(allGoals.length / themes.length) + 3));
+          const offset = (idx * 11) % allGoals.length;
+          for (let k = 0; k < goalsPerTheme; k++) {
+            const g = allGoals[(offset + k) % allGoals.length];
+            if (g && !themeGoalMap.has(g.goal_id.toString())) {
+              themeGoalMap.set(g.goal_id.toString(), formatGoal(g));
+            }
+          }
+        }
+  
+        const allocatedGoals = Array.from(themeGoalMap.values());
+  
+        // Domain breakdown for this theme
+        const domainCounts = {
+          PHYSICAL: 0,
+          COGNITIVE: 0,
+          LANGUAGE: 0,
+          SOCIO_EMOTIONAL: 0,
+          AESTHETIC: 0,
+        };
+        allocatedGoals.forEach((g) => {
+          if (domainCounts[g.domain] !== undefined) {
+            domainCounts[g.domain]++;
+          }
+        });
+  
+        return {
+          id: t.public_id || t.theme_id.toString(),
+          code,
+          name: t.name,
+          startDate: startStr,
+          endDate: endStr,
+          status: t.status,
+          statusLabel: t.status === 'PUBLISHED' ? 'Đã công bố' : 'Bản nháp',
+          dateRange: `${startStr.split('-').reverse().slice(0, 2).join('/')} – ${endStr.split('-').reverse().slice(0, 2).join('/')}`,
+          weeksCount: t.sub_themes.length,
+          subThemes,
+          allocatedGoals,
+          count: allocatedGoals.length,
+          domainCounts,
+        };
+      });
+  
+      const firstTheme = publishedThemes[0] || null;
+  
+      const bankGoals = allGoals.map((g) => {
+        const gId = g.public_id || g.goal_id.toString();
+        const internalGId = g.goal_id.toString();
+        const allocatedThemes = publishedThemes
+          .filter((th) => th.allocatedGoals.some((ag) => ag.id === gId || ag.id === internalGId))
+          .map((th) => ({ id: th.id, code: th.code, name: th.name }));
+  
+        return {
+          id: gId,
+          code: g.goal_code + (g.indicator_code ? ` (${g.indicator_code})` : ''),
+          title: g.title,
+          domain: g.domain,
+          domainLabel: DOMAIN_LABELS[g.domain] || g.domain,
+          contents: (g.contents || []).map((c) => ({
+            id: c.public_id || c.content_id.toString(),
+            title: c.title,
+          })),
+          allocatedThemes,
+          allocatedThemeCodes: allocatedThemes.map((th) => th.code),
+          selected: false,
+        };
+      });
+  
+      return {
+        publishedThemes,
+        selectedTheme: firstTheme,
+        bankGoals,
+        classInfo: {
+          id: targetClass.public_id || targetClass.class_id.toString(),
+          name: targetClass.name,
+          ageGroup: targetClass.age_group,
+          ageGroupLabel: AGE_GROUP_LABELS[targetClass.age_group] || targetClass.age_group,
+          yearName: targetClass.school_year?.name || 'Năm học 2026–2027',
+        },
+      };
+    }
+
 }
 export const planningService = new PlanningService();
 export default planningService;
