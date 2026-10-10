@@ -9,6 +9,7 @@ import curriculumRouter from './curriculum.routes.js';
 import planningRouter from './planning.routes.js';
 import attendanceRouter from './attendance.routes.js';
 import healthRouter from './health.routes.js';
+import uploadRouter from './upload.routes.js';
 
 const router = Router();
 
@@ -22,5 +23,6 @@ router.use('/curriculum', curriculumRouter);
 router.use('/planning', planningRouter);
 router.use('/attendance', attendanceRouter);
 router.use('/health', healthRouter);
+router.use('/upload', uploadRouter);
 
 export default router;
