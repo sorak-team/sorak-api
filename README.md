@@ -55,16 +55,19 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for architectural rules, layer definiti
 ### Setup
 
 1. Copy `.env.example` to `.env` and fill in your values:
+
    ```bash
    cp .env.example .env
    ```
 
 2. Install dependencies:
+
    ```bash
    npm install
    ```
 
 3. Generate Prisma client & apply migrations:
+
    ```bash
    npm run prisma:generate
    npm run prisma:migrate
