@@ -761,6 +761,45 @@ export class StudentService {
 
     return this.getStudentById(student.student_id.toString());
   }
+
+  async deleteStudent(id) {
+    const student = await prisma.student.findFirst({
+      where: { ...this._parseId(id), deleted_at: null },
+    });
+    if (!student) {
+      throw new NotFound('Hồ sơ học sinh không tồn tại');
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const now = new Date();
+
+      // 1. Soft delete student
+      await tx.student.update({
+        where: { student_id: student.student_id },
+        data: {
+          deleted_at: now,
+          status: 'DROPPED_OUT',
+        },
+      });
+
+      // 2. Close active enrollments
+      await tx.studentEnrollment.updateMany({
+        where: { student_id: student.student_id, left_at: null },
+        data: { left_at: now, status: 'DROPPED_OUT', leave_reason: 'Thôi học' },
+      });
+
+      // 3. Deactivate associated account if exists
+      if (student.account_id) {
+        await tx.account.update({
+          where: { account_id: student.account_id },
+          data: { is_active: false, deleted_at: now },
+        });
+      }
+    });
+
+    logger.info(`[StudentService] Soft deleted student ID: ${student.student_id}`);
+    return { success: true, message: 'Đã xóa hồ sơ học sinh thành công' };
+  }
 }
 export const studentService = new StudentService();
 export default studentService;
