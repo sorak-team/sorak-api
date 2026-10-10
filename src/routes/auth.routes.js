@@ -43,10 +43,6 @@ router.post('/logout', asyncHandler(logout));
 router.get('/me', authMiddleware, asyncHandler(getMe));
 router.get('/sessions', authMiddleware, asyncHandler(getSessions));
 router.delete('/sessions/others', authMiddleware, asyncHandler(revokeOtherSessions));
-router.delete('/sessions', authMiddleware, asyncHandler(revokeAllSessions));
-router.delete('/sessions/:sessionId', authMiddleware, asyncHandler(revokeSession));
-router.post('/2fa/request-enable', authMiddleware, asyncHandler(requestEnable2FA));
-router.post(
 
 
 // Protected Profile & Security Endpoints
