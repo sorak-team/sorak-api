@@ -40,6 +40,17 @@ class AssessmentController {
       }
     }
 
+  async getMonthlyAssessments(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const { month, year } = req.query;
+        const data = await assessmentService.getMonthlyAssessments({ classId, month, year });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const assessmentController = new AssessmentController();
 export default assessmentController;
