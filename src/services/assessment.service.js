@@ -1021,6 +1021,28 @@ export default assessmentService;export class AssessmentService {
       return defaultClass;
     }
 
+  async getEnrolledStudents(classId) {
+      const enrollments = await prisma.studentEnrollment.findMany({
+        where: {
+          class_id: classId,
+          student: { deleted_at: null },
+        },
+        include: {
+          student: true,
+        },
+        orderBy: { student: { student_code: 'asc' } },
+      });
+  
+      return enrollments.map((e) => ({
+        _student_id: e.student.student_id,
+        id: e.student.public_id || e.student.student_id.toString(),
+        publicId: e.student.public_id,
+        code: e.student.student_code,
+        name: e.student.full_name,
+        gender: e.student.gender,
+      }));
+    }
+
 }
 export const assessmentService = new AssessmentService();
 export default assessmentService;
