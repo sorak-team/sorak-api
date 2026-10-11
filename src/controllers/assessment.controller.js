@@ -51,6 +51,24 @@ class AssessmentController {
       }
     }
 
+  async saveMonthlyAssessments(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const { month, year, records } = req.body;
+        const evaluatedBy = req.user?.accountId || req.user?.id || 1;
+        const data = await assessmentService.saveMonthlyAssessments({
+          classId,
+          month,
+          year,
+          records,
+          evaluatedBy,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const assessmentController = new AssessmentController();
 export default assessmentController;
