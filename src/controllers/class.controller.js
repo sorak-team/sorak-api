@@ -34,21 +34,9 @@ export const assignTeacher = async (req, res) => {
   res.status(201).success(result);
 };
 
-export const getClassTeachers = async (req, res) => {
-  const { id } = req.params;
-  const result = await classService.getClassTeachers(id);
-  res.success(result);
-};
-
 export const removeTeacher = async (req, res) => {
   const { id, teacherId } = req.params;
   const result = await classService.removeTeacher(id, teacherId);
-  res.success(result);
-};
-
-export const updateTeacherRole = async (req, res) => {
-  const { id, teacherId } = req.params;
-  const result = await classService.updateTeacherRole(id, teacherId, req.body);
   res.success(result);
 };
 
@@ -94,31 +82,27 @@ export const importStudents = async (req, res) => {
   res.status(200).success(result);
 };
 
+export const getClassTeachers = async (req, res) => {
+  const { id } = req.params;
+  const result = await classService.getClassTeachers(id);
+  res.success(result);
+};
+
+export const updateTeacherRole = async (req, res) => {
+  const { id, teacherId } = req.params;
+  const result = await classService.updateTeacherRole(id, teacherId, req.body);
+  res.success(result);
+};
+
 export const getClassTransfers = async (req, res) => {
   const { id } = req.params;
   const result = await classService.getClassTransfers(id, req.query);
   res.success(result);
 };
 
-export const getAllTransfers = async (req, res) => {
-  const result = await classService.getAllTransfers(req.query);
-  res.success(result);
-};
-
-export const getTransferById = async (req, res) => {
-  const { transferId } = req.params;
-  const result = await classService.getTransferById(transferId);
-  res.success(result);
-};
-
 export const createTransferRequest = async (req, res) => {
   const { id } = req.params;
   const result = await classService.createTransferRequest(id, req.body, req.user?.accountId);
-  res.status(201).success(result);
-};
-
-export const createGlobalTransferRequest = async (req, res) => {
-  const result = await classService.createGlobalTransferRequest(req.body, req.user?.accountId);
   res.status(201).success(result);
 };
 
@@ -133,6 +117,22 @@ export const updateTransferStatus = async (req, res) => {
   res.success(result);
 };
 
+export const getAllTransfers = async (req, res) => {
+  const result = await classService.getAllTransfers(req.query);
+  res.success(result);
+};
+
+export const createGlobalTransferRequest = async (req, res) => {
+  const result = await classService.createGlobalTransferRequest(req.body, req.user?.accountId);
+  res.status(201).success(result);
+};
+
+export const getTransferById = async (req, res) => {
+  const { transferId } = req.params;
+  const result = await classService.getTransferById(transferId);
+  res.success(result);
+};
+
 export const getClassExportData = async (req, res) => {
   const { id } = req.params;
   const result = await classService.getClassExportData(id);
@@ -142,13 +142,6 @@ export const getClassExportData = async (req, res) => {
 export const getDailyReport = async (req, res) => {
   const { id } = req.params;
   const result = await classService.getDailyReport(id, req.query);
-  res.success(result);
-};
-
-export const getStudentReport = async (req, res) => {
-  const { id } = req.params;
-  const { studentId, semester } = req.query;
-  const result = await classService.getStudentReport(id, studentId, semester);
   res.success(result);
 };
 
@@ -165,4 +158,12 @@ export const batchSaveDailyReport = async (req, res) => {
   const result = await classService.batchSaveDailyReport(id, req.body, userId);
   res.success(result);
 };
+
+export const getStudentReport = async (req, res) => {
+  const { id } = req.params;
+  const { studentId, semester } = req.query;
+  const result = await classService.getStudentReport(id, studentId, semester);
+  res.success(result);
+};
+
 
