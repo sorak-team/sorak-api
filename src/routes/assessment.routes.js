@@ -11,6 +11,7 @@ router.post('/classes/:classId/records', assessmentController.saveAssessmentReco
 router.delete('/classes/:classId/records', assessmentController.clearAssessmentRecords);
 router.get('/classes/:classId/monthly', assessmentController.getMonthlyAssessments);
 router.post('/classes/:classId/monthly', assessmentController.saveMonthlyAssessments);
+router.get('/classes/:classId/semester', assessmentController.getSemesterAssessments);
 
 
 
