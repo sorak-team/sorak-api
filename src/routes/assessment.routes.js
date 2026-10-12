@@ -6,6 +6,7 @@ const router = Router();
 
 
 router.use(authMiddleware);
+router.get('/classes/:classId', assessmentController.getAssessmentOverview);
 
 
 
