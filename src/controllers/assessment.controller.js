@@ -80,6 +80,24 @@ class AssessmentController {
       }
     }
 
+  async saveSemesterAssessments(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const { semester, year, records } = req.body;
+        const evaluatedBy = req.user?.accountId || req.user?.id || 1;
+        const data = await assessmentService.saveSemesterAssessments({
+          classId,
+          semester,
+          year,
+          records,
+          evaluatedBy,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const assessmentController = new AssessmentController();
 export default assessmentController;
