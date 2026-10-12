@@ -17,3 +17,9 @@ export const updateThemeSetStatus = async (req, res) => {
   res.success(result);
 };
 
+export const updateThemeSetDetail = async (req, res) => {
+  const { year, ageGroup, themes, theme, note } = req.body;
+  const result = await curriculumService.updateThemeSetDetail({ year, ageGroup, themes, theme, note });
+  res.success(result);
+};
+

@@ -226,6 +226,23 @@ export class CurriculumService {
       },
     };
   }
+
+  async updateThemeSetStatus({ year = '2026–2027', ageGroup = 'nhatre', status = 'DRAFT' }) {
+    const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
+    await prisma.curriculumTheme.updateMany({
+      where: {
+        school_year_id: 1n,
+        age_group: ageGroupInfo.dbKey,
+        deleted_at: null,
+      },
+      data: {
+        status: status === 'PUBLISHED' ? 'PUBLISHED' : 'DRAFT',
+        updated_at: new Date(),
+      },
+    });
+
+    return this.getThemeSetDetail({ year, ageGroup });
+  }
 }
 export const curriculumService = new CurriculumService();
 export default curriculumService;
