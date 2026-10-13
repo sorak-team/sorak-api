@@ -550,6 +550,98 @@ export class CurriculumService {
 
     return this.getThemeSetDetail({ year, ageGroup });
   }
+
+  async listGoalBanksOverview(query = {}) {
+    const schoolYears = await prisma.schoolYear.findMany({
+      where: { deleted_at: null },
+      orderBy: { start_date: 'desc' },
+      take: 5,
+    });
+
+    const targetYear = (query.year || query.schoolYear || '').replace('–', '-').trim();
+
+    const allGoals = await prisma.educationalGoal.findMany({
+      where: { deleted_at: null },
+    });
+
+    const groups = AGE_GROUPS.map((g) => {
+      let cards = schoolYears.map((sy) => {
+        const yearName = sy.name.replace('Năm học ', '');
+        const matchingGoals = allGoals.filter(
+          (goal) => goal.school_year_id === sy.school_year_id && goal.age_group === g.dbKey
+        );
+        const uniqueDomains = new Set(matchingGoals.map((goal) => goal.domain)).size;
+
+        return {
+          id: `gb-${g.key}-${yearName.replace('–', '-')}`,
+          yearName,
+          yearId: yearName.replace('–', '-'),
+          schoolYearId: sy.school_year_id.toString(),
+          ageGroup: g.key,
+          ageGroupLabel: g.label,
+          goalCount: matchingGoals.length,
+          domainCount: uniqueDomains,
+          status: matchingGoals.length > 0 ? 'PUBLISHED' : 'DRAFT',
+          statusLabel: matchingGoals.length > 0 ? 'Đã công bố' : 'Chưa thiết lập',
+          updatedAt: matchingGoals.length > 0 ? 'Đã đồng bộ' : 'Chưa có dữ liệu',
+        };
+      });
+
+      if (targetYear) {
+        const filtered = cards.filter((c) => c.yearId === targetYear || c.yearName.replace('–', '-') === targetYear);
+        if (filtered.length > 0) {
+          cards = filtered;
+        } else {
+          const displayYear = targetYear.replace('-', '–');
+          cards = [
+            {
+              id: `gb-${g.key}-${targetYear}`,
+              yearName: displayYear,
+              yearId: targetYear,
+              ageGroup: g.key,
+              ageGroupLabel: g.label,
+              goalCount: 0,
+              domainCount: 0,
+              status: 'DRAFT',
+              statusLabel: 'Chưa thiết lập',
+              updatedAt: 'Chưa có dữ liệu',
+            },
+          ];
+        }
+      }
+
+      return {
+        key: g.key,
+        label: g.label,
+        cards,
+      };
+    });
+
+    const donutOverview = AGE_GROUPS.map((g) => {
+      const match = groups.find((grp) => grp.key === g.key);
+      const card = match?.cards?.[0];
+      const count = card?.goalCount ?? 0;
+      return {
+        key: g.key,
+        label: g.label,
+        total: count,
+        breakdown: [
+          `${card?.yearName || '2026–2027'}: ${count} mục tiêu`,
+        ],
+      };
+    });
+
+    const recentActivities = [
+      { id: 'act1', type: 'UPDATE', text: 'Cập nhật ngân hàng mục tiêu giáo dục', time: 'Hôm nay' },
+      { id: 'act2', type: 'PUBLISH', text: 'Công bố ngân hàng mục tiêu', time: 'Hôm nay' },
+    ];
+
+    return {
+      groups,
+      donutOverview,
+      recentActivities,
+    };
+  }
 }
 export const curriculumService = new CurriculumService();
 export default curriculumService;
