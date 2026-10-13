@@ -1471,6 +1471,90 @@ export default assessmentService;export class AssessmentService {
       };
     }
 
+  async saveMonthlyAssessments({ classId, month = 10, year = 2026, records = [], evaluatedBy = 40 }) {
+      const numMonth = Number(month) || 10;
+      const numYear = Number(year) || 2026;
+      const targetClass = await this.resolveClass(classId);
+      const cId = targetClass.class_id;
+  
+      let savedCount = 0;
+      if (Array.isArray(records) && records.length > 0) {
+        const rawIds = records.map((r) => String(r.studentId || r.id).trim()).filter(Boolean);
+        const numericIds = rawIds.filter((id) => /^\d+$/.test(id)).map((id) => BigInt(id));
+        const uuidIds = rawIds.filter((id) => !/^\d+$/.test(id));
+  
+        const matchedStudents = await prisma.student.findMany({
+          where: {
+            OR: [
+              ...(numericIds.length > 0 ? [{ student_id: { in: numericIds } }] : []),
+              ...(uuidIds.length > 0 ? [{ public_id: { in: uuidIds } }] : []),
+            ],
+          },
+          select: { student_id: true, public_id: true },
+        });
+  
+        const studentIdMap = new Map();
+        matchedStudents.forEach((st) => {
+          studentIdMap.set(st.student_id.toString(), st.student_id);
+          if (st.public_id) studentIdMap.set(st.public_id, st.student_id);
+        });
+  
+        for (const rec of records) {
+          const rawId = String(rec.studentId || rec.id).trim();
+          const sId = studentIdMap.get(rawId) || (/^\d+$/.test(rawId) ? BigInt(rawId) : null);
+          if (!sId) continue;
+  
+          const rosesCount = (rec.week1Rose ? 1 : 0) +
+            (rec.week2Rose ? 1 : 0) +
+            (rec.week3Rose ? 1 : 0) +
+            (rec.week4Rose ? 1 : 0) +
+            (rec.week5Rose ? 1 : 0);
+  
+          await prisma.monthlyAssessment.upsert({
+            where: {
+              student_id_month_year: {
+                student_id: sId,
+                month: numMonth,
+                year: numYear,
+              },
+            },
+            update: {
+              class_id: cId,
+              week_1_rose: Boolean(rec.week1Rose),
+              week_2_rose: Boolean(rec.week2Rose),
+              week_3_rose: Boolean(rec.week3Rose),
+              week_4_rose: Boolean(rec.week4Rose),
+              week_5_rose: Boolean(rec.week5Rose),
+              roses_count: rosesCount,
+              teacher_notes: rec.teacherNotes || '',
+              updated_at: new Date(),
+            },
+            create: {
+              student_id: sId,
+              class_id: cId,
+              month: numMonth,
+              year: numYear,
+              week_1_rose: Boolean(rec.week1Rose),
+              week_2_rose: Boolean(rec.week2Rose),
+              week_3_rose: Boolean(rec.week3Rose),
+              week_4_rose: Boolean(rec.week4Rose),
+              week_5_rose: Boolean(rec.week5Rose),
+              roses_count: rosesCount,
+              teacher_notes: rec.teacherNotes || '',
+              evaluated_by: BigInt(evaluatedBy || 40),
+            },
+          });
+          savedCount++;
+        }
+      }
+  
+      return {
+        success: true,
+        message: 'Lưu sổ bé ngoan tháng thành công',
+        savedCount,
+      };
+    }
+
 }
 export const assessmentService = new AssessmentService();
 export default assessmentService;
