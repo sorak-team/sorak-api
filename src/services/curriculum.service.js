@@ -243,6 +243,313 @@ export class CurriculumService {
 
     return this.getThemeSetDetail({ year, ageGroup });
   }
+
+  async updateThemeSetDetail({ year = '2026–2027', ageGroup = 'nhatre', themes = [], theme, note }) {
+    const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
+    const normalizedYear = (year || '2026–2027').replace('-', '–');
+
+    // 1. Tìm năm học
+    const schoolYear = await prisma.schoolYear.findFirst({
+      where: {
+        OR: [
+          { name: { contains: normalizedYear } },
+          { name: { contains: normalizedYear.replace('–', '-') } },
+          { school_year_id: 1n },
+        ],
+        deleted_at: null,
+      },
+    });
+
+    if (!schoolYear) {
+      throw new NotFound('Không tìm thấy năm học phù hợp');
+    }
+
+    const schoolYearId = schoolYear.school_year_id;
+    const syStart = schoolYear.start_date.toISOString().slice(0, 10);
+    const syEnd = schoolYear.end_date.toISOString().slice(0, 10);
+
+    // 2. Lấy danh sách theme hiện tại từ DB để merge nếu chỉ truyền 1 theme
+    const dbThemes = await prisma.curriculumTheme.findMany({
+      where: {
+        school_year_id: schoolYearId,
+        age_group: ageGroupInfo.dbKey,
+        deleted_at: null,
+      },
+      include: {
+        sub_themes: {
+          where: { deleted_at: null },
+          orderBy: { start_date: 'asc' },
+        },
+      },
+      orderBy: { start_date: 'asc' },
+    });
+
+    let targetThemes = [];
+    if (Array.isArray(themes) && themes.length > 0) {
+      targetThemes = [...themes];
+    } else if (theme) {
+      const matchIdx = dbThemes.findIndex(
+        (t) => t.theme_id.toString() === theme.id?.toString() || t.public_id === theme.id?.toString(),
+      );
+      if (matchIdx !== -1) {
+        targetThemes = dbThemes.map((t, idx) => {
+          if (idx === matchIdx) {
+            return {
+              id: t.theme_id.toString(),
+              name: theme.name || t.name,
+              startDate: theme.startDate || t.start_date.toISOString().slice(0, 10),
+              endDate: theme.endDate || t.end_date.toISOString().slice(0, 10),
+              status: theme.status || t.status,
+              note: theme.note || t.description || '',
+              subThemes: theme.subThemes || t.sub_themes.map((st) => ({
+                id: st.sub_theme_id.toString(),
+                name: st.name,
+                startDate: st.start_date.toISOString().slice(0, 10),
+                endDate: st.end_date.toISOString().slice(0, 10),
+              })),
+            };
+          }
+          return {
+            id: t.theme_id.toString(),
+            name: t.name,
+            startDate: t.start_date.toISOString().slice(0, 10),
+            endDate: t.end_date.toISOString().slice(0, 10),
+            status: t.status,
+            note: t.description || '',
+            subThemes: t.sub_themes.map((st) => ({
+              id: st.sub_theme_id.toString(),
+              name: st.name,
+              startDate: st.start_date.toISOString().slice(0, 10),
+              endDate: st.end_date.toISOString().slice(0, 10),
+            })),
+          };
+        });
+      }
+    }
+
+    if (targetThemes.length === 0) {
+      return this.getThemeSetDetail({ year, ageGroup });
+    }
+
+    // 3. SERVER-SIDE VALIDATION
+    // Quy tắc 1: Khung năm học và ngày bắt đầu / kết thúc từng chủ đề
+    for (let i = 0; i < targetThemes.length; i++) {
+      const t = targetThemes[i];
+      const tName = t.name?.trim() || `Chủ đề ${i + 1}`;
+
+      if (!t.name || !t.name.trim()) {
+        throw new BadRequest(`Chủ đề thứ ${i + 1} chưa có tên.`);
+      }
+      if (!t.startDate || !t.endDate) {
+        throw new BadRequest(`Chủ đề "${tName}" chưa có đầy đủ ngày bắt đầu và ngày kết thúc.`);
+      }
+      if (t.startDate > t.endDate) {
+        throw new BadRequest(
+          `Chủ đề "${tName}": Ngày bắt đầu (${t.startDate}) không được sau ngày kết thúc (${t.endDate}).`,
+        );
+      }
+      if (t.startDate < syStart) {
+        throw new BadRequest(
+          `Chủ đề "${tName}": Ngày bắt đầu (${t.startDate}) không được trước ngày bắt đầu năm học (${syStart}).`,
+        );
+      }
+      if (t.endDate > syEnd) {
+        throw new BadRequest(
+          `Chủ đề "${tName}": Ngày kết thúc (${t.endDate}) không được sau ngày kết thúc năm học (${syEnd}).`,
+        );
+      }
+
+      // Quy tắc 2: Không đè lên chủ đề trước
+      if (i > 0) {
+        const prevT = targetThemes[i - 1];
+        const prevName = prevT.name?.trim() || `Chủ đề ${i}`;
+        if (t.startDate <= prevT.endDate) {
+          throw new BadRequest(
+            `Chủ đề "${tName}" bắt đầu ngày ${t.startDate} bị trùng hoặc đi trước ngày kết thúc của chủ đề trước "${prevName}" (${prevT.endDate}).`,
+          );
+        }
+      }
+
+      // Quy tắc 3: Kiểm tra các nhánh con (subThemes)
+      const subs = Array.isArray(t.subThemes) ? t.subThemes : [];
+      if (subs.length > 0) {
+        // Nhánh đầu tiên phải khớp với mốc bắt đầu của chủ đề chính
+        if (subs[0].startDate && subs[0].startDate !== t.startDate) {
+          throw new BadRequest(
+            `Chủ đề "${tName}": Nhánh đầu tiên ("${subs[0].name}") phải bắt đầu từ ngày bắt đầu chủ đề chính (${t.startDate}).`,
+          );
+        }
+
+        // Nhánh cuối cùng phải kết thúc đúng ngày kết thúc của chủ đề chính
+        const lastSub = subs[subs.length - 1];
+        if (lastSub.endDate && lastSub.endDate !== t.endDate) {
+          throw new BadRequest(
+            `Chủ đề "${tName}": Nhánh cuối cùng ("${lastSub.name}") phải kết thúc vào ngày kết thúc chủ đề chính (${t.endDate}).`,
+          );
+        }
+
+        for (let k = 0; k < subs.length; k++) {
+          const st = subs[k];
+          const stName = st.name?.trim() || `Nhánh ${k + 1}`;
+
+          if (!st.name || !st.name.trim()) {
+            throw new BadRequest(`Chủ đề "${tName}": Nhánh thứ ${k + 1} chưa có tên.`);
+          }
+          if (!st.startDate || !st.endDate) {
+            throw new BadRequest(`Chủ đề nhánh "${stName}" chưa có đầy đủ ngày bắt đầu và kết thúc.`);
+          }
+          if (st.startDate > st.endDate) {
+            throw new BadRequest(
+              `Chủ đề nhánh "${stName}": Ngày bắt đầu (${st.startDate}) không được sau ngày kết thúc (${st.endDate}).`,
+            );
+          }
+          // Nằm trọn trong chủ đề chính
+          if (st.startDate < t.startDate || st.endDate > t.endDate) {
+            throw new BadRequest(
+              `Chủ đề nhánh "${stName}" (${st.startDate} – ${st.endDate}) phải nằm trọn trong chủ đề chính "${tName}" (${t.startDate} – ${t.endDate}).`,
+            );
+          }
+
+          // Nhánh sau không được đè lên nhánh trước
+          if (k > 0) {
+            const prevSt = subs[k - 1];
+            const prevStName = prevSt.name?.trim() || `Nhánh ${k}`;
+            if (st.startDate <= prevSt.endDate) {
+              throw new BadRequest(
+                `Chủ đề nhánh "${stName}" bắt đầu ngày ${st.startDate} bị trùng hoặc đè lên nhánh trước "${prevStName}" (kết thúc ${prevSt.endDate}).`,
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // 4. PERSIST TO POSTGRESQL IN TRANSACTION
+    await prisma.$transaction(async (tx) => {
+      // Tìm các theme_id cần xóa (có trong DB nhưng không còn trong targetThemes)
+      const existingThemeIds = dbThemes.map((t) => t.theme_id);
+      const keptThemeIds = targetThemes
+        .map((t) => {
+          if (!t.id) return null;
+          const match = dbThemes.find(
+            (d) => d.theme_id.toString() === String(t.id) || d.public_id === String(t.id),
+          );
+          return match ? match.theme_id : (/^\d+$/.test(String(t.id)) ? BigInt(t.id) : null);
+        })
+        .filter(Boolean);
+
+      const toDeleteThemeIds = existingThemeIds.filter((id) => !keptThemeIds.includes(id));
+      if (toDeleteThemeIds.length > 0) {
+        await tx.subTheme.deleteMany({
+          where: { theme_id: { in: toDeleteThemeIds } },
+        });
+        await tx.curriculumTheme.deleteMany({
+          where: { theme_id: { in: toDeleteThemeIds } },
+        });
+      }
+
+      // Cập nhật hoặc tạo mới từng theme
+      for (const t of targetThemes) {
+        let themeIdBigInt = null;
+        if (t.id) {
+          const match = dbThemes.find(
+            (d) => d.theme_id.toString() === String(t.id) || d.public_id === String(t.id),
+          );
+          if (match) {
+            themeIdBigInt = match.theme_id;
+          } else if (/^\d+$/.test(String(t.id))) {
+            themeIdBigInt = BigInt(t.id);
+          }
+        }
+
+        let savedTheme = null;
+        const themeData = {
+          name: t.name.trim(),
+          start_date: new Date(`${t.startDate}T00:00:00.000Z`),
+          end_date: new Date(`${t.endDate}T00:00:00.000Z`),
+          description: t.note || t.description || null,
+          status: t.status === 'PUBLISHED' ? 'PUBLISHED' : 'DRAFT',
+          updated_at: new Date(),
+        };
+
+        if (themeIdBigInt && existingThemeIds.includes(themeIdBigInt)) {
+          savedTheme = await tx.curriculumTheme.update({
+            where: { theme_id: themeIdBigInt },
+            data: themeData,
+          });
+        } else {
+          savedTheme = await tx.curriculumTheme.create({
+            data: {
+              ...themeData,
+              school_year_id: schoolYearId,
+              age_group: ageGroupInfo.dbKey,
+            },
+          });
+        }
+
+        // Cập nhật subThemes của theme này
+        const subs = Array.isArray(t.subThemes) ? t.subThemes : [];
+        const existingSubThemes = await tx.subTheme.findMany({
+          where: { theme_id: savedTheme.theme_id, deleted_at: null },
+        });
+        const existingSubIds = existingSubThemes.map((s) => s.sub_theme_id);
+
+        const keptSubIds = subs
+          .map((s) => {
+            if (!s.id) return null;
+            const match = existingSubThemes.find(
+              (d) => d.sub_theme_id.toString() === String(s.id) || d.public_id === String(s.id),
+            );
+            return match ? match.sub_theme_id : (/^\d+$/.test(String(s.id)) ? BigInt(s.id) : null);
+          })
+          .filter(Boolean);
+
+        const toDeleteSubIds = existingSubIds.filter((id) => !keptSubIds.includes(id));
+        if (toDeleteSubIds.length > 0) {
+          await tx.subTheme.deleteMany({
+            where: { sub_theme_id: { in: toDeleteSubIds } },
+          });
+        }
+
+        for (const st of subs) {
+          let subIdBigInt = null;
+          if (st.id) {
+            const match = existingSubThemes.find(
+              (d) => d.sub_theme_id.toString() === String(st.id) || d.public_id === String(st.id),
+            );
+            if (match) {
+              subIdBigInt = match.sub_theme_id;
+            } else if (/^\d+$/.test(String(st.id))) {
+              subIdBigInt = BigInt(st.id);
+            }
+          }
+
+          const subData = {
+            name: st.name.trim(),
+            start_date: new Date(`${st.startDate}T00:00:00.000Z`),
+            end_date: new Date(`${st.endDate}T00:00:00.000Z`),
+            updated_at: new Date(),
+          };
+
+          if (subIdBigInt && existingSubIds.includes(subIdBigInt)) {
+            await tx.subTheme.update({
+              where: { sub_theme_id: subIdBigInt },
+              data: subData,
+            });
+          } else {
+            await tx.subTheme.create({
+              data: {
+                ...subData,
+                theme_id: savedTheme.theme_id,
+              },
+            });
+          }
+        }
+      }
+    });
+
+    return this.getThemeSetDetail({ year, ageGroup });
+  }
 }
 export const curriculumService = new CurriculumService();
 export default curriculumService;
