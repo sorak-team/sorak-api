@@ -7,6 +7,7 @@ const router = Router();
 
 router.use(authMiddleware);
 router.get('/classes/:classId', assessmentController.getAssessmentOverview);
+router.post('/classes/:classId/records', assessmentController.saveAssessmentRecords);
 
 
 
