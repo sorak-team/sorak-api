@@ -1188,6 +1188,113 @@ export default assessmentService;export class AssessmentService {
       };
     }
 
+  async saveAssessmentRecords({ classId, slotId, activityId, date, records }) {
+      const today = parseAssessmentDate(date);
+      let savedCount = 0;
+  
+      let targetActivityId = null;
+      if (activityId) {
+        const isNum = typeof activityId === 'number' || (typeof activityId === 'string' && /^\d+$/.test(String(activityId).trim()));
+        const act = await prisma.educationalActivity.findFirst({
+          where: {
+            OR: [
+              ...(isNum ? [{ activity_id: BigInt(activityId) }] : []),
+              { public_id: String(activityId) },
+            ],
+          },
+        });
+        if (act) targetActivityId = act.activity_id;
+      } else if (slotId && !isNaN(Number(slotId))) {
+        try {
+          const subSlot = await prisma.subThemeActivity.findUnique({
+            where: { id: BigInt(slotId) },
+          });
+          if (subSlot) {
+            targetActivityId = subSlot.activity_id;
+          }
+        } catch {}
+      }
+  
+      if (!targetActivityId) {
+        const firstActivity = await prisma.educationalActivity.findFirst({
+          where: { routine_slot: 'DIRECTED_STUDY' },
+        });
+        targetActivityId = firstActivity ? firstActivity.activity_id : 629n;
+      }
+  
+      if (Array.isArray(records) && records.length > 0) {
+        const rawIds = records.map((r) => String(r.studentId || r.id).trim()).filter(Boolean);
+        const numericIds = rawIds.filter((id) => /^\d+$/.test(id)).map((id) => BigInt(id));
+        const uuidIds = rawIds.filter((id) => !/^\d+$/.test(id));
+  
+        const matchedStudents = await prisma.student.findMany({
+          where: {
+            OR: [
+              ...(numericIds.length > 0 ? [{ student_id: { in: numericIds } }] : []),
+              ...(uuidIds.length > 0 ? [{ public_id: { in: uuidIds } }] : []),
+            ],
+          },
+          select: { student_id: true, public_id: true },
+        });
+  
+        const studentIdMap = new Map();
+        matchedStudents.forEach((st) => {
+          studentIdMap.set(st.student_id.toString(), st.student_id);
+          if (st.public_id) studentIdMap.set(st.public_id, st.student_id);
+        });
+  
+        for (const rec of records) {
+          const rawId = String(rec.studentId || rec.id).trim();
+          const sId = studentIdMap.get(rawId) || (/^\d+$/.test(rawId) ? BigInt(rawId) : null);
+          if (!sId) continue;
+  
+          const status = ['ACHIEVED', 'NOT_ACHIEVED', 'OUTSTANDING'].includes(rec.status)
+            ? rec.status
+            : (rec.status === 'N' ? 'NOT_ACHIEVED' : 'ACHIEVED');
+          const note = rec.note || (status === 'ACHIEVED' ? 'Con đạt yêu cầu' : (status === 'OUTSTANDING' ? 'Con xuất sắc' : 'Cần cô hỗ trợ thêm'));
+  
+          await prisma.dailyAssessment.upsert({
+            where: {
+              student_id_activity_id_assessment_date: {
+                student_id: sId,
+                activity_id: targetActivityId,
+                assessment_date: today,
+              },
+            },
+            update: {
+              status,
+              notes: note,
+              updated_at: new Date(),
+            },
+            create: {
+              student_id: sId,
+              activity_id: targetActivityId,
+              assessment_date: today,
+              status,
+              notes: note,
+              evaluated_by: 40n,
+            },
+          });
+          savedCount++;
+        }
+      }
+  
+      if (slotId && !isNaN(Number(slotId))) {
+        try {
+          await prisma.subThemeActivity.update({
+            where: { id: BigInt(slotId) },
+            data: { status: 'COMPLETED' },
+          });
+        } catch {}
+      }
+  
+      return {
+        success: true,
+        message: 'Lưu đánh giá thành công vào cơ sở dữ liệu',
+        savedCount,
+      };
+    }
+
 }
 export const assessmentService = new AssessmentService();
 export default assessmentService;
