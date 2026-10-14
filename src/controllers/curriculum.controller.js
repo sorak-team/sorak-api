@@ -58,3 +58,9 @@ export const updateGoal = async (req, res) => {
   res.success(result);
 };
 
+export const deleteGoal = async (req, res) => {
+  const { year, ageGroup, goalId } = req.body;
+  const result = await curriculumService.deleteGoal({ year, ageGroup, goalId });
+  res.success(result);
+};
+
