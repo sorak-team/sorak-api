@@ -794,6 +794,49 @@ export class CurriculumService {
       contents,
     };
   }
+
+  async updateGoalContents({ year = '2026–2027', ageGroup = 'nhatre', goalId, contents = [] }) {
+    if (!goalId) {
+      throw new BadRequest('Mã mục tiêu giáo dục không hợp lệ.');
+    }
+
+    let targetGoal = null;
+    if (!isNaN(Number(goalId))) {
+      targetGoal = await prisma.educationalGoal.findFirst({ where: { goal_id: BigInt(goalId) } });
+    } else {
+      targetGoal = await prisma.educationalGoal.findFirst({ where: { public_id: String(goalId) } });
+    }
+    if (!targetGoal) {
+      throw new NotFound('Không tìm thấy mục tiêu giáo dục.');
+    }
+
+    const gId = targetGoal.goal_id;
+
+    // Save newly added contents
+    if (Array.isArray(contents)) {
+      for (const item of contents) {
+        if (!item.id || isNaN(Number(item.id))) {
+          await prisma.educationalContent.create({
+            data: {
+              goal_id: gId,
+              title: item.title,
+            },
+          });
+        }
+      }
+    }
+
+    const updated = await prisma.educationalContent.findMany({
+      where: { goal_id: gId, deleted_at: null },
+    });
+
+    return {
+      success: true,
+      goalId,
+      contents: updated.map((c) => ({ id: c.public_id || c.content_id.toString(), title: c.title })),
+      updatedAt: new Date().toLocaleDateString('vi-VN'),
+    };
+  }
 }
 export const curriculumService = new CurriculumService();
 export default curriculumService;
