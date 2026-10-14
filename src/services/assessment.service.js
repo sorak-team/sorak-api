@@ -1295,6 +1295,56 @@ export default assessmentService;export class AssessmentService {
       };
     }
 
+  async clearAssessmentRecords({ classId, slotId, activityId, date }) {
+      const today = parseAssessmentDate(date);
+  
+      let targetActivityId = null;
+      if (activityId) {
+        const isNum = typeof activityId === 'number' || (typeof activityId === 'string' && /^\d+$/.test(String(activityId).trim()));
+        const act = await prisma.educationalActivity.findFirst({
+          where: {
+            OR: [
+              ...(isNum ? [{ activity_id: BigInt(activityId) }] : []),
+              { public_id: String(activityId) },
+            ],
+          },
+        });
+        if (act) targetActivityId = act.activity_id;
+      } else if (slotId && !isNaN(Number(slotId))) {
+        try {
+          const subSlot = await prisma.subThemeActivity.findUnique({
+            where: { id: BigInt(slotId) },
+          });
+          if (subSlot) {
+            targetActivityId = subSlot.activity_id;
+          }
+        } catch {}
+      }
+  
+      if (targetActivityId) {
+        await prisma.dailyAssessment.deleteMany({
+          where: {
+            activity_id: targetActivityId,
+            assessment_date: today,
+          },
+        });
+      }
+  
+      if (slotId && !isNaN(Number(slotId))) {
+        try {
+          await prisma.subThemeActivity.update({
+            where: { id: BigInt(slotId) },
+            data: { status: 'SCHEDULED' },
+          });
+        } catch {}
+      }
+  
+      return {
+        success: true,
+        message: 'Đã xóa toàn bộ đánh giá của tiết này',
+      };
+    }
+
 }
 export const assessmentService = new AssessmentService();
 export default assessmentService;

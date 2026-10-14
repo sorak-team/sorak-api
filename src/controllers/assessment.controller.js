@@ -24,6 +24,22 @@ class AssessmentController {
       }
     }
 
+  async clearAssessmentRecords(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const { slotId, activityId, date } = req.body || {};
+        const data = await assessmentService.clearAssessmentRecords({
+          classId,
+          slotId: slotId || req.query.slotId,
+          activityId: activityId || req.query.activityId,
+          date: date || req.query.date,
+        });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const assessmentController = new AssessmentController();
 export default assessmentController;
