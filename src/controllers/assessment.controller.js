@@ -69,6 +69,17 @@ class AssessmentController {
       }
     }
 
+  async getSemesterAssessments(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const { semester, year } = req.query;
+        const data = await assessmentService.getSemesterAssessments({ classId, semester, year });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const assessmentController = new AssessmentController();
 export default assessmentController;
