@@ -13,6 +13,17 @@ class GoodBehaviorController {
       }
     }
 
+  async saveRecords(req, res, next) {
+      try {
+        const { classId } = req.params;
+        const { records } = req.body;
+        const data = await goodBehaviorService.saveGoodBehaviorRecords({ classId, records });
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const goodBehaviorController = new GoodBehaviorController();
 export default goodBehaviorController;
