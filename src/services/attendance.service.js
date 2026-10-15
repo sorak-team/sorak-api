@@ -319,6 +319,75 @@ export class AttendanceService {
       students,
     };
   }
+
+  async updateAttendance({ classId, date, records }) {
+    const defaultDateStr = new Date().toISOString().slice(0, 10);
+    const targetDate = date ? new Date(`${date}T00:00:00.000Z`) : new Date(`${defaultDateStr}T00:00:00.000Z`);
+    const targetClass = await this._resolveClass(classId);
+    if (!targetClass) {
+      throw new NotFound('Lớp học không tồn tại hoặc mã định danh không hợp lệ');
+    }
+    const cId = targetClass.class_id;
+
+    if (Array.isArray(records) && records.length > 0) {
+      for (const rec of records) {
+        const rawId = rec.studentId || rec.id;
+        const student = await this._resolveStudent(rawId);
+        if (!student) continue;
+        const sId = student.student_id;
+        let status = 'PRESENT';
+        if (rec.status === 'EXCUSED_ABSENCE' || rec.status === 'ABSENT' || rec.status === 'ABSENT_EXCUSED') {
+          status = 'EXCUSED_ABSENCE';
+        } else if (rec.status === 'UNEXCUSED_ABSENCE' || rec.status === 'ABSENT_UNEXCUSED') {
+          status = 'UNEXCUSED_ABSENCE';
+        } else {
+          status = 'PRESENT';
+        }
+
+        const noteText = rec.notes !== undefined ? rec.notes : (rec.note !== undefined ? rec.note : (rec.reason !== undefined ? rec.reason : null));
+        const savedReason = noteText !== null && noteText !== undefined && String(noteText).trim() !== ''
+          ? String(noteText).trim()
+          : (status === 'EXCUSED_ABSENCE' ? 'Nghỉ có phép' : null);
+
+        const existing = await prisma.attendance.findFirst({
+          where: {
+            student_id: sId,
+            class_id: cId,
+            date: targetDate,
+          },
+        });
+
+        if (existing) {
+          await prisma.attendance.update({
+            where: { attendance_id: existing.attendance_id },
+            data: {
+              status,
+              notes: savedReason,
+              updated_at: new Date(),
+            },
+          });
+        } else {
+          await prisma.attendance.create({
+            data: {
+              student_id: sId,
+              class_id: cId,
+              date: targetDate,
+              status,
+              check_in_by: 40n,
+              notes: savedReason,
+            },
+          });
+        }
+      }
+    }
+
+    return {
+      success: true,
+      message: 'Lưu điểm danh thành công',
+      updatedCount: records ? records.length : 0,
+      date: targetDate.toISOString().slice(0, 10),
+    };
+  }
 }
 export const attendanceService = new AttendanceService();
 export default attendanceService;
