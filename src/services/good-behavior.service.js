@@ -320,6 +320,64 @@ export default goodBehaviorService;export class GoodBehaviorService {
       };
     }
 
+  async saveGoodBehaviorRecords({ classId, records }) {
+      const targetClass = await this._resolveClass(classId);
+      if (!targetClass) {
+        throw new NotFound('Lớp học không tồn tại hoặc mã định danh không hợp lệ');
+      }
+      const cId = targetClass.class_id;
+      let savedCount = 0;
+  
+      if (Array.isArray(records) && records.length > 0) {
+        for (const rec of records) {
+          const rawId = rec.studentId || rec.id;
+          const student = await this._resolveStudent(rawId);
+          if (!student) continue;
+          const sId = student.student_id;
+          const comment = rec.comment || 'Con đạt phiếu bé ngoan';
+          const stars = Number(rec.starRating) || 3;
+  
+          const existing = await prisma.monthlyAssessment.findFirst({
+            where: {
+              student_id: sId,
+              month: 10,
+              year: 2026,
+            },
+          });
+  
+          if (existing) {
+            await prisma.monthlyAssessment.update({
+              where: { monthly_assessment_id: existing.monthly_assessment_id },
+              data: {
+                teacher_notes: comment,
+                roses_count: stars,
+                updated_at: new Date(),
+              },
+            });
+          } else {
+            await prisma.monthlyAssessment.create({
+              data: {
+                student_id: sId,
+                class_id: cId,
+                month: 10,
+                year: 2026,
+                roses_count: stars,
+                teacher_notes: comment,
+                evaluated_by: 40n,
+              },
+            });
+          }
+          savedCount++;
+        }
+      }
+  
+      return {
+        success: true,
+        message: 'Lưu phiếu bé ngoan thành công vào cơ sở dữ liệu',
+        savedCount,
+      };
+    }
+
 }
 export const goodBehaviorService = new GoodBehaviorService();
 export default goodBehaviorService;
