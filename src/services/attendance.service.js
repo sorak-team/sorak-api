@@ -388,6 +388,29 @@ export class AttendanceService {
       date: targetDate.toISOString().slice(0, 10),
     };
   }
+
+  async clearAttendance({ classId, date }) {
+    const targetClass = await this._resolveClass(classId);
+    if (!targetClass) {
+      throw new NotFound('Lớp học không tồn tại hoặc mã định danh không hợp lệ');
+    }
+    const cId = targetClass.class_id;
+    const targetDateStr = date || new Date().toISOString().slice(0, 10);
+    const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+
+    await prisma.attendance.deleteMany({
+      where: {
+        class_id: cId,
+        date: targetDate,
+      },
+    });
+
+    return {
+      success: true,
+      message: 'Đã xóa toàn bộ điểm danh của ngày này',
+      date: targetDateStr,
+    };
+  }
 }
 export const attendanceService = new AttendanceService();
 export default attendanceService;
