@@ -1655,6 +1655,15 @@ export default parentService;export class ParentService {
       return { account, student: account.student };
     }
 
+  _calculateBmiCategory(bmi) {
+      if (!bmi) return { label: 'Chưa xác định', color: 'gray' };
+      const num = Number(bmi);
+      if (num < 13.5) return { label: 'Suy dinh dưỡng / Nhẹ cân', color: 'amber' };
+      if (num <= 17.5) return { label: 'Bình thường (Đạt chuẩn WHO)', color: 'emerald' };
+      if (num <= 19.5) return { label: 'Nguy cơ thừa cân', color: 'amber' };
+      return { label: 'Thừa cân / Béo phì', color: 'rose' };
+    }
+
 }
 export const parentService = new ParentService();
 export default parentService;
