@@ -2253,6 +2253,93 @@ export default parentService;export class ParentService {
       };
     }
 
+  async createPickupRequest(accountSub, data) {
+      const { account, student } = await this._getStudentForAccount(accountSub);
+  
+      const {
+        pickup_person_name,
+        pickup_person_phone,
+        pickup_citizen_id,
+        relationship,
+        photo_url,
+        note,
+        start_date,
+        end_date,
+      } = data;
+  
+      if (!pickup_person_name?.trim()) {
+        throw BadRequest('Vui lòng nhập họ và tên người được ủy quyền.');
+      }
+      if (!pickup_person_phone?.trim()) {
+        throw BadRequest('Vui lòng nhập số điện thoại người được ủy quyền.');
+      }
+      if (!relationship?.trim()) {
+        throw BadRequest('Vui lòng chọn mối quan hệ với bé.');
+      }
+      if (!start_date || !end_date) {
+        throw BadRequest('Vui lòng chọn thời gian bắt đầu và kết thúc ủy quyền.');
+      }
+  
+      const startDateObj = new Date(start_date);
+      const endDateObj = new Date(end_date);
+  
+      if (isNaN(startDateObj.getTime()) || isNaN(endDateObj.getTime())) {
+        throw BadRequest('Định dạng ngày tháng không hợp lệ.');
+      }
+      if (endDateObj < startDateObj) {
+        throw BadRequest('Ngày kết thúc không được trước ngày bắt đầu.');
+      }
+  
+      const newAuth = await prisma.pickupAuthorization.create({
+        data: {
+          student_id: student.student_id,
+          authorized_by: account.account_id,
+          pickup_person_name: pickup_person_name.trim(),
+          pickup_person_phone: pickup_person_phone.trim(),
+          pickup_citizen_id: pickup_citizen_id?.trim() || null,
+          relationship: relationship.trim(),
+          photo_url: photo_url?.trim() || null,
+          note: note?.trim() || null,
+          start_date: startDateObj,
+          end_date: endDateObj,
+          status: 'PENDING',
+        },
+      });
+  
+      // Create system notification for primary teacher
+      try {
+        const activeEnrollment =
+          student.student_enrollments?.find((e) => !e.left_at) || student.student_enrollments?.[0];
+        const homeroomClass = activeEnrollment?.class;
+        const primaryTeacherClass = homeroomClass?.teacher_classes?.find(
+          (tc) => tc.is_primary && !tc.left_at,
+        );
+  
+        if (primaryTeacherClass?.teacher?.account_id) {
+          await prisma.notification.create({
+            data: {
+              account_id: primaryTeacherClass.teacher.account_id,
+              created_by: account.account_id,
+              type: 'SCHOOL_ANNOUNCEMENT',
+              title: `Yêu cầu đón trẻ mới: ${student.full_name}`,
+              body: `Phụ huynh của bé ${student.full_name} vừa tạo đơn ủy thác đón cho ${pickup_person_name.trim()} (${relationship.trim()}).`,
+              data: {
+                authorizationId: newAuth.public_id,
+                studentCode: student.student_code,
+              },
+            },
+          });
+        }
+      } catch (e) {
+        logger.warn({ error: e.message }, 'Failed to emit teacher notification for pickup auth');
+      }
+  
+      return {
+        id: newAuth.public_id,
+        message: 'Gửi yêu cầu ủy thác đón con thành công. Giáo viên chủ nhiệm sẽ sớm kiểm tra và phê duyệt.',
+      };
+    }
+
 }
 export const parentService = new ParentService();
 export default parentService;
