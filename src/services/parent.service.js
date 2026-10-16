@@ -2601,6 +2601,485 @@ export default parentService;export class ParentService {
       };
     }
 
+  async getSchedule(accountSub, { classId, date } = {}) {
+      const { student } = await this._getStudentForAccount(accountSub);
+  
+      const enrollments = (student.student_enrollments || []).map((e) => ({
+        classId: e.class?.public_id,
+        className: e.class?.name,
+        ageGroup: e.class?.age_group,
+        schoolYear: e.class?.school_year?.name,
+        status: e.status,
+        isCurrent: !e.left_at,
+        enrolledAt: e.enrolled_at,
+        leftAt: e.left_at,
+      }));
+  
+      let selectedEnrollment = null;
+      if (classId) {
+        selectedEnrollment = student.student_enrollments?.find(
+          (e) => e.class?.public_id === classId,
+        );
+      }
+      if (!selectedEnrollment) {
+        selectedEnrollment =
+          student.student_enrollments?.find((e) => !e.left_at) ||
+          student.student_enrollments?.[0];
+      }
+  
+      const homeroomClass = selectedEnrollment?.class;
+      const isHistorical = Boolean(selectedEnrollment?.left_at || selectedEnrollment?.status === 'COMPLETED');
+      const primaryTeacher =
+        homeroomClass?.teacher_classes?.find((tc) => tc.is_primary && !tc.left_at)?.teacher ||
+        homeroomClass?.teacher_classes?.[0]?.teacher;
+  
+      // 1. Timetable routine slots
+      const routineSlots = [
+        {
+          id: 'slot-1',
+          slot: 'ARRIVAL_PLAY',
+          time: '07:15 – 08:00',
+          title: 'Đón trẻ & Chơi tự do',
+          description: 'Cô giáo đón bé tại cửa lớp, kiểm tra thân nhiệt và hướng dẫn bé cất ba lô, giày dép vào tủ cá nhân.',
+          icon: 'Sun',
+          category: 'Đón trẻ',
+        },
+        {
+          id: 'slot-2',
+          slot: 'MORNING_EXERCISE',
+          time: '08:00 – 08:30',
+          title: 'Thể dục sáng',
+          description: 'Tập thể dục đồng diễn toàn trường ngoài sân với các bài tập phát triển cơ thể và khởi động ngày mới.',
+          icon: 'Activity',
+          category: 'Thể chất',
+        },
+        {
+          id: 'slot-3',
+          slot: 'DIRECTED_STUDY',
+          time: '08:30 – 09:15',
+          title: 'Hoạt động học có chủ đích',
+          description: 'Khám phá khoa học, làm quen với toán học và rèn luyện kỹ năng ngôn ngữ theo chủ đề tuần.',
+          icon: 'BookOpen',
+          category: 'Học tập',
+        },
+        {
+          id: 'slot-4',
+          slot: 'CORNER_PLAY',
+          time: '09:15 – 10:15',
+          title: 'Hoạt động chơi góc',
+          description: 'Bé thỏa sức sáng tạo tại góc đóng vai, góc xây dựng, góc nghệ thuật tạo hình và âm nhạc.',
+          icon: 'Gamepad2',
+          category: 'Vui chơi',
+        },
+        {
+          id: 'slot-5',
+          slot: 'OUTDOOR_PLAY',
+          time: '10:15 – 11:00',
+          title: 'Chơi ngoài trời & Khám phá thiên nhiên',
+          description: 'Vận động thể chất, hít thở không khí trong lành và quan sát vườn cây của trường.',
+          icon: 'Trees',
+          category: 'Thể chất',
+        },
+        {
+          id: 'slot-6',
+          slot: 'HYGIENE_MEAL_SLEEP',
+          time: '11:00 – 14:00',
+          title: 'Vệ sinh, Ăn trưa & Giấc ngủ trưa',
+          description: 'Bé rửa tay sạch sẽ trước khi ăn, thưởng thức bữa trưa dinh dưỡng và ngủ trưa đúng giờ.',
+          icon: 'Moon',
+          category: 'Dinh dưỡng',
+        },
+        {
+          id: 'slot-7',
+          slot: 'AFTERNOON_ACTIVITY',
+          time: '14:00 – 15:30',
+          title: 'Bữa phụ & Sinh hoạt chiều',
+          description: 'Thưởng thức sữa hoặc bánh hoa quả nhẹ, cùng cô ôn tập bài hát, thơ và rèn kỹ năng tự phục vụ.',
+          icon: 'Coffee',
+          category: 'Kỹ năng',
+        },
+        {
+          id: 'slot-8',
+          slot: 'RETURN_CHILD',
+          time: '15:30 – 17:00',
+          title: 'Trả trẻ & Trao đổi cùng phụ huynh',
+          description: 'Cô giáo nhận diện người đón được ủy thác, trao đổi tình hình trong ngày và tạm biệt bé.',
+          icon: 'HeartHandshake',
+          category: 'Trả trẻ',
+        },
+      ];
+  
+      // Weekly scheduled activities
+      let weeklyActivities = [];
+      let activeTheme = null;
+      let activeSubTheme = null;
+      if (homeroomClass) {
+        try {
+          const scheduledActivities = await prisma.subThemeActivity.findMany({
+            where: { class_id: homeroomClass.class_id },
+            include: {
+              activity: {
+                include: {
+                  content: {
+                    include: { goal: true },
+                  },
+                },
+              },
+            },
+            orderBy: [{ scheduled_date: 'asc' }, { order_index: 'asc' }],
+            take: 60,
+          });
+  
+          weeklyActivities = scheduledActivities.map((sa) => {
+            const sDate = sa.scheduled_date ? new Date(sa.scheduled_date) : null;
+            const pad = (n) => String(n).padStart(2, '0');
+            const isoDate = sDate
+              ? `${sDate.getFullYear()}-${pad(sDate.getMonth() + 1)}-${pad(sDate.getDate())}`
+              : null;
+            return {
+              id: sa.id.toString(),
+              dayOfWeek: sa.day_of_week,
+              routineSlot: sa.routine_slot,
+              title: sa.activity?.title || 'Hoạt động giáo dục',
+              objective: sa.activity?.objective || null,
+              procedure: sa.activity?.procedure || null,
+              preparation: sa.activity?.preparation || null,
+              domain: sa.activity?.content?.goal?.domain || 'COGNITIVE',
+              goalCode: sa.activity?.content?.goal?.goal_code || null,
+              goalTitle: sa.activity?.content?.goal?.title || null,
+              status: sa.status,
+              date: sDate ? sDate.toLocaleDateString('vi-VN') : null,
+              isoDate,
+              rawDate: sa.scheduled_date,
+            };
+          });
+  
+          const theme = await prisma.curriculumTheme.findFirst({
+            where: {
+              school_year_id: homeroomClass.school_year_id,
+              age_group: homeroomClass.age_group,
+              deleted_at: null,
+            },
+            include: {
+              sub_themes: {
+                where: { deleted_at: null },
+                orderBy: { start_date: 'asc' },
+              },
+            },
+            orderBy: { start_date: 'asc' },
+          });
+  
+          if (theme) {
+            activeTheme = {
+              id: theme.public_id,
+              name: theme.name,
+            };
+            if (theme.sub_themes?.length > 0) {
+              activeSubTheme = {
+                id: theme.sub_themes[0].public_id,
+                name: theme.sub_themes[0].name,
+              };
+            }
+          }
+        } catch (e) {
+          logger.warn({ error: e.message }, 'Failed to load schedule activities or themes');
+        }
+      }
+  
+      // 2. Attendance history for this class
+      const attendances = await prisma.attendance.findMany({
+        where: {
+          student_id: student.student_id,
+          ...(homeroomClass?.class_id ? { class_id: homeroomClass.class_id } : {}),
+          deleted_at: null,
+        },
+        orderBy: { date: 'desc' },
+        take: 60,
+      });
+  
+      const totalDays = attendances.length;
+      const presentDays = attendances.filter((a) => a.status === 'PRESENT').length;
+      const excusedDays = attendances.filter((a) => a.status === 'EXCUSED_ABSENCE').length;
+      const unexcusedDays = attendances.filter((a) => a.status === 'UNEXCUSED_ABSENCE').length;
+      const attendanceRate = totalDays > 0 ? Math.round((presentDays / totalDays) * 100) : 100;
+  
+      const formattedAttendances = attendances.map((a) => {
+        const isAbsent = a.status === 'EXCUSED_ABSENCE' || a.status === 'UNEXCUSED_ABSENCE';
+        const isNotYet = !isAbsent && !a.check_in_time && !a.check_out_time;
+  
+        const checkInTimeStr = a.check_in_time
+          ? new Date(a.check_in_time).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+          : null;
+        const checkOutTimeStr = a.check_out_time
+          ? new Date(a.check_out_time).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+          : null;
+  
+        let computedStatus = a.status;
+        let statusLabel = 'Có mặt';
+        if (isNotYet) {
+          computedStatus = 'NOT_YET';
+          statusLabel = 'Chưa điểm danh';
+        } else if (a.status === 'EXCUSED_ABSENCE') {
+          computedStatus = 'EXCUSED_ABSENCE';
+          statusLabel = 'Nghỉ có phép';
+        } else if (a.status === 'UNEXCUSED_ABSENCE') {
+          computedStatus = 'UNEXCUSED_ABSENCE';
+          statusLabel = 'Nghỉ không phép';
+        } else if (checkInTimeStr && !checkOutTimeStr) {
+          computedStatus = 'AT_SCHOOL';
+          statusLabel = 'Đang ở lớp';
+        } else if (checkOutTimeStr) {
+          computedStatus = 'PICKED_UP';
+          statusLabel = 'Đã đón';
+        }
+  
+        return {
+          id: a.public_id,
+          date: new Date(a.date).toLocaleDateString('vi-VN'),
+          isoDate: a.date ? new Date(a.date).toISOString().slice(0, 10) : null,
+          rawDate: a.date,
+          dayOfWeek: new Date(a.date).toLocaleDateString('vi-VN', { weekday: 'long' }),
+          status: computedStatus,
+          rawStatus: a.status,
+          statusLabel,
+          checkInTime: checkInTimeStr,
+          checkOutTime: checkOutTimeStr,
+          pickupPersonName: a.pickup_person_name || null,
+          pickupPersonPhone: a.pickup_person_phone || null,
+          pickupRelationship: a.pickup_relationship || null,
+          pickupCitizenId: a.pickup_citizen_id || null,
+          pickupPhotoUrl: a.pickup_photo_url || null,
+          pickupNote: a.pickup_note || null,
+          notes: a.notes || null,
+        };
+      });
+  
+      // 3. Slot Assessments (Đánh giá theo từng slot hoạt động)
+      const dailyAssessments = await prisma.dailyAssessment.findMany({
+        where: {
+          student_id: student.student_id,
+        },
+        include: {
+          activity: {
+            include: {
+              content: {
+                include: { goal: true },
+              },
+            },
+          },
+          evaluator: {
+            include: { teacher: true },
+          },
+        },
+        orderBy: { assessment_date: 'desc' },
+        take: 30,
+      });
+  
+      const slotAssessments = dailyAssessments.map((da) => ({
+        id: da.public_id,
+        date: new Date(da.assessment_date).toLocaleDateString('vi-VN'),
+        rawDate: da.assessment_date,
+        routineSlot: da.activity?.routine_slot || 'DIRECTED_STUDY',
+        slotName:
+          da.activity?.routine_slot === 'ARRIVAL_PLAY'
+            ? 'Đón trẻ & Thể dục sáng'
+            : da.activity?.routine_slot === 'DIRECTED_STUDY'
+              ? 'Hoạt động học có chủ đích'
+              : da.activity?.routine_slot === 'CORNER_PLAY'
+                ? 'Hoạt động chơi góc'
+                : da.activity?.routine_slot === 'OUTDOOR_PLAY'
+                  ? 'Chơi ngoài trời'
+                  : da.activity?.routine_slot === 'HYGIENE_MEAL_SLEEP'
+                    ? 'Ăn trưa & Giấc ngủ'
+                    : da.activity?.routine_slot === 'AFTERNOON_ACTIVITY'
+                      ? 'Sinh hoạt chiều'
+                      : 'Hoạt động trong ngày',
+        activityTitle: da.activity?.title || 'Hoạt động giáo dục',
+        goalTitle: da.activity?.content?.goal?.title || 'Phát triển kỹ năng theo lứa tuổi',
+        domain: da.activity?.content?.goal?.domain || 'COGNITIVE',
+        status: da.status,
+        statusLabel:
+          da.status === 'EXCELLENT'
+            ? 'Xuất sắc'
+            : da.status === 'ACHIEVED'
+              ? 'Đạt'
+              : da.status === 'NOT_ACHIEVED'
+                ? 'Cần rèn thêm'
+                : 'Chờ đánh giá',
+        statusColor:
+          da.status === 'EXCELLENT'
+            ? 'emerald'
+            : da.status === 'ACHIEVED'
+              ? 'blue'
+              : da.status === 'NOT_ACHIEVED'
+                ? 'rose'
+                : 'amber',
+        notes: da.notes || 'Bé hợp tác tốt và hoàn thành yêu cầu hoạt động.',
+        evaluatorName: da.evaluator?.teacher?.full_name || 'Cô giáo chủ nhiệm',
+      }));
+  
+      // 4. Health Assessments history
+      const healthAssessments = await prisma.healthAssessment.findMany({
+        where: {
+          student_id: student.student_id,
+          deleted_at: null,
+        },
+        orderBy: { assessment_date: 'desc' },
+        include: {
+          recorder: {
+            include: { teacher: true },
+          },
+        },
+      });
+  
+      const healthRecords = healthAssessments.map((h) => {
+        const bmiInfo = this._calculateBmiCategory(h.bmi);
+        return {
+          id: h.public_id,
+          date: new Date(h.assessment_date).toLocaleDateString('vi-VN'),
+          rawDate: h.assessment_date,
+          height: Number(h.height),
+          weight: Number(h.weight),
+          bmi: Number(h.bmi),
+          bmiCategory: bmiInfo.label,
+          bmiColor: bmiInfo.color,
+          notes: h.notes || 'Sức khỏe bình thường, phát triển cân đối.',
+          recordedBy: h.recorder?.teacher?.full_name || 'Y tế trường mầm non',
+        };
+      });
+  
+      // 5. Dismissal History (Đón trẻ)
+      const dismissals = attendances
+        .filter((a) => a.check_out_time || a.pickup_person_name)
+        .map((a) => ({
+          id: a.public_id,
+          date: new Date(a.date).toLocaleDateString('vi-VN'),
+          rawDate: a.date,
+          checkInTime: a.check_in_time
+            ? new Date(a.check_in_time).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+            : null,
+          checkOutTime: a.check_out_time
+            ? new Date(a.check_out_time).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+            : '16:45',
+          pickupPersonName: a.pickup_person_name || 'Phụ huynh',
+          pickupRelationship: a.pickup_relationship || 'Gia đình',
+          pickupCitizenId: a.pickup_citizen_id || null,
+          pickupPhotoUrl: a.pickup_photo_url || null,
+          pickupNote: a.pickup_note || 'Đón bé an toàn, đúng giờ.',
+        }));
+  
+      // 6. Pickup Authorizations (Ủy quyền đón học sinh)
+      const pickupAuthorizations = await prisma.pickupAuthorization.findMany({
+        where: {
+          student_id: student.student_id,
+          deleted_at: null,
+        },
+        orderBy: { created_at: 'desc' },
+        include: {
+          approver: {
+            include: { teacher: true },
+          },
+        },
+      });
+  
+      const formattedAuthorizations = pickupAuthorizations.map((r) => ({
+        id: r.public_id,
+        pickupPersonName: r.pickup_person_name,
+        pickupPersonPhone: r.pickup_person_phone,
+        pickupCitizenId: r.pickup_citizen_id || null,
+        relationship: r.relationship,
+        photoUrl: r.photo_url || null,
+        note: r.note || null,
+        startDate: new Date(r.start_date).toLocaleDateString('vi-VN'),
+        endDate: new Date(r.end_date).toLocaleDateString('vi-VN'),
+        status: r.status,
+        statusLabel:
+          r.status === 'APPROVED'
+            ? 'Đã duyệt'
+            : r.status === 'PENDING'
+              ? 'Chờ duyệt'
+              : r.status === 'REJECTED'
+                ? 'Từ chối'
+                : 'Đã hủy',
+        statusColor:
+          r.status === 'APPROVED'
+            ? 'emerald'
+            : r.status === 'PENDING'
+              ? 'amber'
+              : r.status === 'REJECTED'
+                ? 'rose'
+                : 'gray',
+        approverName: r.approver?.teacher?.full_name || null,
+        createdAt: new Date(r.created_at).toLocaleDateString('vi-VN'),
+      }));
+  
+      return {
+        student: {
+          id: student.public_id,
+          fullName: student.full_name,
+          studentCode: student.student_code,
+        },
+        classInfo: homeroomClass
+          ? {
+              id: homeroomClass.public_id,
+              name: homeroomClass.name,
+              ageGroup: homeroomClass.age_group,
+              roomNumber: homeroomClass.room_number,
+              schoolYear: homeroomClass.school_year?.name,
+              isHistorical,
+              status: selectedEnrollment?.status,
+            }
+          : null,
+        primaryTeacher: primaryTeacher
+          ? {
+              fullName: primaryTeacher.full_name,
+              phone: primaryTeacher.phone,
+              email: primaryTeacher.email,
+              avatarUrl: primaryTeacher.avatar_url,
+            }
+          : null,
+        teachers: (homeroomClass?.teacher_classes || [])
+          .filter((tc) => !tc.left_at)
+          .map((tc) => ({
+            id: tc.teacher?.public_id,
+            fullName: tc.teacher?.full_name,
+            phone: tc.teacher?.phone,
+            email: tc.teacher?.email,
+            avatarUrl: tc.teacher?.avatar_url,
+            employeeCode: tc.teacher?.employee_code,
+            position: tc.is_primary ? 'Giáo viên chủ nhiệm' : 'Giáo viên bảo mẫu',
+            isPrimary: Boolean(tc.is_primary),
+          })),
+        enrollments,
+        isHistorical,
+        selectedClassId: homeroomClass?.public_id || null,
+        timetable: {
+          routineSlots,
+          weeklyActivities,
+          theme: activeTheme,
+          subTheme: activeSubTheme,
+        },
+        attendances: formattedAttendances,
+        attendance: {
+          summary: {
+            totalDays,
+            presentDays,
+            excusedDays,
+            unexcusedDays,
+            attendanceRate,
+          },
+          records: formattedAttendances,
+        },
+        slotAssessments,
+        health: {
+          latest: healthRecords[0] || null,
+          history: healthRecords,
+        },
+        dismissals,
+        pickupAuthorizations: formattedAuthorizations,
+      };
+    }
+
 }
 export const parentService = new ParentService();
 export default parentService;
