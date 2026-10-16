@@ -11,6 +11,15 @@ class ParentController {
       }
     }
 
+  async getSchedule(req, res, next) {
+      try {
+        const data = await parentService.getSchedule(req.user.sub, req.query);
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const parentController = new ParentController();
 export default parentController;
