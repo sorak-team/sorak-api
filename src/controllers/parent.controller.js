@@ -47,6 +47,16 @@ class ParentController {
       }
     }
 
+  async cancelPickupRequest(req, res, next) {
+      try {
+        const { requestId } = req.params;
+        const data = await parentService.cancelPickupRequest(req.user.sub, requestId);
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const parentController = new ParentController();
 export default parentController;
