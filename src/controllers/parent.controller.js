@@ -75,6 +75,15 @@ class ParentController {
       }
     }
 
+  async getNotifications(req, res, next) {
+      try {
+        const data = await parentService.getNotifications(req.user.sub);
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const parentController = new ParentController();
 export default parentController;
