@@ -57,6 +57,15 @@ class ParentController {
       }
     }
 
+  async getGoodBehavior(req, res, next) {
+      try {
+        const data = await parentService.getGoodBehavior(req.user.sub, req.query);
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const parentController = new ParentController();
 export default parentController;
