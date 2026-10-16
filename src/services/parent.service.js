@@ -2017,6 +2017,175 @@ export default parentService;export class ParentService {
       };
     }
 
+  async getStudentProfile(accountSub, classPublicId = null) {
+      const { student } = await this._getStudentForAccount(accountSub);
+  
+      const enrollments = (student.student_enrollments || []).map((e) => ({
+        classId: e.class?.public_id,
+        className: e.class?.name,
+        ageGroup: e.class?.age_group,
+        schoolYear: e.class?.school_year?.name,
+        status: e.status,
+        isCurrent: !e.left_at,
+        enrolledAt: e.enrolled_at,
+        leftAt: e.left_at,
+      }));
+  
+      let selectedEnrollment = null;
+      if (classPublicId) {
+        selectedEnrollment = student.student_enrollments?.find(
+          (e) => e.class?.public_id === classPublicId,
+        );
+      }
+      if (!selectedEnrollment) {
+        selectedEnrollment =
+          student.student_enrollments?.find((e) => !e.left_at) ||
+          student.student_enrollments?.[0];
+      }
+  
+      const homeroomClass = selectedEnrollment?.class;
+      const isHistorical = Boolean(selectedEnrollment?.left_at || selectedEnrollment?.status === 'COMPLETED');
+      const primaryTeacher =
+        homeroomClass?.teacher_classes?.find((tc) => tc.is_primary && !tc.left_at)?.teacher ||
+        homeroomClass?.teacher_classes?.[0]?.teacher;
+  
+      // Full Health Assessment history
+      const healthHistory = await prisma.healthAssessment.findMany({
+        where: {
+          student_id: student.student_id,
+          deleted_at: null,
+        },
+        orderBy: { assessment_date: 'desc' },
+        include: {
+          recorder: {
+            include: {
+              teacher: true,
+            },
+          },
+        },
+      });
+  
+      // Pickup Authorizations
+      const pickupAuthorizations = await prisma.pickupAuthorization.findMany({
+        where: {
+          student_id: student.student_id,
+          deleted_at: null,
+        },
+        orderBy: { created_at: 'desc' },
+        include: {
+          approver: {
+            include: { teacher: true },
+          },
+        },
+      });
+  
+      return {
+        student: {
+          id: student.public_id,
+          studentCode: student.student_code,
+          fullName: student.full_name,
+          avatarUrl: student.avatar_url,
+          gender: student.gender === 'MALE' ? 'Nam' : 'Nữ',
+          dateOfBirth: student.date_of_birth
+            ? new Date(student.date_of_birth).toLocaleDateString('vi-VN')
+            : null,
+          ethnic: student.ethnic || 'Kinh',
+          nationality: student.nationality || 'Việt Nam',
+          placeOfBirth: student.place_of_birth || 'Kiên Giang',
+          permanentResidence: student.permanent_residence || 'Hòn Tre, Kiên Hải, Kiên Giang',
+          currentResidence: student.current_residence || 'Hòn Tre, Kiên Hải, Kiên Giang',
+          enrollmentDate: student.enrollment_date
+            ? new Date(student.enrollment_date).toLocaleDateString('vi-VN')
+            : null,
+          status: student.status,
+          statusLabel: student.status === 'STUDYING' ? 'Đang học' : 'Đã tốt nghiệp',
+          previousSchool: student.previous_school || 'Chưa học trường nào trước đây',
+          allergyNotes: student.allergy_notes || 'Không ghi nhận dị ứng thức ăn hay thuốc',
+          medicalNotes: student.medical_notes || 'Sức khỏe tổng quát tốt, tiêm chủng đầy đủ',
+        },
+        classInfo: homeroomClass
+          ? {
+              id: homeroomClass.public_id,
+              name: homeroomClass.name,
+              ageGroup: homeroomClass.age_group,
+              roomNumber: homeroomClass.room_number,
+              schoolYear: homeroomClass.school_year?.name,
+              isHistorical,
+              status: selectedEnrollment?.status,
+            }
+          : null,
+        primaryTeacher: primaryTeacher
+          ? {
+              fullName: primaryTeacher.full_name,
+              phone: primaryTeacher.phone,
+              email: primaryTeacher.email,
+              avatarUrl: primaryTeacher.avatar_url,
+            }
+          : null,
+        guardians: (student.parents || []).map((p, index) => ({
+          id: p.public_id,
+          fullName: p.full_name,
+          relationship: p.relationship,
+          phone: p.phone,
+          canPickup: p.can_pickup,
+          avatarUrl: p.avatar_url,
+          isPrimary: index === 0 || p.relationship === 'Mẹ' || p.relationship === 'Bố',
+        })),
+        enrollments,
+        isHistorical,
+        selectedClassId: homeroomClass?.public_id || null,
+        healthHistory: healthHistory.map((h) => {
+          const bmiInfo = this._calculateBmiCategory(h.bmi);
+          return {
+            id: h.public_id,
+            date: new Date(h.assessment_date).toLocaleDateString('vi-VN'),
+            rawDate: h.assessment_date,
+            height: Number(h.height),
+            weight: Number(h.weight),
+            bmi: Number(h.bmi),
+            bmiCategory: bmiInfo.label,
+            bmiColor: bmiInfo.color,
+            heightZscore: h.height_for_age_zscore ? Number(h.height_for_age_zscore) : null,
+            weightZscore: h.weight_for_age_zscore ? Number(h.weight_for_age_zscore) : null,
+            notes: h.notes || 'Bình thường',
+            recordedBy: h.recorder?.teacher?.full_name || 'Y tế trường',
+          };
+        }),
+        pickupAuthorizations: pickupAuthorizations.map((r) => ({
+          id: r.public_id,
+          pickupPersonName: r.pickup_person_name,
+          pickupPersonPhone: r.pickup_person_phone,
+          pickupCitizenId: r.pickup_citizen_id || null,
+          relationship: r.relationship,
+          photoUrl: r.photo_url || null,
+          note: r.note || null,
+          startDate: new Date(r.start_date).toLocaleDateString('vi-VN'),
+          endDate: new Date(r.end_date).toLocaleDateString('vi-VN'),
+          status: r.status,
+          statusLabel:
+            r.status === 'APPROVED'
+              ? 'Đã duyệt'
+              : r.status === 'PENDING'
+                ? 'Chờ duyệt'
+                : r.status === 'REJECTED'
+                  ? 'Từ chối'
+                  : 'Đã hủy',
+          statusColor:
+            r.status === 'APPROVED'
+              ? 'emerald'
+              : r.status === 'PENDING'
+                ? 'amber'
+                : r.status === 'REJECTED'
+                  ? 'rose'
+                  : 'gray',
+          rejectedReason: r.rejected_reason || null,
+          approvedAt: r.approved_at ? new Date(r.approved_at).toLocaleDateString('vi-VN') : null,
+          approverName: r.approver?.teacher?.full_name || null,
+          createdAt: new Date(r.created_at).toLocaleDateString('vi-VN'),
+        })),
+      };
+    }
+
 }
 export const parentService = new ParentService();
 export default parentService;

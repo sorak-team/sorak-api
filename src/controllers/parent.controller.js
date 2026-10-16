@@ -20,6 +20,15 @@ class ParentController {
       }
     }
 
+  async getProfile(req, res, next) {
+      try {
+        const data = await parentService.getStudentProfile(req.user.sub, req.query?.classId);
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const parentController = new ParentController();
 export default parentController;
