@@ -2340,6 +2340,31 @@ export default parentService;export class ParentService {
       };
     }
 
+  async cancelPickupRequest(accountSub, requestId) {
+      const { student } = await this._getStudentForAccount(accountSub);
+  
+      const existing = await prisma.pickupAuthorization.findUnique({
+        where: { public_id: requestId },
+      });
+  
+      if (!existing || existing.student_id !== student.student_id) {
+        throw NotFound('Không tìm thấy yêu cầu ủy quyền.');
+      }
+  
+      if (existing.status !== 'PENDING') {
+        throw BadRequest('Chỉ có thể hủy yêu cầu đang ở trạng thái Chờ duyệt.');
+      }
+  
+      await prisma.pickupAuthorization.update({
+        where: { authorization_id: existing.authorization_id },
+        data: { status: 'CANCELLED' },
+      });
+  
+      return {
+        message: 'Đã hủy yêu cầu ủy thác đón thành công.',
+      };
+    }
+
 }
 export const parentService = new ParentService();
 export default parentService;
