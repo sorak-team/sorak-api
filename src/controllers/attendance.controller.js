@@ -55,5 +55,22 @@ class AttendanceController {
     }
   }
 
+  async recordDismissal(req, res, next) {
+    try {
+      const { classId } = req.params;
+      const { date, records } = req.body;
+      const accountId = req.user?.sub;
+      const data = await attendanceService.recordDismissal({
+        classId,
+        date,
+        accountId,
+        records,
+      });
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
 }
 export default new AttendanceController();
