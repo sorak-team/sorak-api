@@ -29,6 +29,15 @@ class ParentController {
       }
     }
 
+  async getRequests(req, res, next) {
+      try {
+        const data = await parentService.getRequests(req.user.sub, req.query);
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const parentController = new ParentController();
 export default parentController;
