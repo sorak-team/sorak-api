@@ -3080,6 +3080,46 @@ export default parentService;export class ParentService {
       };
     }
 
+  async submitGoodBehaviorFeedback(accountSub, { month, year, feedback }) {
+      const { account, student } = await this._getStudentForAccount(accountSub);
+  
+      if (!feedback?.trim()) {
+        throw BadRequest('Vui lòng nhập nội dung phản hồi.');
+      }
+  
+      const today = new Date();
+      const targetMonth = month ? parseInt(month, 10) : today.getMonth() + 1;
+      const targetYear = year ? parseInt(year, 10) : today.getFullYear();
+  
+      // Check if monthly assessment exists
+      let assessment = await prisma.monthlyAssessment.findFirst({
+        where: {
+          student_id: student.student_id,
+          month: targetMonth,
+          year: targetYear,
+        },
+      });
+  
+      if (!assessment) {
+        throw NotFound('Chưa có phiếu đánh giá tháng của giáo viên để gửi phản hồi.');
+      }
+  
+      const updated = await prisma.monthlyAssessment.update({
+        where: { monthly_assessment_id: assessment.monthly_assessment_id },
+        data: {
+          parent_feedback: feedback.trim(),
+          feedback_at: new Date(),
+          feedback_by: account.account_id,
+        },
+      });
+  
+      return {
+        message: 'Gửi phản hồi thành công đến giáo viên chủ nhiệm!',
+        parentFeedback: updated.parent_feedback,
+        feedbackAt: new Date(updated.feedback_at).toLocaleDateString('vi-VN'),
+      };
+    }
+
 }
 export const parentService = new ParentService();
 export default parentService;
