@@ -9,6 +9,7 @@ router.use(authMiddleware);
 router.get('/home', parentController.getHome);
 router.get('/schedule', parentController.getSchedule);
 router.get('/profile', parentController.getProfile);
+router.get('/requests', parentController.getRequests);
 
 
 
