@@ -87,5 +87,19 @@ class AttendanceController {
     }
   }
 
+  async clearAllDismissals(req, res, next) {
+    try {
+      const { classId } = req.params;
+      const { date } = req.query;
+      const data = await attendanceService.clearAllDismissals({
+        classId,
+        date,
+      });
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
 }
 export default new AttendanceController();
