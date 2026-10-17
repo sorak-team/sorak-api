@@ -101,5 +101,20 @@ class AttendanceController {
     }
   }
 
+  async getPickupAuthorizations(req, res, next) {
+    try {
+      const { classId } = req.params;
+      const { status, date } = req.query;
+      const data = await attendanceService.getPickupAuthorizations({
+        classId,
+        status,
+        date,
+      });
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
 }
 export default new AttendanceController();

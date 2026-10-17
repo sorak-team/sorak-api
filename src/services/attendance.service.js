@@ -737,6 +737,38 @@ export class AttendanceService {
       date: targetDateStr,
     };
   }
+
+  async clearAllDismissals({ classId, date }) {
+    const cId = BigInt(classId || 5);
+    const targetDateStr = date || new Date().toISOString().slice(0, 10);
+    const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+
+    const result = await prisma.attendance.updateMany({
+      where: {
+        class_id: cId,
+        date: targetDate,
+        deleted_at: null,
+      },
+      data: {
+        check_out_time: null,
+        check_out_by: null,
+        pickup_person_name: null,
+        pickup_relationship: null,
+        pickup_person_phone: null,
+        pickup_citizen_id: null,
+        pickup_photo_url: null,
+        pickup_note: null,
+        updated_at: new Date(),
+      },
+    });
+
+    return {
+      success: true,
+      message: 'Đã xóa toàn bộ thông tin đón trẻ ngày này',
+      clearedCount: result.count,
+      date: targetDateStr,
+    };
+  }
 }
 export const attendanceService = new AttendanceService();
 export default attendanceService;
