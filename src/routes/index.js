@@ -12,6 +12,7 @@ import healthRouter from './health.routes.js';
 import uploadRouter from './upload.routes.js';
 import assessmentRouter from './assessment.routes.js';
 import goodBehaviorRouter from './good-behavior.routes.js';
+import parentRouter from './parent.routes.js';
 
 const router = Router();
 
@@ -28,5 +29,6 @@ router.use('/health', healthRouter);
 router.use('/upload', uploadRouter);
 router.use('/assessment', assessmentRouter);
 router.use('/good-behavior', goodBehaviorRouter);
+router.use('/parent', parentRouter);
 
 export default router;
