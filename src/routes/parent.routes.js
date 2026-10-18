@@ -12,6 +12,7 @@ router.get('/profile', parentController.getProfile);
 router.get('/requests', parentController.getRequests);
 router.post('/requests/pickup', parentController.createPickupRequest);
 router.post('/requests/pickup/:requestId/cancel', parentController.cancelPickupRequest);
+router.get('/good-behavior', parentController.getGoodBehavior);
 
 
 
