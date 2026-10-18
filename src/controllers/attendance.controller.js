@@ -116,5 +116,20 @@ class AttendanceController {
     }
   }
 
+  async createPickupAuthorization(req, res, next) {
+    try {
+      const { classId } = req.params;
+      const accountId = req.user?.sub;
+      const data = await attendanceService.createPickupAuthorization({
+        classId,
+        accountId,
+        ...req.body,
+      });
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
 }
 export default new AttendanceController();
