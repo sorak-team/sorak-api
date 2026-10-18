@@ -15,6 +15,7 @@ router.post('/requests/pickup/:requestId/cancel', parentController.cancelPickupR
 router.get('/good-behavior', parentController.getGoodBehavior);
 router.post('/good-behavior/feedback', parentController.submitGoodBehaviorFeedback);
 router.get('/notifications', parentController.getNotifications);
+router.patch('/notifications/:id/read', parentController.markNotificationRead);
 
 
 
