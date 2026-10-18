@@ -3158,6 +3158,32 @@ export default parentService;export class ParentService {
       };
     }
 
+  async markNotificationRead(accountSub, notificationPublicId) {
+      const account = await prisma.account.findUnique({
+        where: { public_id: accountSub },
+      });
+  
+      if (!account) throw NotFound('Không tìm thấy tài khoản.');
+  
+      if (notificationPublicId === 'all') {
+        await prisma.notification.updateMany({
+          where: { account_id: account.account_id, is_read: false },
+          data: { is_read: true, read_at: new Date() },
+        });
+        return { message: 'Đã đánh dấu đọc tất cả thông báo.' };
+      }
+  
+      await prisma.notification.updateMany({
+        where: {
+          public_id: notificationPublicId,
+          account_id: account.account_id,
+        },
+        data: { is_read: true, read_at: new Date() },
+      });
+  
+      return { message: 'Đã đánh dấu thông báo là đã đọc.' };
+    }
+
 }
 export const parentService = new ParentService();
 export default parentService;
