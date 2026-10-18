@@ -2186,6 +2186,73 @@ export default parentService;export class ParentService {
       };
     }
 
+  async getRequests(accountSub, { status } = {}) {
+      const { student } = await this._getStudentForAccount(accountSub);
+  
+      const where = {
+        student_id: student.student_id,
+        deleted_at: null,
+      };
+  
+      if (status && ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'].includes(status.toUpperCase())) {
+        where.status = status.toUpperCase();
+      }
+  
+      const requests = await prisma.pickupAuthorization.findMany({
+        where,
+        orderBy: { created_at: 'desc' },
+        include: {
+          approver: {
+            include: {
+              teacher: true,
+            },
+          },
+        },
+      });
+  
+      return {
+        student: {
+          id: student.public_id,
+          fullName: student.full_name,
+          studentCode: student.student_code,
+        },
+        requests: requests.map((r) => ({
+          id: r.public_id,
+          pickupPersonName: r.pickup_person_name,
+          pickupPersonPhone: r.pickup_person_phone,
+          pickupCitizenId: r.pickup_citizen_id || null,
+          relationship: r.relationship,
+          photoUrl: r.photo_url || null,
+          note: r.note || null,
+          startDate: new Date(r.start_date).toLocaleDateString('vi-VN'),
+          endDate: new Date(r.end_date).toLocaleDateString('vi-VN'),
+          rawStartDate: r.start_date,
+          rawEndDate: r.end_date,
+          status: r.status,
+          statusLabel:
+            r.status === 'APPROVED'
+              ? 'Đã duyệt'
+              : r.status === 'PENDING'
+                ? 'Chờ duyệt'
+                : r.status === 'REJECTED'
+                  ? 'Từ chối'
+                  : 'Đã hủy',
+          statusColor:
+            r.status === 'APPROVED'
+              ? 'emerald'
+              : r.status === 'PENDING'
+                ? 'amber'
+                : r.status === 'REJECTED'
+                  ? 'rose'
+                  : 'gray',
+          rejectedReason: r.rejected_reason || null,
+          approvedAt: r.approved_at ? new Date(r.approved_at).toLocaleDateString('vi-VN') : null,
+          approverName: r.approver?.teacher?.full_name || null,
+          createdAt: new Date(r.created_at).toLocaleDateString('vi-VN'),
+        })),
+      };
+    }
+
 }
 export const parentService = new ParentService();
 export default parentService;
