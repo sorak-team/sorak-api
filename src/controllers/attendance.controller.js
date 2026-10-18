@@ -131,5 +131,37 @@ class AttendanceController {
     }
   }
 
+  async approvePickupAuthorization(req, res, next) {
+    try {
+      const { classId, authId } = req.params;
+      const accountId = req.user?.sub;
+      const data = await attendanceService.approvePickupAuthorization({
+        classId,
+        authId,
+        accountId,
+      });
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async rejectPickupAuthorization(req, res, next) {
+    try {
+      const { classId, authId } = req.params;
+      const { reason } = req.body || {};
+      const accountId = req.user?.sub;
+      const data = await attendanceService.rejectPickupAuthorization({
+        classId,
+        authId,
+        accountId,
+        reason,
+      });
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
 }
 export default new AttendanceController();

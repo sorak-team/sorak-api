@@ -899,6 +899,70 @@ export class AttendanceService {
       },
     };
   }
+
+  async createPickupAuthorization({
+    classId,
+    accountId,
+    studentId,
+    pickupPersonName,
+    pickupPersonPhone,
+    pickupCitizenId,
+    relationship,
+    photoUrl,
+    note,
+    startDate,
+    endDate,
+    status = 'APPROVED',
+  }) {
+    let staffId = 40n;
+    if (accountId) {
+      try {
+        if (typeof accountId === 'string' && accountId.includes('-')) {
+          const userAcc = await prisma.account.findFirst({
+            where: { public_id: accountId },
+            select: { account_id: true },
+          });
+          if (userAcc) staffId = userAcc.account_id;
+        } else {
+          staffId = BigInt(accountId);
+        }
+      } catch (e) {
+        console.warn('Could not parse staff accountId:', e);
+      }
+    }
+
+    const sId = BigInt(studentId);
+    const start = new Date(`${startDate}T00:00:00.000Z`);
+    const end = new Date(`${endDate}T23:59:59.999Z`);
+
+    const created = await prisma.pickupAuthorization.create({
+      data: {
+        student_id: sId,
+        authorized_by: staffId,
+        pickup_person_name: pickupPersonName.trim(),
+        pickup_person_phone: pickupPersonPhone?.trim() || '',
+        pickup_citizen_id: pickupCitizenId?.trim() || null,
+        relationship: relationship?.trim() || 'Người được ủy quyền',
+        photo_url: photoUrl?.trim() || null,
+        note: note?.trim() || null,
+        start_date: start,
+        end_date: end,
+        status,
+        approved_by: status === 'APPROVED' ? staffId : null,
+        approved_at: status === 'APPROVED' ? new Date() : null,
+      },
+      include: {
+        student: true,
+      },
+    });
+
+    return {
+      id: created.authorization_id.toString(),
+      publicId: created.public_id,
+      studentName: created.student?.full_name,
+      status: created.status,
+    };
+  }
 }
 export const attendanceService = new AttendanceService();
 export default attendanceService;
