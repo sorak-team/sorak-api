@@ -173,6 +173,68 @@ export class HealthService {
       students,
     };
   }
+
+  async saveHealthRecords({ classId, date, records }) {
+    const targetDateStr = date || new Date().toISOString().slice(0, 10);
+    const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+    let savedCount = 0;
+
+    if (Array.isArray(records) && records.length > 0) {
+      for (const rec of records) {
+        const rawId = rec.studentId || rec.id;
+        const student = await this._resolveStudent(rawId);
+        if (!student) continue;
+        const sId = student.student_id;
+        const height = Number(rec.height) || 85.0;
+        const weight = Number(rec.weight) || 12.0;
+        const bmi = Number((weight / ((height / 100) ** 2)).toFixed(2));
+        const note = rec.note || 'Khám sức khỏe định kỳ';
+
+        const existing = await prisma.healthAssessment.findFirst({
+          where: {
+            student_id: sId,
+            assessment_date: targetDate,
+            deleted_at: null,
+          },
+        });
+
+        if (existing) {
+          await prisma.healthAssessment.update({
+            where: { assessment_id: existing.assessment_id },
+            data: {
+              height,
+              weight,
+              bmi,
+              notes: note,
+              updated_at: new Date(),
+            },
+          });
+        } else {
+          await prisma.healthAssessment.create({
+            data: {
+              student_id: sId,
+              assessment_date: targetDate,
+              height,
+              weight,
+              bmi,
+              height_for_age_zscore: 0.2,
+              weight_for_age_zscore: 0.2,
+              bmi_for_age_zscore: 0.1,
+              notes: note,
+              recorded_by: 40n,
+            },
+          });
+        }
+        savedCount++;
+      }
+    }
+
+    return {
+      success: true,
+      message: 'Lưu sức khoẻ thành công vào cơ sở dữ liệu',
+      savedCount,
+    };
+  }
 }
 export const healthService = new HealthService();
 export default healthService;
