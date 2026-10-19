@@ -1,25 +1,41 @@
+import bcrypt from 'bcryptjs';
 import prisma from '../config/prisma.js';
 import { BadRequest, NotFound, Conflict } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
 
 export class TeacherService {
+  /**
+   * Helper to parse teacher identifier (uuid or employee_code)
+   * Rejects numeric sequence IDs to prevent enumeration.
+   */
   _parseId(id) {
     const str = String(id).trim();
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
     if (isUuid) return { public_id: str };
-    if (/^\d+$/.test(str)) return { teacher_id: BigInt(str) };
-    if (/^[A-Za-z0-9_-]+$/.test(str)) return { teacher_code: str };
+    if (/^[A-Za-z0-9_-]+$/.test(str) && !/^\d+$/.test(str)) return { employee_code: str };
     return { public_id: '00000000-0000-0000-0000-000000000000' };
   }
-  _getDefaultAvatar(seed) {
-    return `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(seed || 'teacher')}`;
-  }
+
+  /**
+   * Helper to parse class identifier (uuid only)
+   */
   _parseClassId(id) {
     const str = String(id).trim();
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
     return { public_id: isUuid ? str : '00000000-0000-0000-0000-000000000000' };
   }
 
+  /**
+   * Default DiceBear Initials avatar for teacher profile
+   */
+  _getDefaultAvatar(seed) {
+    const safeSeed = (seed || 'GV').toString().trim();
+    return `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(safeSeed)}`;
+  }
+
+  /**
+   * List teachers with pagination, search, status, gender and class filtering
+   */
   async listTeachers({
     page = 1,
     limit = 20,
@@ -172,6 +188,9 @@ export class TeacherService {
     };
   }
 
+  /**
+   * Get single teacher by ID
+   */
   async getTeacherById(id) {
     const where = { ...this._parseId(id), deleted_at: null };
 
@@ -262,6 +281,10 @@ export class TeacherService {
     };
   }
 
+  /**
+   * Auto-generate teacher code: CB + 2-digit join year + 001..099
+   * e.g. CB21001 for year 2021
+   */
   async _generateTeacherCode(startDate) {
     let joinYear;
     if (startDate) {
@@ -304,6 +327,9 @@ export class TeacherService {
     return `${prefix}${nextSeq}`;
   }
 
+  /**
+   * Create teacher with transactional account binding
+   */
   async createTeacher(data) {
     let finalCode = data.employeeCode?.trim().toUpperCase();
     if (
@@ -378,6 +404,9 @@ export class TeacherService {
     return this.getTeacherById(createdTeacher.public_id || createdTeacher.teacher_id.toString());
   }
 
+  /**
+   * Update teacher profile
+   */
   async updateTeacher(id, data) {
     const where = { ...this._parseId(id), deleted_at: null };
     const teacher = await prisma.teacher.findFirst({ where });
@@ -417,6 +446,9 @@ export class TeacherService {
     return this.getTeacherById(teacher.public_id || teacher.teacher_id.toString());
   }
 
+  /**
+   * Assign teacher to homeroom class
+   */
   async assignTeacherToClass(teacherId, { classId, isPrimary = false, assignedAt = new Date() }) {
     const teacher = await prisma.teacher.findFirst({
       where: { ...this._parseId(teacherId), deleted_at: null },
@@ -497,6 +529,9 @@ export class TeacherService {
     };
   }
 
+  /**
+   * Remove teacher from class assignment (sets left_at)
+   */
   async removeTeacherFromClass(teacherId, classId) {
     const teacher = await prisma.teacher.findFirst({
       where: { ...this._parseId(teacherId), deleted_at: null },
@@ -527,6 +562,9 @@ export class TeacherService {
     return { success: true, message: 'Đã hoàn tất phân công giáo viên rời khỏi lớp học' };
   }
 
+  /**
+   * Soft delete teacher
+   */
   async deleteTeacher(id) {
     const where = { ...this._parseId(id), deleted_at: null };
     const teacher = await prisma.teacher.findFirst({ where });
@@ -561,5 +599,6 @@ export class TeacherService {
     return { success: true, message: 'Đã xóa hồ sơ giáo viên thành công' };
   }
 }
+
 export const teacherService = new TeacherService();
 export default teacherService;
