@@ -38,6 +38,15 @@ class ParentController {
       }
     }
 
+  async createPickupRequest(req, res, next) {
+      try {
+        const data = await parentService.createPickupRequest(req.user.sub, req.body);
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const parentController = new ParentController();
 export default parentController;
