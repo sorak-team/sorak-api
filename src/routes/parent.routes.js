@@ -4,8 +4,8 @@ import { authMiddleware } from '../middlewares/auth.js';
 
 const router = Router();
 
-
 router.use(authMiddleware);
+
 router.get('/home', parentController.getHome);
 router.get('/schedule', parentController.getSchedule);
 router.get('/profile', parentController.getProfile);
@@ -16,7 +16,5 @@ router.get('/good-behavior', parentController.getGoodBehavior);
 router.post('/good-behavior/feedback', parentController.submitGoodBehaviorFeedback);
 router.get('/notifications', parentController.getNotifications);
 router.patch('/notifications/:id/read', parentController.markNotificationRead);
-
-
 
 export default router;
