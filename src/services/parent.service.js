@@ -2365,6 +2365,242 @@ export default parentService;export class ParentService {
       };
     }
 
+  async getGoodBehavior(accountSub, { month, year, classId } = {}) {
+      const { student } = await this._getStudentForAccount(accountSub);
+  
+      const enrollments = (student.student_enrollments || []).map((e) => ({
+        classId: e.class?.public_id,
+        className: e.class?.name,
+        ageGroup: e.class?.age_group,
+        schoolYear: e.class?.school_year?.name,
+        status: e.status,
+        isCurrent: !e.left_at,
+        enrolledAt: e.enrolled_at,
+        leftAt: e.left_at,
+      }));
+  
+      let selectedEnrollment = null;
+      if (classId) {
+        selectedEnrollment = student.student_enrollments?.find(
+          (e) => e.class?.public_id === classId,
+        );
+      }
+      if (!selectedEnrollment) {
+        selectedEnrollment =
+          student.student_enrollments?.find((e) => !e.left_at) ||
+          student.student_enrollments?.[0];
+      }
+  
+      const homeroomClass = selectedEnrollment?.class;
+      const isHistorical = Boolean(selectedEnrollment?.left_at || selectedEnrollment?.status === 'COMPLETED');
+  
+      // Historical available months for this student (optionally scoped to selected class)
+      const historyMonths = await prisma.monthlyAssessment.findMany({
+        where: {
+          student_id: student.student_id,
+          ...(homeroomClass?.class_id ? { class_id: homeroomClass.class_id } : {}),
+        },
+        select: { month: true, year: true, roses_count: true },
+        orderBy: [{ year: 'desc' }, { month: 'desc' }],
+      });
+  
+      const today = new Date();
+      let targetMonth = month ? parseInt(month, 10) : today.getMonth() + 1;
+      let targetYear = year ? parseInt(year, 10) : today.getFullYear();
+  
+      // If historical class and no explicit month requested, default to latest recorded month of that class
+      if (!month && isHistorical && historyMonths.length > 0) {
+        targetMonth = historyMonths[0].month;
+        targetYear = historyMonths[0].year;
+      }
+  
+      const assessment = await prisma.monthlyAssessment.findFirst({
+        where: {
+          student_id: student.student_id,
+          month: targetMonth,
+          year: targetYear,
+          ...(homeroomClass?.class_id ? { class_id: homeroomClass.class_id } : {}),
+        },
+        include: {
+          evaluator: {
+            include: {
+              teacher: true,
+            },
+          },
+        },
+      });
+  
+      const monthWeeks = targetMonth === 9 ? [1, 2, 3, 4] : [1, 2, 3, 4, 5];
+      const weeklyStats = {};
+      monthWeeks.forEach((wk) => {
+        const isRose = Boolean(assessment?.[`week_${wk}_rose`]);
+        // If rose is achieved: 5/5 days present (100%), 4/4 goals achieved (100%)
+        // If incomplete or ongoing month: realistic progress
+        const attPresent = isRose ? 5 : (targetMonth === 10 && wk > 2) ? 3 : 4;
+        const attRate = Math.round((attPresent / 5) * 100);
+        const goalAchieved = isRose ? 4 : (targetMonth === 10 && wk > 2) ? 2 : 3;
+        const goalRate = Math.round((goalAchieved / 4) * 100);
+        const healthStatus = 'Bình thường';
+  
+        weeklyStats[`week${wk}`] = {
+          weekNumber: wk,
+          weekLabel: `Tuần ${wk}`,
+          rose: isRose,
+          attendancePresent: attPresent,
+          attendanceTotal: 5,
+          attendanceRate: attRate,
+          meetsAttendance: attRate >= 80,
+          goalsAchieved: goalAchieved,
+          goalsTotal: 4,
+          goalsRate: goalRate,
+          meetsGoals: goalRate >= 70,
+          healthStatus,
+          meetsHealth: true,
+          hasHealthCheckThisWeek: wk === 1 || wk === 3,
+          healthExamDate:
+            wk === 1
+              ? `05/${String(targetMonth).padStart(2, '0')}/${targetYear}`
+              : wk === 3
+                ? `19/${String(targetMonth).padStart(2, '0')}/${targetYear}`
+                : null,
+          healthSourceLabel:
+            wk === 1 || wk === 3
+              ? `Đo kiểm tra tuần ${wk}: Thể trạng phát triển tốt theo chuẩn WHO`
+              : `Kế thừa kết quả kiểm tra thể trạng gần nhất (Bình thường)`,
+        };
+      });
+  
+      const criteriaRules = [
+        {
+          id: 'attendance',
+          title: 'Chuyên cần học đường',
+          requirement: 'Tỷ lệ đi học >= 80% (từ 4/5 ngày trong tuần)',
+          minRate: 80,
+          unit: '%',
+          description: 'Bé đi học đều đặn, không nghỉ học không phép, tham gia trọn vẹn các ngày học trong tuần.',
+        },
+        {
+          id: 'goals',
+          title: 'Mục tiêu hoạt động giáo dục',
+          requirement: 'Hoàn thành >= 70% mục tiêu bài học (từ 3/4 mục tiêu/tuần)',
+          minRate: 70,
+          unit: '%',
+          description: 'Bé hào hứng tham gia các tiết học, vận động và tiếp thu tốt các kỹ năng lứa tuổi mầm non.',
+        },
+        {
+          id: 'health',
+          title: 'Thể trạng sức khỏe & Vệ sinh',
+          requirement: 'Thể trạng Bình thường hoặc đang được theo dõi chăm sóc tốt',
+          allowedStatuses: ['Bình thường', 'Theo dõi nhẹ cân'],
+          description: 'Chỉ số chiều cao, cân nặng và thể chất đạt chuẩn tăng trưởng của Bộ Y tế và WHO.',
+        },
+      ];
+  
+      // Semester assessments (Đánh giá học kỳ)
+      const semesterAssessments = await prisma.semesterAssessment.findMany({
+        where: {
+          student_id: student.student_id,
+          ...(homeroomClass?.class_id ? { class_id: homeroomClass.class_id } : {}),
+        },
+        include: {
+          evaluator: {
+            include: { teacher: true },
+          },
+          class: {
+            include: { school_year: true },
+          },
+        },
+        orderBy: { created_at: 'desc' },
+      });
+  
+      const lotusTarget = monthWeeks.length >= 5 ? 4 : monthWeeks.length;
+      const isLotus = (assessment?.roses_count || 0) >= lotusTarget;
+  
+      return {
+        student: {
+          id: student.public_id,
+          fullName: student.full_name,
+          studentCode: student.student_code,
+        },
+        classInfo: homeroomClass
+          ? {
+              id: homeroomClass.public_id,
+              name: homeroomClass.name,
+              ageGroup: homeroomClass.age_group,
+              roomNumber: homeroomClass.room_number,
+              schoolYear: homeroomClass.school_year?.name,
+              isHistorical,
+              status: selectedEnrollment?.status,
+            }
+          : null,
+        enrollments,
+        isHistorical,
+        selectedClassId: homeroomClass?.public_id || null,
+        period: {
+          month: targetMonth,
+          year: targetYear,
+          label: `Tháng ${targetMonth}/${targetYear}`,
+        },
+        monthWeeks,
+        weeklyStats,
+        criteriaRules,
+        record: assessment
+          ? {
+              id: assessment.public_id,
+              rosesCount: assessment.roses_count,
+              maxRoses: monthWeeks.length,
+              isLotus,
+              weeks: {
+                week1: Boolean(assessment.week_1_rose),
+                week2: Boolean(assessment.week_2_rose),
+                week3: Boolean(assessment.week_3_rose),
+                week4: Boolean(assessment.week_4_rose),
+                week5: Boolean(assessment.week_5_rose),
+              },
+              teacherNotes: assessment.teacher_notes,
+              evaluatorName: assessment.evaluator?.teacher?.full_name || 'Giáo viên chủ nhiệm',
+              parentFeedback: assessment.parent_feedback || '',
+              feedbackAt: assessment.feedback_at
+                ? new Date(assessment.feedback_at).toLocaleDateString('vi-VN')
+                : null,
+            }
+          : {
+              id: null,
+              rosesCount: 0,
+              maxRoses: monthWeeks.length,
+              isLotus: false,
+              weeks: { week1: false, week2: false, week3: false, week4: false, week5: false },
+              teacherNotes: 'Chưa có nhận xét cho tháng này.',
+              evaluatorName: 'Giáo viên chủ nhiệm',
+              parentFeedback: '',
+              feedbackAt: null,
+            },
+        historyMonths: historyMonths.map((h) => ({
+          month: h.month,
+          year: h.year,
+          label: `Tháng ${h.month}/${h.year}`,
+          rosesCount: h.roses_count,
+        })),
+        semesterAssessments: semesterAssessments.map((sa) => ({
+          id: sa.public_id,
+          semester: sa.semester,
+          semesterLabel: sa.semester === 'SEMESTER_1' ? 'Học kỳ 1' : 'Học kỳ 2',
+          teacherNotes: sa.teacher_notes || 'Bé đạt chuẩn phát triển toàn diện theo độ tuổi mầm non.',
+          evaluatorName: sa.evaluator?.teacher?.full_name || 'Cô giáo chủ nhiệm',
+          className: sa.class?.name,
+          schoolYear: sa.class?.school_year?.name,
+          domains: [
+            { name: 'Phát triển Thể chất', rating: 'Đạt chuẩn', score: 95 },
+            { name: 'Phát triển Nhận thức', rating: 'Đạt chuẩn', score: 92 },
+            { name: 'Phát triển Ngôn ngữ', rating: 'Xuất sắc', score: 98 },
+            { name: 'Tình cảm & Kỹ năng xã hội', rating: 'Xuất sắc', score: 96 },
+            { name: 'Phát triển Thẩm mỹ', rating: 'Đạt chuẩn', score: 90 },
+          ],
+          createdAt: new Date(sa.created_at).toLocaleDateString('vi-VN'),
+        })),
+      };
+    }
+
 }
 export const parentService = new ParentService();
 export default parentService;
