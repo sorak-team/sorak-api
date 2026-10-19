@@ -84,6 +84,16 @@ class ParentController {
       }
     }
 
+  async markNotificationRead(req, res, next) {
+      try {
+        const { id } = req.params;
+        const data = await parentService.markNotificationRead(req.user.sub, id);
+        res.success(data);
+      } catch (err) {
+        next(err);
+      }
+    }
+
 }
 export const parentController = new ParentController();
 export default parentController;
