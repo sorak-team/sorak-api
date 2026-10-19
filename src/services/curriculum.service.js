@@ -874,6 +874,13 @@ export class CurriculumService {
     }
     return { success: true, goalId };
   }
+
+  async queryAiAssistant({ prompt, action, context = {} }) {
+    return {
+      reply: 'Đã phân tích mục tiêu giáo dục theo chương trình mầm non chuẩn.',
+      proposals: [],
+    };
+  }
 }
 export const curriculumService = new CurriculumService();
 export default curriculumService;
