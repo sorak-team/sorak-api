@@ -1,15 +1,24 @@
+import bcrypt from 'bcryptjs';
 import prisma from '../config/prisma.js';
 import { BadRequest, NotFound, Conflict } from '../utils/http-error.js';
-import bcrypt from 'bcrypt';
 import logger from '../utils/logger.js';
 
 export class AccountService {
+  /**
+   * Helper to parse account identifier (uuid or username)
+   * Rejects numeric sequence IDs to prevent enumeration.
+   */
   _parseId(id) {
     const str = String(id).trim();
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-    return { public_id: isUuid ? str : '00000000-0000-0000-0000-000000000000' };
+    if (isUuid) return { public_id: str };
+    if (/^[A-Za-z0-9_.-]+$/.test(str) && !/^\d+$/.test(str)) return { username: str };
+    return { public_id: '00000000-0000-0000-0000-000000000000' };
   }
 
+  /**
+   * List accounts with pagination, search, role and status filter
+   */
   async listAccounts({ page = 1, limit = 20, search, role, status, sortBy = 'newest' }) {
     const skip = (Math.max(1, page) - 1) * limit;
 
@@ -191,6 +200,9 @@ export class AccountService {
     };
   }
 
+  /**
+   * Get single account by ID (account_id or public_id)
+   */
   async getAccountById(id) {
     const where = { ...this._parseId(id), deleted_at: null };
 
@@ -338,6 +350,9 @@ export class AccountService {
     };
   }
 
+  /**
+   * Create new account
+   */
   async createAccount(data) {
     // 1. Check username collision
     const existing = await prisma.account.findFirst({
@@ -428,6 +443,9 @@ export class AccountService {
     return this.getAccountById(account.public_id || account.account_id.toString());
   }
 
+  /**
+   * Update account
+   */
   async updateAccount(id, data) {
     const where = { ...this._parseId(id), deleted_at: null };
     const account = await prisma.account.findFirst({
@@ -477,6 +495,9 @@ export class AccountService {
     return this.getAccountById(account.public_id || account.account_id.toString());
   }
 
+  /**
+   * Change account active status
+   */
   async changeStatus(id, isActive) {
     const where = { ...this._parseId(id), deleted_at: null };
     const account = await prisma.account.findFirst({ where });
@@ -504,6 +525,9 @@ export class AccountService {
     };
   }
 
+  /**
+   * Reset account password
+   */
   async resetPassword(id, newPassword = '123456') {
     const where = { ...this._parseId(id), deleted_at: null };
     const account = await prisma.account.findFirst({ where });
@@ -536,6 +560,9 @@ export class AccountService {
     };
   }
 
+  /**
+   * Soft delete account
+   */
   async deleteAccount(id) {
     const where = { ...this._parseId(id), deleted_at: null };
     const account = await prisma.account.findFirst({ where });
@@ -560,5 +587,6 @@ export class AccountService {
     return { success: true, message: 'Đã xóa tài khoản thành công' };
   }
 }
+
 export const accountService = new AccountService();
 export default accountService;
