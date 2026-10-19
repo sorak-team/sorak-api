@@ -963,6 +963,87 @@ export class AttendanceService {
       status: created.status,
     };
   }
+
+  async approvePickupAuthorization({ classId, authId, accountId }) {
+    let staffId = 40n;
+    if (accountId) {
+      try {
+        if (typeof accountId === 'string' && accountId.includes('-')) {
+          const userAcc = await prisma.account.findFirst({
+            where: { public_id: accountId },
+            select: { account_id: true },
+          });
+          if (userAcc) staffId = userAcc.account_id;
+        } else {
+          staffId = BigInt(accountId);
+        }
+      } catch (e) {
+        console.warn('Could not parse staff accountId:', e);
+      }
+    }
+
+    const aId = BigInt(authId);
+    const updated = await prisma.pickupAuthorization.update({
+      where: { authorization_id: aId },
+      data: {
+        status: 'APPROVED',
+        approved_by: staffId,
+        approved_at: new Date(),
+        rejected_reason: null,
+      },
+      include: {
+        student: true,
+      },
+    });
+
+    return {
+      id: updated.authorization_id.toString(),
+      status: updated.status,
+      approvedAt: updated.approved_at,
+      studentName: updated.student?.full_name,
+    };
+  }
+
+  async rejectPickupAuthorization({ classId, authId, accountId, reason }) {
+    let staffId = 40n;
+    if (accountId) {
+      try {
+        if (typeof accountId === 'string' && accountId.includes('-')) {
+          const userAcc = await prisma.account.findFirst({
+            where: { public_id: accountId },
+            select: { account_id: true },
+          });
+          if (userAcc) staffId = userAcc.account_id;
+        } else {
+          staffId = BigInt(accountId);
+        }
+      } catch (e) {
+        console.warn('Could not parse staff accountId:', e);
+      }
+    }
+
+    const aId = BigInt(authId);
+    const updated = await prisma.pickupAuthorization.update({
+      where: { authorization_id: aId },
+      data: {
+        status: 'REJECTED',
+        approved_by: staffId,
+        approved_at: new Date(),
+        rejected_reason: reason || 'Từ chối bởi giáo viên',
+      },
+      include: {
+        student: true,
+      },
+    });
+
+    return {
+      id: updated.authorization_id.toString(),
+      status: updated.status,
+      approvedAt: updated.approved_at,
+      rejectedReason: updated.rejected_reason,
+      studentName: updated.student?.full_name,
+    };
+  }
 }
 export const attendanceService = new AttendanceService();
 export default attendanceService;

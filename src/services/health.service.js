@@ -1,25 +1,45 @@
 import prisma from '../config/prisma.js';
-import { BadRequest, NotFound } from '../utils/http-error.js';
-import logger from '../utils/logger.js';
+import { NotFound } from '../utils/http-error.js';
+import { TIMETABLE_DAYS } from './mock-data.js';
 
-const TIMETABLE_DAYS = ['T2', 'T3', 'T4', 'T5', 'T6'];
-
-export class HealthService {
+class HealthService {
+  /**
+   * Helper to resolve target class
+   */
   async _resolveClass(classId) {
+    if (!classId) return null;
     const str = String(classId).trim();
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-    if (isUuid) return prisma.class.findFirst({ where: { public_id: str, deleted_at: null }, include: { school_year: true } });
-    if (/^\d+$/.test(str)) return prisma.class.findFirst({ where: { class_id: BigInt(str), deleted_at: null }, include: { school_year: true } });
-    return null;
+    if (!isUuid) return null;
+    return prisma.class.findFirst({
+      where: { public_id: str, deleted_at: null },
+      include: { school_year: true },
+    });
   }
+
+  /**
+   * Helper to resolve student
+   */
   async _resolveStudent(studentId) {
+    if (!studentId) return null;
     const str = String(studentId).trim();
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-    if (isUuid) return prisma.student.findFirst({ where: { public_id: str, deleted_at: null } });
-    if (/^\d+$/.test(str)) return prisma.student.findFirst({ where: { student_id: BigInt(str), deleted_at: null } });
+    if (isUuid) {
+      return prisma.student.findFirst({
+        where: { public_id: str, deleted_at: null },
+      });
+    }
+    if (/^[A-Za-z0-9_-]+$/.test(str) && !/^\d+$/.test(str)) {
+      return prisma.student.findFirst({
+        where: { student_code: str, deleted_at: null },
+      });
+    }
     return null;
   }
 
+  /**
+   * Get health overview & timetable for class querying live PostgreSQL
+   */
   async getHealthOverview({ classId, week = '12/10 - 18/10/2026' }) {
     // 1. Resolve target class
     let targetClass = null;
@@ -174,6 +194,9 @@ export class HealthService {
     };
   }
 
+  /**
+   * Save health measurements for students to PostgreSQL
+   */
   async saveHealthRecords({ classId, date, records }) {
     const targetDateStr = date || new Date().toISOString().slice(0, 10);
     const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
@@ -236,6 +259,9 @@ export class HealthService {
     };
   }
 
+  /**
+   * Delete health measurements for students of a class
+   */
   async clearHealthRecords({ classId, date }) {
     const targetClass = await this._resolveClass(classId);
 
@@ -259,5 +285,6 @@ export class HealthService {
     };
   }
 }
+
 export const healthService = new HealthService();
 export default healthService;
