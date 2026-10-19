@@ -107,3 +107,50 @@ export const updateStudentSchema = Joi.object({
   parents: Joi.array().items(parentItemSchema).optional(),
 });
 
+export const queryStudentSchema = Joi.object({
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(500).default(20),
+  search: Joi.string().trim().allow('', null).optional(),
+  status: Joi.string()
+    .valid('ALL', 'STUDYING', 'RESERVED', 'TRANSFERRED', 'DROPPED_OUT', 'GRADUATED')
+    .default('ALL'),
+  gender: Joi.string().valid('ALL', 'MALE', 'FEMALE').default('ALL'),
+  classId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).allow('', null).optional(),
+  sortBy: Joi.string()
+    .valid('newest', 'oldest', 'name', 'code', 'dob', 'enrollmentDate')
+    .default('newest'),
+});
+
+export const assignStudentClassSchema = Joi.object({
+  classId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).required().messages({
+    'any.required': 'Mã lớp học (classId) là bắt buộc',
+  }),
+  enrolledAt: Joi.date()
+    .iso()
+    .default(() => new Date()),
+});
+
+export const transferStudentClassSchema = Joi.object({
+  fromClassId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).required().messages({
+    'any.required': 'Lớp học hiện tại (fromClassId) là bắt buộc',
+  }),
+  toClassId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).required().messages({
+    'any.required': 'Lớp học chuyển đến (toClassId) là bắt buộc',
+  }),
+  transferDate: Joi.date()
+    .iso()
+    .default(() => new Date()),
+  reason: Joi.string().trim().allow('', null).optional(),
+  autoApprove: Joi.boolean().default(false),
+});
+
+export const parentSchema = parentItemSchema;
+export const updateParentSchema = Joi.object({
+  fullName: Joi.string().trim().min(2).max(150).optional(),
+  relationship: Joi.string().trim().max(50).optional(),
+  phone: Joi.string()
+    .trim()
+    .pattern(/^[0-9]{9,15}$/)
+    .optional(),
+  canPickup: Joi.boolean().optional(),
+});
