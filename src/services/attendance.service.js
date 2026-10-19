@@ -1,14 +1,70 @@
 import prisma from '../config/prisma.js';
-import { BadRequest, NotFound, Conflict } from '../utils/http-error.js';
-import logger from '../utils/logger.js';
+import { BadRequest, NotFound } from '../utils/http-error.js';
+import { TIMETABLE_DAYS, TIMETABLE_SLOTS } from './mock-data.js';
 
-export class AttendanceService {
-  _parseId(id) {
-    const str = String(id).trim();
+function resolveAcademicWeekDates(weekId) {
+  if (!weekId) return null;
+  const startMonday = new Date(Date.UTC(2026, 8, 7)); // 07 Sep 2026 (Month 8 in 0-indexed JS Date: Monday 07/09/2026)
+  for (let i = 1; i <= 39; i++) {
+    let id = `w-${i}`;
+    if (i === 1) id = 'w-sep-1';
+    else if (i === 2) id = 'w-sep-2';
+    else if (i === 3) id = 'w-sep-3';
+    else if (i === 4) id = 'w-sep-4';
+    else if (i >= 5) id = `w-${i - 4}`;
+
+    if (id === weekId) {
+      const curStart = new Date(startMonday);
+      curStart.setUTCDate(startMonday.getUTCDate() + (i - 1) * 7);
+      const curEnd = new Date(curStart);
+      curEnd.setUTCDate(curStart.getUTCDate() + 6);
+      return {
+        startDate: curStart.toISOString().slice(0, 10),
+        endDate: curEnd.toISOString().slice(0, 10),
+      };
+    }
+  }
+  return null;
+}
+
+class AttendanceService {
+  /**
+   * Helper to resolve target class
+   */
+  async _resolveClass(classId) {
+    if (!classId) return null;
+    const str = String(classId).trim();
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-    return { public_id: isUuid ? str : '00000000-0000-0000-0000-000000000000' };
+    if (!isUuid) return null;
+    return prisma.class.findFirst({
+      where: { public_id: str, deleted_at: null },
+      include: { school_year: true },
+    });
   }
 
+  /**
+   * Helper to resolve student
+   */
+  async _resolveStudent(studentId) {
+    if (!studentId) return null;
+    const str = String(studentId).trim();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    if (isUuid) {
+      return prisma.student.findFirst({
+        where: { public_id: str, deleted_at: null },
+      });
+    }
+    if (/^[A-Za-z0-9_-]+$/.test(str) && !/^\d+$/.test(str)) {
+      return prisma.student.findFirst({
+        where: { student_code: str, deleted_at: null },
+      });
+    }
+    return null;
+  }
+
+  /**
+   * Get attendance & teacher weekly timetable overview querying live PostgreSQL
+   */
   async getTimetableOverview({ classId, week = '12/10 - 18/10/2026', date, startDate, endDate, weekId }) {
     // 1. Resolve class from database
     let targetClass = null;
@@ -320,6 +376,9 @@ export class AttendanceService {
     };
   }
 
+  /**
+   * Update student attendance status for a slot/date with live PostgreSQL persistence
+   */
   async updateAttendance({ classId, date, records }) {
     const defaultDateStr = new Date().toISOString().slice(0, 10);
     const targetDate = date ? new Date(`${date}T00:00:00.000Z`) : new Date(`${defaultDateStr}T00:00:00.000Z`);
@@ -389,6 +448,9 @@ export class AttendanceService {
     };
   }
 
+  /**
+   * Delete attendance records for a class on a specific date
+   */
   async clearAttendance({ classId, date }) {
     const targetClass = await this._resolveClass(classId);
     if (!targetClass) {
@@ -412,6 +474,10 @@ export class AttendanceService {
     };
   }
 
+  /**
+   * Get child dismissal overview for a class and date
+   * Pre-loads attendance check-in status, parents (can_pickup), and approved pickup authorizations
+   */
   async getDismissalOverview({ classId, date }) {
     // 1. Resolve target class
     let targetClass = null;
@@ -594,6 +660,10 @@ export class AttendanceService {
     };
   }
 
+  /**
+   * Record child dismissal (check-out)
+   * Strictly enforces that student must be checked in with status === 'PRESENT'
+   */
   async recordDismissal({ classId, date, accountId, records }) {
     const targetClass = await this._resolveClass(classId);
     if (!targetClass) {
@@ -683,6 +753,9 @@ export class AttendanceService {
     };
   }
 
+  /**
+   * Cancel child dismissal (reset to In-Class state)
+   */
   async cancelDismissal({ classId, date, studentId }) {
     const cId = BigInt(classId || 5);
     const targetDateStr = date || new Date().toISOString().slice(0, 10);
@@ -738,6 +811,9 @@ export class AttendanceService {
     };
   }
 
+  /**
+   * Clear all child dismissals for a class and date
+   */
   async clearAllDismissals({ classId, date }) {
     const cId = BigInt(classId || 5);
     const targetDateStr = date || new Date().toISOString().slice(0, 10);
@@ -770,6 +846,9 @@ export class AttendanceService {
     };
   }
 
+  /**
+   * Get pickup authorizations for a class with optional status & date filtering
+   */
   async getPickupAuthorizations({ classId, status, date }) {
     let targetClassId;
     if (classId) {
@@ -900,6 +979,9 @@ export class AttendanceService {
     };
   }
 
+  /**
+   * Create a pickup authorization (e.g. by teacher on behalf of parent)
+   */
   async createPickupAuthorization({
     classId,
     accountId,
@@ -964,6 +1046,9 @@ export class AttendanceService {
     };
   }
 
+  /**
+   * Approve a pickup authorization
+   */
   async approvePickupAuthorization({ classId, authId, accountId }) {
     let staffId = 40n;
     if (accountId) {
@@ -1004,6 +1089,9 @@ export class AttendanceService {
     };
   }
 
+  /**
+   * Reject a pickup authorization with reason
+   */
   async rejectPickupAuthorization({ classId, authId, accountId, reason }) {
     let staffId = 40n;
     if (accountId) {
@@ -1045,5 +1133,6 @@ export class AttendanceService {
     };
   }
 }
+
 export const attendanceService = new AttendanceService();
 export default attendanceService;

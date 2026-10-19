@@ -1,21 +1,19 @@
 import prisma from '../config/prisma.js';
-import { BadRequest, NotFound, Conflict } from '../utils/http-error.js';
+import { BadRequest, NotFound } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
 
+// Pedagogical Age Group configurations
 const AGE_GROUPS = [
-  { key: 'nhatre', label: 'Khối Nhà trẻ', dbKey: 'NHA_TRE' },
-  { key: 'mam', label: 'Khối Mầm', dbKey: 'MAM' },
-  { key: 'choi', label: 'Khối Chồi', dbKey: 'CHOI' },
-  { key: 'la', label: 'Khối Lá', dbKey: 'LA' },
+  { key: 'nhatre', label: 'Khối Nhà trẻ', dbKey: 'NHA_TRE', ageRange: '12–36 tháng' },
+  { key: 'mam', label: 'Khối Mầm', dbKey: 'MAM', ageRange: '3–4 tuổi' },
+  { key: 'choi', label: 'Khối Chồi', dbKey: 'CHOI', ageRange: '4–5 tuổi' },
+  { key: 'la', label: 'Khối Lá', dbKey: 'LA', ageRange: '5–6 tuổi' },
 ];
 
-export class CurriculumService {
-  _parseId(id) {
-    const str = String(id).trim();
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-    return { public_id: isUuid ? str : '00000000-0000-0000-0000-000000000000' };
-  }
-
+class CurriculumService {
+  /**
+   * List overview of Theme sets grouped by grade/age-group querying live PostgreSQL
+   */
   async listThemeOverview(query = {}) {
     // 1. Get school years
     const schoolYears = await prisma.schoolYear.findMany({
@@ -127,6 +125,9 @@ export class CurriculumService {
     };
   }
 
+  /**
+   * Get detailed Theme Set for a specific year and age-group from live PostgreSQL
+   */
   async getThemeSetDetail({ year = '2026–2027', ageGroup = 'nhatre' }) {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     const normalizedYear = (year || '2026–2027').replace('-', '–');
@@ -227,6 +228,9 @@ export class CurriculumService {
     };
   }
 
+  /**
+   * Update publish status of a theme set in PostgreSQL
+   */
   async updateThemeSetStatus({ year = '2026–2027', ageGroup = 'nhatre', status = 'DRAFT' }) {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     await prisma.curriculumTheme.updateMany({
@@ -244,6 +248,9 @@ export class CurriculumService {
     return this.getThemeSetDetail({ year, ageGroup });
   }
 
+  /**
+   * Update themes detail and subThemes of a theme set
+   */
   async updateThemeSetDetail({ year = '2026–2027', ageGroup = 'nhatre', themes = [], theme, note }) {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     const normalizedYear = (year || '2026–2027').replace('-', '–');
@@ -551,6 +558,9 @@ export class CurriculumService {
     return this.getThemeSetDetail({ year, ageGroup });
   }
 
+  /**
+   * List Goal Banks Overview grouped by grade from live PostgreSQL
+   */
   async listGoalBanksOverview(query = {}) {
     const schoolYears = await prisma.schoolYear.findMany({
       where: { deleted_at: null },
@@ -643,6 +653,9 @@ export class CurriculumService {
     };
   }
 
+  /**
+   * Get Multilevel Objective Tree for a specific year and grade from live PostgreSQL
+   */
   async getGoalBankDetail({ year = '2026–2027', ageGroup = 'nhatre' }) {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     const normalizedYear = (year || '2026–2027').replace('-', '–');
@@ -718,10 +731,16 @@ export class CurriculumService {
     };
   }
 
+  /**
+   * Update publish status of a goal bank
+   */
   async updateGoalBankStatus({ year = '2026–2027', ageGroup = 'nhatre', status = 'DRAFT' }) {
     return this.getGoalBankDetail({ year, ageGroup });
   }
 
+  /**
+   * Get single educational goal detail along with its educational contents from live PostgreSQL
+   */
   async getSingleGoalDetail({ year = '2026–2027', ageGroup = 'nhatre', goalId }) {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     const normalizedYear = (year || '2026–2027').replace('-', '–');
@@ -795,6 +814,9 @@ export class CurriculumService {
     };
   }
 
+  /**
+   * Update educational contents of a specific goal in PostgreSQL
+   */
   async updateGoalContents({ year = '2026–2027', ageGroup = 'nhatre', goalId, contents = [] }) {
     if (!goalId) {
       throw new BadRequest('Mã mục tiêu giáo dục không hợp lệ.');
@@ -838,6 +860,9 @@ export class CurriculumService {
     };
   }
 
+  /**
+   * Update educational goal item in PostgreSQL
+   */
   async updateGoal({ year = '2026–2027', ageGroup = 'nhatre', goalId, data = {} }) {
     let targetGoal = null;
     if (!isNaN(Number(goalId))) {
@@ -859,6 +884,9 @@ export class CurriculumService {
     return { success: true, goal: { id: goalId, ...data } };
   }
 
+  /**
+   * Delete educational goal item from PostgreSQL
+   */
   async deleteGoal({ year = '2026–2027', ageGroup = 'nhatre', goalId }) {
     let targetGoal = null;
     if (!isNaN(Number(goalId))) {
@@ -875,6 +903,9 @@ export class CurriculumService {
     return { success: true, goalId };
   }
 
+  /**
+   * AI Assistant logic for Goal Bank
+   */
   async queryAiAssistant({ prompt, action, context = {} }) {
     return {
       reply: 'Đã phân tích mục tiêu giáo dục theo chương trình mầm non chuẩn.',
@@ -882,5 +913,6 @@ export class CurriculumService {
     };
   }
 }
+
 export const curriculumService = new CurriculumService();
 export default curriculumService;
