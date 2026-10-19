@@ -25,13 +25,13 @@ HTTP Request
 
 ### Layer Responsibilities
 
-| Layer | DOES | NEVER |
-| :--- | :--- | :--- |
-| **Route** (`src/routes/`) | Declares path endpoints, attaches `authMiddleware`, `requireRoles`, `validate`, wraps with `asyncHandler`. | Business logic, Prisma queries. |
+| Layer                               | DOES                                                                                                                         | NEVER                                                             |
+| :---------------------------------- | :--------------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------- |
+| **Route** (`src/routes/`)           | Declares path endpoints, attaches `authMiddleware`, `requireRoles`, `validate`, wraps with `asyncHandler`.                   | Business logic, Prisma queries.                                   |
 | **Controller** (`src/controllers/`) | Reads `req.params`, `req.query`, `req.body`, `req.user`, invokes service method, calls `res.success()` or `res.paginated()`. | Validation, DB queries, setting cookies directly inside services. |
-| **Service** (`src/services/`) | Domain rules, Prisma transactions, throws `HttpError` (`NotFound`, `BadRequest`, etc.). | Reading `req` or sending `res`. |
-| **Validator** (`src/validators/`) | Joi schema definitions named `<verb><Noun>Schema` (e.g. `createStudentSchema`). | Any procedural business logic. |
-| **Middleware** (`src/middlewares/`) | Cross-cutting concerns (authentication, authorization, logging, error handling, file upload). | Feature-specific business rules. |
+| **Service** (`src/services/`)       | Domain rules, Prisma transactions, throws `HttpError` (`NotFound`, `BadRequest`, etc.).                                      | Reading `req` or sending `res`.                                   |
+| **Validator** (`src/validators/`)   | Joi schema definitions named `<verb><Noun>Schema` (e.g. `createStudentSchema`).                                              | Any procedural business logic.                                    |
+| **Middleware** (`src/middlewares/`) | Cross-cutting concerns (authentication, authorization, logging, error handling, file upload).                                | Feature-specific business rules.                                  |
 
 ---
 
