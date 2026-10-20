@@ -45,64 +45,41 @@ import {
 const router = Router();
 
 // Read operations: Available to all authenticated users
-
 router.get('/', authMiddleware, validate(queryClassSchema, 'query'), asyncHandler(listClasses));
-router.get(
-router.get(
-router.post(
-router.patch(
-router.get('/:id', authMiddleware, asyncHandler(getClassById));
-router.post(
-router.patch(
-router.delete(
-router.get('/:id/teachers', authMiddleware, asyncHandler(getClassTeachers));
-router.post(
-router.patch(
-router.delete(
-router.get('/:id/students', authMiddleware, asyncHandler(getClassStudents));
-router.get('/:id/student-report', authMiddleware, asyncHandler(getStudentReport));
-router.get('/:id/daily-report', authMiddleware, asyncHandler(getDailyReport));
-router.put('/:id/daily-report/student', authMiddleware, asyncHandler(saveStudentDailyReport));
-router.post('/:id/daily-report/batch', authMiddleware, asyncHandler(batchSaveDailyReport));
-router.get(
-router.post(
-router.delete(
-router.get('/:id/history-sources', authMiddleware, asyncHandler(getHistorySources));
-router.get('/:id/history-students', authMiddleware, asyncHandler(getHistoryStudents));
-router.post(
-router.get('/:id/transfers', authMiddleware, asyncHandler(getClassTransfers));
-router.post(
-router.patch(
-router.get('/:id/export-data', authMiddleware, asyncHandler(getClassExportData));
-
 
 // Global transfer requests for BGH / Admin
+router.get(
   '/transfers/all',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
   asyncHandler(getAllTransfers),
 );
 
+router.get(
   '/transfers/:transferId',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
   asyncHandler(getTransferById),
 );
 
+router.post(
   '/transfers',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
   asyncHandler(createGlobalTransferRequest),
 );
 
+router.patch(
   '/transfers/:transferId',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
   asyncHandler(updateTransferStatus),
 );
 
+router.get('/:id', authMiddleware, asyncHandler(getClassById));
 
 // Write operations: Strictly restricted to ADMIN_BGH
+router.post(
   '/',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
@@ -110,6 +87,7 @@ router.get('/:id/export-data', authMiddleware, asyncHandler(getClassExportData))
   asyncHandler(createClass),
 );
 
+router.patch(
   '/:id',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
@@ -117,6 +95,7 @@ router.get('/:id/export-data', authMiddleware, asyncHandler(getClassExportData))
   asyncHandler(updateClass),
 );
 
+router.delete(
   '/:id',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
@@ -124,7 +103,9 @@ router.get('/:id/export-data', authMiddleware, asyncHandler(getClassExportData))
 );
 
 // Teacher assignment endpoints from classroom perspective
+router.get('/:id/teachers', authMiddleware, asyncHandler(getClassTeachers));
 
+router.post(
   '/:id/teachers',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
@@ -132,12 +113,14 @@ router.get('/:id/export-data', authMiddleware, asyncHandler(getClassExportData))
   asyncHandler(assignTeacher),
 );
 
+router.patch(
   '/:id/teachers/:teacherId/role',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
   asyncHandler(updateTeacherRole),
 );
 
+router.delete(
   '/:id/teachers/:teacherId',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
@@ -145,13 +128,20 @@ router.get('/:id/export-data', authMiddleware, asyncHandler(getClassExportData))
 );
 
 // Student Allocation & Pool endpoints
+router.get('/:id/students', authMiddleware, asyncHandler(getClassStudents));
+router.get('/:id/student-report', authMiddleware, asyncHandler(getStudentReport));
+router.get('/:id/daily-report', authMiddleware, asyncHandler(getDailyReport));
+router.put('/:id/daily-report/student', authMiddleware, asyncHandler(saveStudentDailyReport));
+router.post('/:id/daily-report/batch', authMiddleware, asyncHandler(batchSaveDailyReport));
 
+router.get(
   '/:id/student-pool',
   authMiddleware,
   validate(queryStudentPoolSchema, 'query'),
   asyncHandler(getStudentPool),
 );
 
+router.post(
   '/:id/students',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
@@ -159,6 +149,7 @@ router.get('/:id/export-data', authMiddleware, asyncHandler(getClassExportData))
   asyncHandler(allocateStudents),
 );
 
+router.delete(
   '/:id/students',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
@@ -167,8 +158,11 @@ router.get('/:id/export-data', authMiddleware, asyncHandler(getClassExportData))
 );
 
 // History sources & students
+router.get('/:id/history-sources', authMiddleware, asyncHandler(getHistorySources));
+router.get('/:id/history-students', authMiddleware, asyncHandler(getHistoryStudents));
 
 // Import students
+router.post(
   '/:id/import-students',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
@@ -176,13 +170,16 @@ router.get('/:id/export-data', authMiddleware, asyncHandler(getClassExportData))
 );
 
 // Transfer requests endpoints
+router.get('/:id/transfers', authMiddleware, asyncHandler(getClassTransfers));
 
+router.post(
   '/:id/transfers',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
   asyncHandler(createTransferRequest),
 );
 
+router.patch(
   '/:id/transfers/:transferId',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
@@ -190,6 +187,7 @@ router.get('/:id/export-data', authMiddleware, asyncHandler(getClassExportData))
 );
 
 // Class Export Roster endpoint
+router.get('/:id/export-data', authMiddleware, asyncHandler(getClassExportData));
 
 export default router;
 
