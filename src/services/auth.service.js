@@ -171,8 +171,8 @@ export class AuthService {
    * Implements CAPTCHA-Gated Progressive Bot & DDoS Defense (OWASP Compliant)
    * Without hard lockouts to prevent DoS attacks against school staff / shared NAT Wi-Fi
    */
-  async login({ identifier, password, role, captchaToken, deviceInfo, ipAddress, rememberMe = true }) {
-    const trimmedId = identifier.trim();
+  async login({ username, identifier, password, role, captchaToken, deviceInfo, ipAddress, rememberMe = true }) {
+    const trimmedUsername = (username || identifier || '').trim();
 
     // 1. Mandatory Bot & DDoS Shield (Cloudflare Turnstile Invisible Mode)
     // Blocks automated headless scripts, curl, and botnets before bcrypt or DB access
@@ -189,7 +189,7 @@ export class AuthService {
     // 2. Query account strictly by username with linked profile
     const account = await prisma.account.findUnique({
       where: {
-        username: trimmedId,
+        username: trimmedUsername,
       },
       include: {
         teacher: {
