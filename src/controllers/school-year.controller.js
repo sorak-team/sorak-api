@@ -1,5 +1,6 @@
 import { schoolYearService } from '../services/school-year.service.js';
 
+
 export const listSchoolYears = async (req, res) => {
   const result = await schoolYearService.listSchoolYears(req.query);
   res.success(result);
@@ -51,12 +52,6 @@ export const getTransitionReadiness = async (req, res) => {
   res.success(result);
 };
 
-export const closeRemainingEnrollments = async (req, res) => {
-  const { id } = req.params;
-  const result = await schoolYearService.closeRemainingEnrollments(id, req.user?.sub);
-  res.success(result);
-};
-
 export const executeTransition = async (req, res) => {
   const { id } = req.params;
   const result = await schoolYearService.executeTransition(id, req.user?.sub, req.body);
@@ -92,5 +87,4 @@ export const deleteHoliday = async (req, res) => {
   const result = await schoolYearService.deleteHoliday(id, holidayId);
   res.success(result);
 };
-
 

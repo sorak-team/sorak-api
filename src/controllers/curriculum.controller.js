@@ -1,6 +1,5 @@
 import { curriculumService } from '../services/curriculum.service.js';
 
-
 export const listThemeOverview = async (req, res) => {
   const result = await curriculumService.listThemeOverview(req.query);
   res.success(result);
@@ -69,4 +68,3 @@ export const queryAiAssistant = async (req, res) => {
   const result = await curriculumService.queryAiAssistant(req.body);
   res.success(result);
 };
-
