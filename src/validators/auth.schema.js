@@ -1,10 +1,13 @@
 import Joi from 'joi';
 
 export const loginSchema = Joi.object({
-  identifier: Joi.string().trim().min(3).max(100).required().messages({
+  username: Joi.string().trim().min(3).max(100).optional().messages({
     'string.empty': 'Vui lòng nhập tên đăng nhập',
     'string.min': 'Tên đăng nhập phải có ít nhất 3 ký tự',
-    'any.required': 'Vui lòng nhập tên đăng nhập',
+  }),
+  identifier: Joi.string().trim().min(3).max(100).optional().messages({
+    'string.empty': 'Vui lòng nhập tên đăng nhập',
+    'string.min': 'Tên đăng nhập phải có ít nhất 3 ký tự',
   }),
   password: Joi.string().min(6).max(100).required().messages({
     'string.empty': 'Vui lòng nhập mật khẩu',
@@ -19,7 +22,11 @@ export const loginSchema = Joi.object({
     }),
   captchaToken: Joi.string().trim().allow('', null).optional(),
   rememberMe: Joi.boolean().default(true).optional(),
-});
+})
+  .or('username', 'identifier')
+  .messages({
+    'object.missing': 'Vui lòng nhập tên đăng nhập',
+  });
 
 export const forgotPasswordSchema = Joi.object({
   identifier: Joi.string().trim().min(2).max(150).optional().messages({

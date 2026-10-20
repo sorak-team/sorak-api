@@ -12,12 +12,14 @@ const getCookieOptions = () => ({
 });
 
 export const login = async (req, res) => {
-  const { identifier, password, role, captchaToken } = req.body;
+  const { username, identifier, password, role, captchaToken } = req.body;
+  const loginUsername = (username || identifier || '').trim();
   const deviceInfo = req.headers['user-agent'];
   const ipAddress = req.ip || req.socket.remoteAddress;
 
   const result = await authService.login({
-    identifier,
+    username: loginUsername,
+    identifier: loginUsername,
     password,
     role,
     captchaToken,
