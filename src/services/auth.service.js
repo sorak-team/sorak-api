@@ -31,12 +31,11 @@ export class AuthService {
    * Verify Turnstile / Captcha token
    */
   async verifyCaptchaToken(token, ipAddress) {
-    if (!token) return false;
-
-    if (!env.turnstileSecret) {
-      // In local development without turnstile secret
-      return typeof token === 'string' && token.trim().length > 0;
+    if (process.env.DISABLE_TURNSTILE === 'true' || !env.turnstileSecret) {
+      return true;
     }
+
+    if (!token) return false;
 
     try {
       const formData = new URLSearchParams();
@@ -75,7 +74,6 @@ export class AuthService {
         schoolYearId: tc.class?.school_year_id ? tc.class.school_year_id.toString() : null,
         schoolYearName: tc.class?.school_year?.name || null,
         schoolYearStatus: tc.class?.school_year?.status || null,
-        isPrimary: Boolean(tc.is_primary),
       }));
 
     const teacherGender =
@@ -103,7 +101,9 @@ export class AuthService {
       phone: contactPhone,
       avatar: avatarUrl,
       avatarUrl: avatarUrl,
-      is_first_login: isFirstLogin,
+      is_first_login: false,
+      mustChangePassword: false,
+      passwordChangedAt: account.password_changed_at || null,
       is_2fa_enabled: account.is_2fa_enabled,
       lastLoginAt: account.last_login_at || null,
       // Extended Teacher Profile
@@ -137,7 +137,7 @@ export class AuthService {
           account.student.student_enrollments?.[0];
         const studentClass = activeEnrollment?.class;
         const primaryTeacher =
-          studentClass?.teacher_classes?.find((tc) => tc.is_primary && !tc.left_at)?.teacher ||
+          studentClass?.teacher_classes?.find((tc) => !tc.left_at)?.teacher ||
           studentClass?.teacher_classes?.[0]?.teacher;
 
         return {
@@ -159,7 +159,6 @@ export class AuthService {
             fullName: p.full_name,
             relationship: p.relationship,
             phone: p.phone,
-            canPickup: p.can_pickup,
           })),
         };
       })(),
@@ -186,10 +185,13 @@ export class AuthService {
       );
     }
 
-    // 2. Query account strictly by username with linked profile
-    const account = await prisma.account.findUnique({
+    // 2. Query account strictly by username or linked teacher employee_code
+    const account = await prisma.account.findFirst({
       where: {
-        username: trimmedUsername,
+        OR: [
+          { username: { equals: trimmedUsername, mode: 'insensitive' } },
+          { teacher: { employee_code: { equals: trimmedUsername, mode: 'insensitive' } } },
+        ],
       },
       include: {
         teacher: {
@@ -283,12 +285,16 @@ export class AuthService {
       );
 
       // Send branded OTP email via Resend
-      await emailService.sendOtpEmail({
+      const emailRes = await emailService.sendOtpEmail({
         to: targetEmail,
         otp: rawOtp,
         purpose: 'LOGIN_2FA',
         userName: account.username,
       });
+
+      if (!emailRes?.success) {
+        throw BadRequest('Không thể gửi mã xác thực 2 bước qua email. Vui lòng kiểm tra lại email hoặc thử lại sau.');
+      }
 
       // Issue temporary 2FA token (5 minutes)
       const tempToken = jwt.sign(
@@ -329,13 +335,37 @@ export class AuthService {
     const rawRefreshToken = crypto.randomBytes(40).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(rawRefreshToken).digest('hex');
 
+    // OR-01: Enforce maximum 3 active concurrent devices per account.
+    // If account has >= 3 active sessions, revoke the oldest active sessions.
+    const activeSessions = await prisma.refreshToken.findMany({
+      where: {
+        account_id: account.account_id,
+        is_revoked: false,
+        expires_at: { gt: new Date() },
+      },
+      orderBy: { created_at: 'asc' },
+    });
+
+    if (activeSessions.length >= 3) {
+      const tokensToRevoke = activeSessions.slice(0, activeSessions.length - 2);
+      await prisma.refreshToken.updateMany({
+        where: {
+          token_id: { in: tokensToRevoke.map((t) => t.token_id) },
+        },
+        data: { is_revoked: true },
+      });
+    }
+
+    // OR-01: Session expires after 7 consecutive days of inactivity
+    const sessionExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
     await prisma.refreshToken.create({
       data: {
         account_id: account.account_id,
         token_hash: tokenHash,
         device_info: deviceInfo || 'Unknown Browser',
         ip_address: ipAddress || null,
-        expires_at: new Date(Date.now() + (rememberMe ? 30 : 7) * 24 * 60 * 60 * 1000), // 30 days persistent login
+        expires_at: sessionExpiresAt,
       },
     });
 
@@ -464,13 +494,36 @@ export class AuthService {
     const rawRefreshToken = crypto.randomBytes(40).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(rawRefreshToken).digest('hex');
 
+    // OR-01: Enforce maximum 3 active concurrent devices per account.
+    const activeSessions = await prisma.refreshToken.findMany({
+      where: {
+        account_id: account.account_id,
+        is_revoked: false,
+        expires_at: { gt: new Date() },
+      },
+      orderBy: { created_at: 'asc' },
+    });
+
+    if (activeSessions.length >= 3) {
+      const tokensToRevoke = activeSessions.slice(0, activeSessions.length - 2);
+      await prisma.refreshToken.updateMany({
+        where: {
+          token_id: { in: tokensToRevoke.map((t) => t.token_id) },
+        },
+        data: { is_revoked: true },
+      });
+    }
+
+    // OR-01: Session expires after 7 consecutive days of inactivity
+    const sessionExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
     await prisma.refreshToken.create({
       data: {
         account_id: account.account_id,
         token_hash: tokenHash,
         device_info: deviceInfo || 'Unknown Browser',
         ip_address: ipAddress || null,
-        expires_at: new Date(Date.now() + (payload.rememberMe ? 30 : 7) * 24 * 60 * 60 * 1000),
+        expires_at: sessionExpiresAt,
       },
     });
 
@@ -552,12 +605,16 @@ export class AuthService {
     );
 
     // Send branded OTP email via Resend
-    await emailService.sendOtpEmail({
+    const emailRes = await emailService.sendOtpEmail({
       to: email,
       otp: rawOtp,
       purpose: 'ENABLE_2FA',
       userName: account.username,
     });
+
+    if (!emailRes?.success) {
+      throw BadRequest('Không thể gửi mã xác thực qua email. Vui lòng kiểm tra lại địa chỉ email hoặc thử lại sau.');
+    }
 
     return {
       message: `Mã xác thực gồm 6 chữ số đã được gửi tới email ${email}. Vui lòng nhập mã để hoàn tất kích hoạt.`,
@@ -644,6 +701,45 @@ export class AuthService {
   }
 
   /**
+   * Change password for authenticated user
+   */
+  async changePassword({ publicId, currentPassword, newPassword }) {
+    const account = await prisma.account.findUnique({
+      where: { public_id: publicId },
+    });
+
+    if (!account || !account.is_active || account.deleted_at) {
+      throw NotFound('Không tìm thấy tài khoản.');
+    }
+
+    const isPasswordValid = await bcrypt.compare(currentPassword, account.password_hash);
+    if (!isPasswordValid) {
+      throw BadRequest('Mật khẩu hiện tại không chính xác.');
+    }
+
+    if (currentPassword === newPassword) {
+      throw BadRequest('Mật khẩu mới không được trùng với mật khẩu hiện tại.');
+    }
+
+    const newPasswordHash = await bcrypt.hash(newPassword, 10);
+
+    await prisma.account.update({
+      where: { account_id: account.account_id },
+      data: {
+        password_hash: newPasswordHash,
+        password_changed_at: new Date(),
+      },
+    });
+
+    logger.info({ publicId }, 'Password changed successfully for authenticated user');
+
+    return {
+      success: true,
+      message: 'Đổi mật khẩu thành công.',
+    };
+  }
+
+  /**
    * Request 6-digit OTP for password reset or prompt parent to contact teacher if no email is linked
    */
   async forgotPassword({ identifier, email }) {
@@ -692,7 +788,7 @@ export class AuthService {
         },
       });
 
-      // Fallback: search by teacher email if username lookup returns nothing
+      // Fallback 1: search by teacher email if username lookup returns nothing
       if (!account) {
         const teacher = await prisma.teacher.findFirst({
           where: {
@@ -713,6 +809,28 @@ export class AuthService {
         });
         account = teacher?.account || null;
       }
+
+      // Fallback 2: search by teacher employee_code (mã cán bộ / giáo viên)
+      if (!account) {
+        const teacherByCode = await prisma.teacher.findFirst({
+          where: {
+            employee_code: {
+              equals: rawQuery,
+              mode: 'insensitive',
+            },
+            deleted_at: null,
+          },
+          include: {
+            account: {
+              include: {
+                teacher: true,
+                student: { include: { parents: true } },
+              },
+            },
+          },
+        });
+        account = teacherByCode?.account || null;
+      }
     }
 
     if (!account) {
@@ -725,6 +843,10 @@ export class AuthService {
         };
       }
       throw NotFound('Không tìm thấy tài khoản với mã học sinh hoặc tên đăng nhập này.');
+    }
+
+    if (!account.is_active || account.deleted_at) {
+      throw Forbidden('Tài khoản đã bị vô hiệu hóa hoặc ngừng hoạt động. Không thể thực hiện khôi phục mật khẩu.');
     }
 
     // Special rule: PARENT_PH (Parents & Students) NEVER use email OTP.
@@ -742,7 +864,7 @@ export class AuthService {
                 class: {
                   include: {
                     teacher_classes: {
-                      where: { is_primary: true, left_at: null },
+                      where: { left_at: null },
                       include: {
                         teacher: {
                           select: {
@@ -781,7 +903,7 @@ export class AuthService {
         teacherPhone: primaryTeacher?.phone || null,
         phone: parentPhone,
         message:
-          'Quý phụ huynh vui lòng liên hệ giáo viên chủ nhiệm để được hỗ trợ cấp lại mật khẩu.',
+          'Quý phụ huynh vui lòng liên hệ giáo viên phụ trách để được hỗ trợ cấp lại mật khẩu.',
       };
     }
 
@@ -857,12 +979,16 @@ export class AuthService {
     );
 
     // Send branded OTP email via Resend
-    await emailService.sendOtpEmail({
+    const emailRes = await emailService.sendOtpEmail({
       to: trimmedEmail,
       otp: rawOtp,
       purpose: 'FORGOT_PASSWORD',
       userName: account.username,
     });
+
+    if (!emailRes?.success) {
+      throw BadRequest('Không thể gửi mã xác thực qua email. Vui lòng kiểm tra lại địa chỉ email hoặc thử lại sau.');
+    }
 
     return {
       hasEmail: true,
@@ -877,21 +1003,49 @@ export class AuthService {
    * Verify submitted 6-digit OTP and return temporary password reset token
    */
   async verifyOtp({ email, otp }) {
-    const trimmedEmail = email.trim().toLowerCase();
-    const trimmedOtp = otp.trim();
+    const trimmedInput = (email || '').trim().toLowerCase();
+    const trimmedOtp = (otp || '').trim();
+
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedInput);
+    let whereClause = {
+      purpose: 'FORGOT_PASSWORD',
+      is_used: false,
+      expires_at: { gt: new Date() },
+    };
+
+    if (isEmail) {
+      whereClause.email = trimmedInput;
+    } else {
+      const account = await prisma.account.findFirst({
+        where: {
+          OR: [
+            { username: { equals: trimmedInput, mode: 'insensitive' } },
+            { teacher: { employee_code: { equals: trimmedInput, mode: 'insensitive' } } },
+          ],
+          deleted_at: null,
+        },
+      });
+      if (account) {
+        whereClause.account_id = account.account_id;
+      } else {
+        whereClause.email = trimmedInput;
+      }
+    }
 
     const activeOtp = await prisma.otpVerification.findFirst({
-      where: {
-        email: trimmedEmail,
-        purpose: 'FORGOT_PASSWORD',
-        is_used: false,
-        expires_at: { gt: new Date() },
+      where: whereClause,
+      include: {
+        account: true,
       },
       orderBy: { created_at: 'desc' },
     });
 
     if (!activeOtp) {
       throw BadRequest('Mã OTP không hợp lệ hoặc đã hết hạn. Vui lòng yêu cầu mã mới.');
+    }
+
+    if (activeOtp.account && (!activeOtp.account.is_active || activeOtp.account.deleted_at)) {
+      throw Forbidden('Tài khoản đã bị vô hiệu hóa hoặc ngừng hoạt động. Không thể thực hiện xác thực OTP.');
     }
 
     // Rate-limit OTP guessing (Max 5 attempts)
@@ -922,7 +1076,7 @@ export class AuthService {
     const resetToken = jwt.sign(
       {
         sub: activeOtp.account_id.toString(),
-        email: trimmedEmail,
+        email: activeOtp.email,
         purpose: 'RESET_PASSWORD',
       },
       env.jwt.accessSecret,
@@ -931,6 +1085,7 @@ export class AuthService {
 
     return {
       resetToken,
+      email: activeOtp.email,
       message: 'Xác thực OTP thành công. Bạn có thể tiến hành đặt lại mật khẩu.',
     };
   }
@@ -946,11 +1101,36 @@ export class AuthService {
       throw BadRequest('Phiên đặt lại mật khẩu đã hết hạn hoặc không hợp lệ.');
     }
 
-    if (payload.purpose !== 'RESET_PASSWORD' || payload.email !== email.trim().toLowerCase()) {
+    const trimmedInput = (email || '').trim().toLowerCase();
+    const isEmailMatch = payload.email?.toLowerCase() === trimmedInput;
+    let isAccountMatch = false;
+
+    if (!isEmailMatch) {
+      const acc = await prisma.account.findUnique({
+        where: { account_id: BigInt(payload.sub) },
+        include: { teacher: true },
+      });
+      if (
+        acc &&
+        (acc.username.toLowerCase() === trimmedInput ||
+          acc.teacher?.employee_code?.toLowerCase() === trimmedInput)
+      ) {
+        isAccountMatch = true;
+      }
+    }
+
+    if (payload.purpose !== 'RESET_PASSWORD' || (!isEmailMatch && !isAccountMatch)) {
       throw BadRequest('Thông tin xác thực đặt lại mật khẩu không hợp lệ.');
     }
 
     const accountId = BigInt(payload.sub);
+    const targetAccount = await prisma.account.findUnique({
+      where: { account_id: accountId },
+    });
+    if (!targetAccount || !targetAccount.is_active || targetAccount.deleted_at) {
+      throw Forbidden('Tài khoản đã bị vô hiệu hóa hoặc ngừng hoạt động. Không thể thực hiện đặt lại mật khẩu.');
+    }
+
     const newPasswordHash = await bcrypt.hash(password, 10);
 
     // Update password, record password_changed_at and last_login_at

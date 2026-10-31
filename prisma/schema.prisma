@@ -1,6 +1,6 @@
 // ============================================================================
 // SORAK PRESCHOOL SYSTEM — COMPLETE 3NF PHYSICAL PRISMA SCHEMA DEFINITION
-// Single Source of Truth (SSOT) • 27 Tables • 17 Domain PostgreSQL Enums
+// Single Source of Truth (SSOT) • 27 Tables • 18 Domain PostgreSQL Enums
 // Dual-ID Architecture: High-speed BIGSERIAL PKs + Unguessable Public UUIDv4
 // ============================================================================
 
@@ -14,7 +14,7 @@ datasource db {
 }
 
 // ============================================================================
-// DOMAIN ENUMS (17 ENUMERATIONS)
+// DOMAIN ENUMS (18 ENUMERATIONS)
 // ============================================================================
 
 enum UserRoleEnum {
@@ -64,6 +64,14 @@ enum WorkStatusEnum {
   @@map("work_status_enum")
 }
 
+enum TeacherLeaveReasonEnum {
+  COMPLETED_SCHOOL_YEAR
+  LEAVE_OF_ABSENCE
+  RESIGNED
+
+  @@map("teacher_leave_reason_enum")
+}
+
 enum StudentStatusEnum {
   STUDYING
   RESERVED
@@ -77,7 +85,6 @@ enum StudentStatusEnum {
 enum EnrollmentStatusEnum {
   ENROLLED
   COMPLETED
-  GRADUATED
   TRANSFERRED_CLASS
   TRANSFERRED_SCHOOL
   RESERVED
@@ -218,7 +225,10 @@ model Account {
   health_assessments_recorded   HealthAssessment[]    @relation("HealthAssessmentRecordedBy")
   school_holidays_created       SchoolHoliday[]       @relation("SchoolHolidayCreatedBy")
   sub_themes_created            SubTheme[]            @relation("SubThemeCreatedBy")
-  sub_theme_logs                SubThemeLog[]         @relation("SubThemeLogActor")
+  created_educational_activities EducationalActivity[] @relation("EducationalActivityCreatedBy")
+  updated_educational_activities EducationalActivity[] @relation("EducationalActivityUpdatedBy")
+  created_sub_theme_activities   SubThemeActivity[]    @relation("SubThemeActivityCreatedBy")
+  updated_sub_theme_activities   SubThemeActivity[]    @relation("SubThemeActivityUpdatedBy")
   daily_assessments_evaluated   DailyAssessment[]     @relation("DailyAssessmentEvaluatedBy")
   monthly_assessments_evaluated MonthlyAssessment[]   @relation("MonthlyAssessmentEvaluatedBy")
   monthly_assessments_feedback  MonthlyAssessment[]   @relation("MonthlyAssessmentFeedbackBy")
@@ -398,14 +408,14 @@ model Teacher {
 }
 
 model TeacherClass {
-  id          BigInt    @id @default(autoincrement())
-  teacher_id  BigInt
-  class_id    BigInt
-  is_primary  Boolean   @default(false)
-  assigned_at DateTime  @default(now()) @db.Date
-  left_at     DateTime? @db.Date
-  created_at  DateTime  @default(now()) @db.Timestamptz(6)
-  updated_at  DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  id           BigInt                  @id @default(autoincrement())
+  teacher_id   BigInt
+  class_id     BigInt
+  assigned_at  DateTime                @default(now()) @db.Date
+  left_at      DateTime?               @db.Date
+  leave_reason TeacherLeaveReasonEnum?
+  created_at   DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime                @default(now()) @updatedAt @db.Timestamptz(6)
 
   // Relations
   teacher     Teacher   @relation(fields: [teacher_id], references: [teacher_id], onDelete: Restrict)
@@ -467,7 +477,6 @@ model Parent {
   full_name    String    @db.VarChar(100)
   relationship String    @db.VarChar(30)
   phone        String    @db.VarChar(15)
-  can_pickup   Boolean   @default(true)
   avatar_url   String?   @db.VarChar(500)
   deleted_at   DateTime? @db.Timestamptz(6)
   created_at   DateTime  @default(now()) @db.Timestamptz(6)
@@ -515,6 +524,7 @@ model ClassTransfer {
   approved_by     BigInt?
   approved_at     DateTime?         @db.Timestamptz(6)
   rejected_reason String?           @db.VarChar(255)
+  cancelled_at    DateTime?         @db.Timestamptz(6)
   deleted_at      DateTime?         @db.Timestamptz(6)
   created_at      DateTime          @default(now()) @db.Timestamptz(6)
   updated_at      DateTime          @default(now()) @updatedAt @db.Timestamptz(6)
@@ -703,31 +713,11 @@ model SubTheme {
   // Relations
   theme          CurriculumTheme    @relation(fields: [theme_id], references: [theme_id], onDelete: Cascade)
   creator        Account?           @relation("SubThemeCreatedBy", fields: [created_by], references: [account_id], onDelete: SetNull)
-  logs           SubThemeLog[]
   activities     SubThemeActivity[]
 
   @@index([theme_id, start_date], map: "idx_sub_themes_theme_dates")
   @@index([theme_id], map: "idx_sub_themes_theme")
   @@map("sub_themes")
-}
-
-model SubThemeLog {
-  log_id         BigInt    @id @default(autoincrement())
-  public_id      String    @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  sub_theme_id   BigInt
-  actor_id       BigInt
-  action_type    String    @db.VarChar(30)
-  change_summary String
-  change_details Json
-  created_at     DateTime  @default(now()) @db.Timestamptz(6)
-
-  // Relations
-  sub_theme      SubTheme  @relation(fields: [sub_theme_id], references: [sub_theme_id], onDelete: Cascade)
-  actor          Account   @relation("SubThemeLogActor", fields: [actor_id], references: [account_id], onDelete: Restrict)
-
-  @@index([sub_theme_id, created_at(sort: Desc)], map: "idx_sub_theme_logs_timeline")
-  @@index([actor_id], map: "idx_sub_theme_logs_actor")
-  @@map("sub_theme_logs")
 }
 
 model EducationalGoal {
@@ -776,8 +766,10 @@ model EducationalActivity {
   activity_id          BigInt                @id @default(autoincrement())
   public_id            String                @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   content_id           BigInt
+  created_by           BigInt                @default(1)
+  updated_by           BigInt?
   routine_slot         DailyRoutineSlotEnum
-  title                String                @db.VarChar(150)
+  title                String                @db.VarChar(500)
   objective            String?
   preparation          String?
   procedure            String?
@@ -788,11 +780,14 @@ model EducationalActivity {
 
   // Relations
   content              EducationalContent    @relation(fields: [content_id], references: [content_id], onDelete: Cascade)
+  creator              Account               @relation("EducationalActivityCreatedBy", fields: [created_by], references: [account_id], onDelete: Restrict)
+  updater              Account?              @relation("EducationalActivityUpdatedBy", fields: [updated_by], references: [account_id], onDelete: SetNull)
   sub_theme_activities SubThemeActivity[]
   daily_assessments    DailyAssessment[]
 
   @@index([routine_slot], map: "idx_activities_slot")
   @@index([content_id], map: "idx_activities_content")
+  @@index([created_by], map: "idx_activities_creator")
   @@map("educational_activities")
 }
 
@@ -801,6 +796,8 @@ model SubThemeActivity {
   class_id       BigInt
   sub_theme_id   BigInt
   activity_id    BigInt
+  created_by     BigInt                        @default(1)
+  updated_by     BigInt?
   scheduled_date DateTime                      @db.Date
   day_of_week    DayOfWeekEnum
   routine_slot   DailyRoutineSlotEnum
@@ -814,10 +811,13 @@ model SubThemeActivity {
   class          Class                         @relation(fields: [class_id], references: [class_id], onDelete: Restrict)
   sub_theme      SubTheme                      @relation(fields: [sub_theme_id], references: [sub_theme_id], onDelete: Cascade)
   activity       EducationalActivity           @relation(fields: [activity_id], references: [activity_id], onDelete: Restrict)
+  creator        Account                       @relation("SubThemeActivityCreatedBy", fields: [created_by], references: [account_id], onDelete: Restrict)
+  updater        Account?                      @relation("SubThemeActivityUpdatedBy", fields: [updated_by], references: [account_id], onDelete: SetNull)
 
   @@index([class_id, scheduled_date, routine_slot], map: "idx_sub_theme_activities_date")
   @@index([sub_theme_id], map: "idx_sub_theme_activities_theme")
   @@index([status], map: "idx_sub_theme_activities_status")
+  @@index([created_by], map: "idx_sub_theme_activities_creator")
   @@map("sub_theme_activities")
 }
 

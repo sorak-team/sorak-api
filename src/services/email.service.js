@@ -1,20 +1,8 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { Resend } from 'resend';
 import { env } from '../config/env.js';
 import logger from '../utils/logger.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const logoPath = path.resolve(__dirname, '../assets/logo.png');
-function getLogoBuffer() {
-  try {
-    return fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : null;
-  } catch {
-    return null;
-  }
-}
+const LOGO_URL = 'https://mamnonhontre.sorak.io.vn/logo.png';
 
 class EmailService {
   constructor() {
@@ -124,7 +112,7 @@ class EmailService {
         <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center" style="margin: 0 auto 24px auto;">
           <tr>
             <td valign="middle" style="padding-right: 8px; vertical-align: middle;">
-              <img src="cid:logo" width="20" height="22" alt="Sorak" style="display: block; border: 0; outline: none; text-decoration: none; width: 20px; height: 22px;" />
+              <img src="${LOGO_URL}" width="20" height="22" alt="Sorak" style="display: block; border: 0; outline: none; text-decoration: none; width: 20px; height: 22px;" />
             </td>
             <td valign="middle" class="brand-text" style="vertical-align: middle; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 18px; font-weight: 900; color: #000000; letter-spacing: -0.5px; line-height: 1; mso-line-height-rule: exactly;">
               Sorak
@@ -205,23 +193,11 @@ class EmailService {
         ? env.emailFrom
         : `Trường Mầm Non Hòn Tre x Sorak <${env.emailFrom}>`;
 
-      const attachments = [];
-      const logoBuffer = getLogoBuffer();
-      if (logoBuffer) {
-        attachments.push({
-          filename: 'logo.png',
-          content: logoBuffer,
-          contentId: 'logo',
-          content_id: 'logo',
-        });
-      }
-
       const { data, error } = await this.resend.emails.send({
         from: fromSender,
         to: [to],
         subject: details.subject,
         html,
-        attachments: attachments.length > 0 ? attachments : undefined,
       });
 
       if (error) {

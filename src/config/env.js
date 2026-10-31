@@ -13,7 +13,7 @@ const schema = Joi.object({
   JWT_REFRESH_TTL: Joi.string().default('7d'),
   TURNSTILE_SECRET_KEY: Joi.string().allow('', null).optional(),
   RESEND_API_KEY: Joi.string().allow('', null).optional(),
-  EMAIL_FROM: Joi.string().default('onboarding@resend.dev'),
+  EMAIL_FROM: Joi.string().default('Trường Mầm Non Hòn Tre <noreply@mamnonhontre.sorak.io.vn>'),
 
   // MinIO S3 Object Storage
   MINIO_ENDPOINT: Joi.string().allow('', null).optional(),
@@ -43,7 +43,7 @@ export const env = {
   databaseUrl: value.DATABASE_URL,
   turnstileSecret: value.TURNSTILE_SECRET_KEY || '',
   resendApiKey: value.RESEND_API_KEY || '',
-  emailFrom: value.EMAIL_FROM || 'onboarding@resend.dev',
+  emailFrom: value.EMAIL_FROM || 'Trường Mầm Non Hòn Tre <noreply@mamnonhontre.sorak.io.vn>',
 
   minio: {
     endpoint: value.MINIO_ENDPOINT || '',

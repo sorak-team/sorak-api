@@ -1,4 +1,4 @@
-﻿import Joi from 'joi';
+import Joi from 'joi';
 
 export const createClassSchema = Joi.object({
   name: Joi.string().trim().min(2).max(100).required().messages({
@@ -67,7 +67,7 @@ export const queryStudentPoolSchema = Joi.object({
 export const assignTeacherToClassSchema = Joi.object({
   teacherId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).optional(),
   teacherIds: Joi.array().items(Joi.alternatives().try(Joi.number().integer(), Joi.string())).optional(),
-  isPrimary: Joi.boolean().default(false),
+  isPrimary: Joi.boolean().optional(),
   assignedAt: Joi.date().iso().optional(),
   classId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).optional(),
 }).or('teacherId', 'teacherIds');

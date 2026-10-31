@@ -24,6 +24,7 @@ import {
   getStudentPool,
   allocateStudents,
   removeStudents,
+  unassignStudent,
   getHistorySources,
   getHistoryStudents,
   importStudents,
@@ -32,6 +33,8 @@ import {
   getClassTransfers,
   createTransferRequest,
   updateTransferStatus,
+  rejectTransferRequest,
+  cancelTransferRequest,
   getAllTransfers,
   getTransferById,
   createGlobalTransferRequest,
@@ -40,6 +43,7 @@ import {
   saveStudentDailyReport,
   batchSaveDailyReport,
   getStudentReport,
+  graduateStudentFromClass,
 } from '../controllers/class.controller.js';
 
 const router = Router();
@@ -51,7 +55,7 @@ router.get('/', authMiddleware, validate(queryClassSchema, 'query'), asyncHandle
 router.get(
   '/transfers/all',
   authMiddleware,
-  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
   asyncHandler(getAllTransfers),
 );
 
@@ -70,13 +74,32 @@ router.post(
 );
 
 router.patch(
-  '/transfers/:transferId',
+  '/transfers/:transferId/reject',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
+  asyncHandler(rejectTransferRequest),
+);
+
+router.patch(
+  '/transfers/:transferId/cancel',
+  authMiddleware,
+  requireRoles('TEACHER_GV'),
+  asyncHandler(cancelTransferRequest),
+);
+
+router.patch(
+  '/transfers/:transferId',
+  authMiddleware,
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
   asyncHandler(updateTransferStatus),
 );
 
-router.get('/:id', authMiddleware, asyncHandler(getClassById));
+router.get(
+  '/:id',
+  authMiddleware,
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
+  asyncHandler(getClassById),
+);
 
 // Write operations: Strictly restricted to ADMIN_BGH
 router.post(
@@ -103,7 +126,12 @@ router.delete(
 );
 
 // Teacher assignment endpoints from classroom perspective
-router.get('/:id/teachers', authMiddleware, asyncHandler(getClassTeachers));
+router.get(
+  '/:id/teachers',
+  authMiddleware,
+  requireRoles('PRINCIPAL_BGH', 'TEACHER_GV'),
+  asyncHandler(getClassTeachers),
+);
 
 router.post(
   '/:id/teachers',
@@ -128,7 +156,12 @@ router.delete(
 );
 
 // Student Allocation & Pool endpoints
-router.get('/:id/students', authMiddleware, asyncHandler(getClassStudents));
+router.get(
+  '/:id/students',
+  authMiddleware,
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
+  asyncHandler(getClassStudents),
+);
 router.get('/:id/student-report', authMiddleware, asyncHandler(getStudentReport));
 router.get('/:id/daily-report', authMiddleware, asyncHandler(getDailyReport));
 router.put('/:id/daily-report/student', authMiddleware, asyncHandler(saveStudentDailyReport));
@@ -150,11 +183,25 @@ router.post(
 );
 
 router.delete(
+  '/:id/students/:studentId',
+  authMiddleware,
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
+  asyncHandler(unassignStudent),
+);
+
+router.delete(
   '/:id/students',
   authMiddleware,
-  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
   validate(removeStudentsSchema),
   asyncHandler(removeStudents),
+);
+
+router.post(
+  '/:id/students/:studentId/graduate',
+  authMiddleware,
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
+  asyncHandler(graduateStudentFromClass),
 );
 
 // History sources & students
@@ -170,7 +217,12 @@ router.post(
 );
 
 // Transfer requests endpoints
-router.get('/:id/transfers', authMiddleware, asyncHandler(getClassTransfers));
+router.get(
+  '/:id/transfers',
+  authMiddleware,
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
+  asyncHandler(getClassTransfers),
+);
 
 router.post(
   '/:id/transfers',
@@ -180,9 +232,23 @@ router.post(
 );
 
 router.patch(
-  '/:id/transfers/:transferId',
+  '/:id/transfers/:transferId/reject',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
+  asyncHandler(rejectTransferRequest),
+);
+
+router.patch(
+  '/:id/transfers/:transferId/cancel',
+  authMiddleware,
+  requireRoles('TEACHER_GV'),
+  asyncHandler(cancelTransferRequest),
+);
+
+router.patch(
+  '/:id/transfers/:transferId',
+  authMiddleware,
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
   asyncHandler(updateTransferStatus),
 );
 

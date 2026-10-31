@@ -17,7 +17,6 @@ const parentItemSchema = Joi.object({
       'string.pattern.base': 'Số điện thoại phụ huynh phải từ 9 đến 15 chữ số',
       'any.required': 'Số điện thoại phụ huynh là bắt buộc',
     }),
-  canPickup: Joi.boolean().default(true),
 });
 
 export const createStudentSchema = Joi.object({
@@ -140,7 +139,10 @@ export const transferStudentClassSchema = Joi.object({
   transferDate: Joi.date()
     .iso()
     .default(() => new Date()),
-  reason: Joi.string().trim().allow('', null).optional(),
+  reason: Joi.string().trim().min(2).required().messages({
+    'string.empty': 'Lý do chuyển lớp không được để trống',
+    'any.required': 'Lý do chuyển lớp là bắt buộc',
+  }),
   autoApprove: Joi.boolean().default(false),
 });
 
@@ -152,5 +154,4 @@ export const updateParentSchema = Joi.object({
     .trim()
     .pattern(/^[0-9]{9,15}$/)
     .optional(),
-  canPickup: Joi.boolean().optional(),
 });

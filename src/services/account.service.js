@@ -9,11 +9,12 @@ export class AccountService {
    * Rejects numeric sequence IDs to prevent enumeration.
    */
   _parseId(id) {
+    if (!id) return { public_id: '00000000-0000-0000-0000-000000000000' };
     const str = String(id).trim();
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
     if (isUuid) return { public_id: str };
-    if (/^[A-Za-z0-9_.-]+$/.test(str) && !/^\d+$/.test(str)) return { username: str };
-    return { public_id: '00000000-0000-0000-0000-000000000000' };
+    if (/^\d+$/.test(str)) return { account_id: BigInt(str) };
+    return { username: str };
   }
 
   /**
@@ -148,6 +149,7 @@ export class AccountService {
         avatarUrl,
         isActive: acc.is_active,
         is2faEnabled: acc.is_2fa_enabled,
+        passwordChangedAt: acc.password_changed_at,
         lastLoginAt: acc.last_login_at,
         createdAt: acc.created_at,
         updatedAt: acc.updated_at,
@@ -288,6 +290,7 @@ export class AccountService {
       avatarUrl,
       isActive: account.is_active,
       is2faEnabled: account.is_2fa_enabled,
+      passwordChangedAt: account.password_changed_at,
       lastLoginAt: account.last_login_at,
       createdAt: account.created_at,
       updatedAt: account.updated_at,
@@ -313,7 +316,6 @@ export class AccountService {
               schoolYearId: tc.class.school_year_id ? tc.class.school_year_id.toString() : null,
               schoolYearName: tc.class.school_year?.name || null,
               roomNumber: tc.class.room_number,
-              isPrimary: tc.is_primary,
               assignedAt: tc.assigned_at,
             })),
           }
@@ -343,7 +345,6 @@ export class AccountService {
               fullName: p.full_name,
               relationship: p.relationship,
               phone: p.phone,
-              canPickup: p.can_pickup,
             })),
           }
         : null,
@@ -363,7 +364,7 @@ export class AccountService {
     }
 
     // 2. Hash password
-    const passwordHash = await bcrypt.hash(data.password || '123456', 10);
+    const passwordHash = await bcrypt.hash(data.password || 'Sorak@2026', 10);
 
     const assignedRole = data.role === 'ADMIN_BGH' ? 'PRINCIPAL_BGH' : data.role;
     const account = await prisma.account.create({
@@ -446,11 +447,20 @@ export class AccountService {
   /**
    * Update account
    */
-  async updateAccount(id, data) {
+  async updateAccount(id, data, currentUser = null) {
     const where = { ...this._parseId(id), deleted_at: null };
     const account = await prisma.account.findFirst({
       where,
-      include: { teacher: true, student: true },
+      include: {
+        teacher: {
+          include: {
+            teacher_classes: {
+              where: { left_at: null },
+            },
+          },
+        },
+        student: true,
+      },
     });
     if (!account) {
       throw new NotFound('Tài khoản không tồn tại trên hệ thống');
@@ -458,7 +468,46 @@ export class AccountService {
 
     const updateData = {};
     if (data.role !== undefined) {
-      updateData.role = data.role === 'ADMIN_BGH' ? 'PRINCIPAL_BGH' : data.role;
+      const normalizedRole = data.role === 'ADMIN_BGH' ? 'PRINCIPAL_BGH' : data.role;
+
+      if (normalizedRole !== account.role) {
+        // Rule 1: A user cannot change their own role (Comment 5)
+        if (currentUser) {
+          const userSub = String(currentUser.sub || '');
+          const userAccId = String(currentUser.accountId || '');
+          const targetPubId = String(account.public_id);
+          const targetAccId = String(account.account_id);
+          if (userSub === targetPubId || userSub === targetAccId || userAccId === targetAccId) {
+            throw new BadRequest('Người dùng không được phép tự thay đổi vai trò của chính mình.');
+          }
+        }
+
+        // Rule 2: System must retain at least 1 active Principal (Comment 6)
+        if (account.role === 'PRINCIPAL_BGH') {
+          const activePrincipalsCount = await prisma.account.count({
+            where: {
+              role: 'PRINCIPAL_BGH',
+              is_active: true,
+              deleted_at: null,
+            },
+          });
+          if (activePrincipalsCount <= 1) {
+            throw new BadRequest('Hệ thống phải có ít nhất 1 tài khoản Ban giám hiệu (Hiệu trưởng) đang hoạt động.');
+          }
+        }
+
+        // Rule 3: Teacher currently assigned to a class cannot change role to BGH (Comment 7)
+        if (normalizedRole === 'PRINCIPAL_BGH' && account.teacher) {
+          const activeClassCount = (account.teacher.teacher_classes || []).length;
+          if (activeClassCount > 0) {
+            throw new BadRequest(
+              'Giáo viên đang được phân công giảng dạy lớp không thể đổi vai trò sang Ban giám hiệu. Vui lòng gỡ phân công lớp trước.'
+            );
+          }
+        }
+
+        updateData.role = normalizedRole;
+      }
     }
     if (data.isActive !== undefined) updateData.is_active = data.isActive;
 
@@ -498,11 +547,36 @@ export class AccountService {
   /**
    * Change account active status
    */
-  async changeStatus(id, isActive) {
+  async changeStatus(id, isActive, currentUser = null) {
     const where = { ...this._parseId(id), deleted_at: null };
     const account = await prisma.account.findFirst({ where });
     if (!account) {
       throw new NotFound('Tài khoản không tồn tại');
+    }
+
+    // Rule 4: User cannot change status of their own account (cannot lock themselves) (Comment 9 & 10)
+    if (currentUser) {
+      const userSub = String(currentUser.sub || '');
+      const userAccId = String(currentUser.accountId || '');
+      const targetPubId = String(account.public_id);
+      const targetAccId = String(account.account_id);
+      if (userSub === targetPubId || userSub === targetAccId || userAccId === targetAccId) {
+        throw new BadRequest('Tài khoản tự đổi trạng thái của chính mình sẽ bị từ chối.');
+      }
+    }
+
+    // Rule 5: Cannot lock the last active Principal (Comment 9 & 10)
+    if (!isActive && account.role === 'PRINCIPAL_BGH') {
+      const activePrincipalsCount = await prisma.account.count({
+        where: {
+          role: 'PRINCIPAL_BGH',
+          is_active: true,
+          deleted_at: null,
+        },
+      });
+      if (activePrincipalsCount <= 1) {
+        throw new BadRequest('Hệ thống phải có ít nhất 1 tài khoản Ban giám hiệu (Hiệu trưởng) đang hoạt động.');
+      }
     }
 
     await prisma.account.update({
@@ -528,7 +602,7 @@ export class AccountService {
   /**
    * Reset account password
    */
-  async resetPassword(id, newPassword = '123456') {
+  async resetPassword(id, newPassword = 'Sorak@2026') {
     const where = { ...this._parseId(id), deleted_at: null };
     const account = await prisma.account.findFirst({ where });
     if (!account) {

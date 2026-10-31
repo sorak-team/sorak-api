@@ -117,7 +117,7 @@ The API will be available at `http://localhost:3000`. Health check endpoint: `GE
 
 ## Default Seed Accounts
 
-When seeded, the following test accounts are provisioned with password `123456`:
+When seeded, the following test accounts are provisioned with default password `Sorak@2026` (compliant with rule BR_06: >=8 chars, uppercase, digit, special character):
 
 | Role | Username | Description |
 | :--- | :--- | :--- |

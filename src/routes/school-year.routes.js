@@ -7,6 +7,7 @@ import {
   createSchoolYearSchema,
   updateSchoolYearSchema,
   querySchoolYearSchema,
+  createHolidaySchema,
 } from '../validators/school-year.schema.js';
 import {
   listSchoolYears,
@@ -50,6 +51,7 @@ router.post(
   '/:id/holidays',
   authMiddleware,
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
+  validate(createHolidaySchema),
   asyncHandler(createHoliday),
 );
 router.post(

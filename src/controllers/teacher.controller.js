@@ -18,13 +18,13 @@ export const createTeacher = async (req, res) => {
 
 export const updateTeacher = async (req, res) => {
   const { id } = req.params;
-  const result = await teacherService.updateTeacher(id, req.body);
+  const result = await teacherService.updateTeacher(id, req.body, req.user);
   res.success(result);
 };
 
 export const deleteTeacher = async (req, res) => {
   const { id } = req.params;
-  const result = await teacherService.deleteTeacher(id);
+  const result = await teacherService.deleteTeacher(id, req.user);
   res.success(result);
 };
 

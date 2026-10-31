@@ -18,9 +18,15 @@ export const createAccountSchema = Joi.object({
     .messages({
       'string.pattern.base': 'Số điện thoại phải từ 9 đến 15 chữ số',
     }),
-  password: Joi.string().min(6).max(100).default('123456').messages({
-    'string.min': 'Mật khẩu phải có ít nhất 6 ký tự',
-  }),
+  password: Joi.string()
+    .min(8)
+    .max(100)
+    .pattern(/^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>_\-+=~`[\]\\;/])/)
+    .default('Sorak@2026')
+    .messages({
+      'string.min': 'Mật khẩu phải tối thiểu 8 ký tự',
+      'string.pattern.base': 'Mật khẩu phải tối thiểu 8 ký tự, bao gồm ít nhất 1 chữ hoa, 1 chữ số và 1 ký tự đặc biệt',
+    }),
   role: Joi.string()
     .valid('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV', 'PARENT_PH')
     .required()
@@ -65,5 +71,18 @@ export const queryAccountSchema = Joi.object({
     .default('ALL'),
   status: Joi.string().valid('ALL', 'active', 'locked', 'inactive').default('ALL'),
   sortBy: Joi.string().valid('newest', 'oldest', 'username', 'lastLogin').default('newest'),
+});
+
+export const resetPasswordSchema = Joi.object({
+  newPassword: Joi.string()
+    .min(8)
+    .max(100)
+    .pattern(/^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>_\-+=~`[\]\\;/])/)
+    .default('Sorak@2026')
+    .optional()
+    .messages({
+      'string.min': 'Mật khẩu phải tối thiểu 8 ký tự',
+      'string.pattern.base': 'Mật khẩu phải tối thiểu 8 ký tự, bao gồm ít nhất 1 chữ hoa, 1 chữ số và 1 ký tự đặc biệt',
+    }),
 });
 

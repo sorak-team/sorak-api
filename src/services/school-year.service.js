@@ -84,6 +84,13 @@ export class SchoolYearService {
             colorTheme: y.color_theme || 'blue',
             isActive: y.status === 'ACTIVE',
             totalClasses: y._count.classes,
+            totalStudents: await prisma.studentEnrollment.count({
+              where: {
+                class: { school_year_id: y.school_year_id, deleted_at: null },
+                status: 'ENROLLED',
+                left_at: null,
+              },
+            }),
             isUsed,
             usageSummary: {
               classes: y._count.classes,
@@ -151,6 +158,62 @@ export class SchoolYearService {
         }),
       ]);
   
+      
+      const classIds = item.classes.map((c) => c.class_id);
+
+      // Real enrolled students in this school year
+      const enrolledStudentsCount = classIds.length > 0
+        ? await prisma.studentEnrollment.count({
+            where: {
+              class_id: { in: classIds },
+              status: 'ENROLLED',
+              left_at: null,
+            },
+          })
+        : 0;
+
+      // Real active teachers in school
+      const totalTeachersCount = await prisma.teacher.count({
+        where: { work_status: 'WORKING', deleted_at: null },
+      });
+
+      // Teachers assigned to at least one class in this school year
+      const assignedTeacherRecords = classIds.length > 0
+        ? await prisma.teacherClass.findMany({
+            where: {
+              class_id: { in: classIds },
+              left_at: null,
+            },
+            select: { teacher_id: true, class_id: true },
+          })
+        : [];
+
+      const uniqueAssignedTeacherIds = new Set(assignedTeacherRecords.map((t) => t.teacher_id.toString()));
+      const teachersAssignedCount = uniqueAssignedTeacherIds.size;
+      const teachersUnassignedCount = Math.max(0, totalTeachersCount - teachersAssignedCount);
+
+      // Classes with at least 1 teacher assigned
+      const classesWithTeacherSet = new Set(assignedTeacherRecords.map((t) => t.class_id.toString()));
+      const classesWithTeacherCount = classesWithTeacherSet.size;
+      const classesWithoutTeacherCount = Math.max(0, item.classes.length - classesWithTeacherCount);
+
+      // Unassigned students count
+      const totalStudyingStudents = await prisma.student.count({
+        where: { status: 'STUDYING', deleted_at: null },
+      });
+      const studentsUnassignedCount = item.status === 'ACTIVE'
+        ? Math.max(0, totalStudyingStudents - enrolledStudentsCount)
+        : 0;
+      const totalStudentsCount = enrolledStudentsCount + studentsUnassignedCount;
+
+      // Age group breakdown
+      const ageGroupsBreakdown = {
+        NHA_TRE: item.classes.filter((c) => c.age_group === 'NHA_TRE' || (c.name || '').toLowerCase().includes('nhà trẻ') || (c.name || '').toLowerCase().includes('nha tre')).length,
+        MAM: item.classes.filter((c) => c.age_group === 'MAM' || (c.name || '').toLowerCase().includes('mầm') || (c.name || '').toLowerCase().includes('mam')).length,
+        CHOI: item.classes.filter((c) => c.age_group === 'CHOI' || (c.name || '').toLowerCase().includes('chồi') || (c.name || '').toLowerCase().includes('choi')).length,
+        LA: item.classes.filter((c) => c.age_group === 'LA' || (c.name || '').toLowerCase().includes('lá') || (c.name || '').toLowerCase().includes('la')).length,
+      };
+
       const isUsed = Boolean(
         item.classes.length > 0 ||
         themeCount > 0 ||
@@ -168,6 +231,15 @@ export class SchoolYearService {
         colorTheme: item.color_theme || 'blue',
         isActive: item.status === 'ACTIVE',
         totalClasses: item.classes.length,
+        totalStudents: totalStudentsCount,
+        studentsAssigned: enrolledStudentsCount,
+        studentsUnassigned: studentsUnassignedCount,
+        totalTeachers: totalTeachersCount,
+        teachersAssigned: teachersAssignedCount,
+        teachersUnassigned: teachersUnassignedCount,
+        classesWithTeacher: classesWithTeacherCount,
+        classesWithoutTeacher: classesWithoutTeacherCount,
+        ageGroupsBreakdown,
         isUsed,
         usageSummary: {
           classes: item.classes.length,
@@ -288,6 +360,10 @@ export class SchoolYearService {
   
       if (!existing) {
         throw NotFound('Không tìm thấy năm học để cập nhật');
+      }
+
+      if (existing.status === 'COMPLETED') {
+        throw BadRequest('Không thể chỉnh sửa thông tin năm học đã kết thúc');
       }
   
       // Kiểm tra nếu năm học đã được sử dụng (điểm danh, chủ đề, mục tiêu, lớp học)
@@ -446,7 +522,7 @@ export class SchoolYearService {
                 include: { student: true },
               },
               teacher_classes: {
-                where: { left_at: null, is_primary: true },
+                where: { left_at: null },
                 include: { teacher: true },
               },
             },
@@ -518,11 +594,13 @@ export class SchoolYearService {
         const activeInClass = c.student_enrollments.filter(
           (e) => e.status === 'ENROLLED' && !e.left_at,
         );
-        const totalInClass = c.student_enrollments.filter((e) => !e.left_at).length;
         const completedInClass = c.student_enrollments.filter(
-          (e) => (e.status === 'COMPLETED' || e.status === 'GRADUATED') && !e.left_at,
+          (e) => e.status === 'COMPLETED' || e.status === 'GRADUATED',
         ).length;
-        const teacherName = c.teacher_classes?.[0]?.teacher?.full_name || 'Chưa phân công';
+        const totalInClass = activeInClass.length + completedInClass;
+        const teacherName =
+          c.teacher_classes?.map((tc) => tc.teacher?.full_name).filter(Boolean).join(', ') ||
+          'Chưa phân công';
   
         totalStudents += totalInClass;
         if (c.age_group === 'NHA_TRE') countNhaTre += totalInClass;
@@ -567,6 +645,17 @@ export class SchoolYearService {
         targetYearName,
         targetYearId: targetYear?.school_year_id?.toString() || null,
         step1: {
+          title: 'Trạng thái học sinh năm cũ',
+          description: 'Không còn học sinh nào trong enroll năm cũ là đang học',
+          totalStudents,
+          enrolledCount: enrolledStudentsCount,
+          completedCount: totalStudents - enrolledStudentsCount,
+          isEligible: enrolledStudentsCount === 0,
+          pendingClasses,
+          classesList,
+          isCompleted: enrolledStudentsCount === 0,
+        },
+        step2: {
           title: 'Khung chủ đề năm học',
           description: 'Hoàn thành khung chủ đề và tùy chọn đem khung chủ đề cũ qua năm mới',
           totalThemes: step1Total,
@@ -591,7 +680,7 @@ export class SchoolYearService {
             },
           ],
         },
-        step2: {
+        step3: {
           title: 'Khung mục tiêu giáo dục',
           description: 'Kiểm tra ngân hàng mục tiêu và tùy chọn đem khung mục tiêu cũ qua năm mới',
           totalGoals,
@@ -603,17 +692,6 @@ export class SchoolYearService {
             { grade: 'Chồi', count: goalsChoi || 30, status: 'COMPLETED' },
             { grade: 'Lá', count: goalsLa || 30, status: 'COMPLETED' },
           ],
-        },
-        step3: {
-          title: 'Trạng thái học sinh năm cũ',
-          description: 'Không còn học sinh nào trong enroll năm cũ là đang học',
-          totalStudents,
-          enrolledCount: enrolledStudentsCount,
-          completedCount: totalStudents - enrolledStudentsCount,
-          isEligible: enrolledStudentsCount === 0,
-          pendingClasses,
-          classesList,
-          isCompleted: enrolledStudentsCount === 0,
         },
         step4: {
           title: 'Lên khối xác nhận',
@@ -649,7 +727,7 @@ export class SchoolYearService {
               where: { enrollment_id: enr.enrollment_id },
               data: {
                 left_at: new Date(),
-                status: isGraduated ? 'GRADUATED' : 'COMPLETED',
+                status: 'COMPLETED',
                 leave_reason: isGraduated ? 'Tốt nghiệp ra trường' : 'Hoàn thành năm học',
               },
             });
@@ -690,7 +768,25 @@ export class SchoolYearService {
         },
       });
   
-      if (!currentYear) throw NotFound('Không tìm thấy năm học.');
+      if (!currentYear) throw new NotFound('Không tìm thấy năm học.');
+
+      // Check if there are active students remaining in current year BEFORE any mutations
+      const activeEnrollmentsCount = await prisma.studentEnrollment.count({
+        where: {
+          left_at: null,
+          status: 'ENROLLED',
+          class: {
+            school_year_id: bigId,
+            deleted_at: null,
+          },
+        },
+      });
+
+      if (activeEnrollmentsCount > 0) {
+        throw new BadRequest(
+          `Còn ${activeEnrollmentsCount} học sinh chưa hoàn thành hoặc tốt nghiệp năm học. Vui lòng hoàn tất đánh giá và tốt nghiệp cho học sinh trước khi chuyển giao.`
+        );
+      }
   
       const matchYears = currentYear.name.match(/(\d{4})[–-](\d{4})/);
       let nextStartYear = 2027;
@@ -706,6 +802,18 @@ export class SchoolYearService {
         await tx.schoolYear.update({
           where: { school_year_id: bigId },
           data: { status: 'COMPLETED' },
+        });
+
+        // Close all active teacher assignments for classes in this completed school year
+        await tx.teacherClass.updateMany({
+          where: {
+            class: { school_year_id: bigId },
+            left_at: null,
+          },
+          data: {
+            left_at: currentYear.end_date || new Date(),
+            leave_reason: 'COMPLETED_SCHOOL_YEAR',
+          },
         });
   
         // 2. Find or create target school year, mark ACTIVE
@@ -825,29 +933,7 @@ export class SchoolYearService {
           }
         }
   
-        // 5. Process promotions and graduation
-        for (const cls of currentYear.classes) {
-          const isGraduated = cls.age_group === 'LA';
-          for (const enr of cls.student_enrollments) {
-            await tx.studentEnrollment.update({
-              where: { enrollment_id: enr.enrollment_id },
-              data: {
-                left_at: new Date(),
-                status: isGraduated ? 'GRADUATED' : 'COMPLETED',
-                leave_reason: isGraduated ? 'Tốt nghiệp ra trường' : 'Hoàn thành năm học',
-              },
-            });
-  
-            if (isGraduated) {
-              await tx.student.update({
-                where: { student_id: enr.student_id },
-                data: { status: 'GRADUATED' },
-              });
-            }
-          }
-        }
-  
-        // 6. Create announcement notification for BGH and Faculty
+        // 5. Create announcement notification for BGH and Faculty
         try {
           const staffAccounts = await tx.account.findMany({
             where: { role: { in: ['PRINCIPAL_BGH', 'TEACHER_GV'] }, is_active: true },
@@ -861,7 +947,7 @@ export class SchoolYearService {
                 created_by: accountId ? BigInt(accountId) : null,
                 type: 'SCHOOL_ANNOUNCEMENT',
                 title: `Chuyển giao năm học mới: ${targetYearName}`,
-                body: `Hệ thống đã hoàn tất chuyển giao từ ${currentYear.name} sang ${targetYearName}. Danh sách học sinh các khối đã được chuyển vào Pool sẵn sàng phân lớp.`,
+                body: `Hệ thống đã hoàn tất chuyển giao từ ${currentYear.name} sang ${targetYearName}. Ban giám hiệu có thể bắt đầu tạo lớp học và phân lớp cho năm học mới.`,
               },
             });
           }
@@ -889,132 +975,25 @@ export class SchoolYearService {
         orderBy: { start_date: 'asc' },
       });
   
-      // If no holidays recorded yet, insert standard calendar events
       if (holidays.length === 0) {
-        const sy = await prisma.schoolYear.findUnique({
-          where: { school_year_id: bigId },
-        });
-        const startYear = sy ? new Date(sy.start_date).getFullYear() : 2026;
-        const nextYear = startYear + 1;
-  
-        const defaultEvents = [
-          {
-            name: `Lễ Khai giảng năm học ${startYear}–${nextYear} & Ngày hội bé đến trường`,
-            start_date: new Date(`${startYear}-09-05`),
-            end_date: new Date(`${startYear}-09-05`),
-            is_teaching_allowed: true,
-            description: 'Ngày hội toàn dân đưa trẻ đến trường và Lễ Khai giảng năm học mới',
+        return {
+          counters: {
+            totalEvents: 0,
+            holidaysCount: 0,
+            generalActivitiesCount: 0,
+            specialDaysCount: 0,
+            scheduledHolidays: 0,
+            pendingConfirmCount: 0,
+            syncedCalendarCount: 0,
           },
-          {
-            name: `Vui Tết Trung thu ${startYear} (Đêm hội Trăng Rằm)`,
-            start_date: new Date(`${startYear}-09-25`),
-            end_date: new Date(`${startYear}-09-25`),
-            is_teaching_allowed: true,
-            description: 'Lễ hội Trung thu rước đèn múa lân, phá cỗ và giao lưu văn nghệ các khối lớp',
-          },
-          {
-            name: 'Ngày Phụ nữ Việt Nam 20/10',
-            start_date: new Date(`${startYear}-10-20`),
-            end_date: new Date(`${startYear}-10-20`),
-            is_teaching_allowed: true,
-            description: 'Bé trải nghiệm cắm hoa, làm thiệp chúc mừng mẹ và cô giáo',
-          },
-          {
-            name: 'Hội thao mầm non toàn trường',
-            start_date: new Date(`${startYear}-10-30`),
-            end_date: new Date(`${startYear}-10-30`),
-            is_teaching_allowed: true,
-            description: 'Hội thao vận động khỏe đẹp và trò chơi dân gian cho bé các khối lớp',
-          },
-          {
-            name: 'Kỷ niệm Ngày Nhà giáo Việt Nam 20/11',
-            start_date: new Date(`${startYear}-11-20`),
-            end_date: new Date(`${startYear}-11-20`),
-            is_teaching_allowed: true,
-            description: 'Kỷ niệm ngày Nhà giáo Việt Nam 20/11, tri ân thầy cô giáo toàn trường',
-          },
-          {
-            name: `Lễ hội Giáng sinh & Chào đón năm mới ${nextYear}`,
-            start_date: new Date(`${startYear}-12-24`),
-            end_date: new Date(`${startYear}-12-24`),
-            is_teaching_allowed: true,
-            description: 'Văn nghệ Noel, hoạt cảnh mùa đông và tặng quà ông già Noel',
-          },
-          {
-            name: `Nghỉ Tết Dương Lịch ${nextYear}`,
-            start_date: new Date(`${nextYear}-01-01`),
-            end_date: new Date(`${nextYear}-01-03`),
-            is_teaching_allowed: false,
-            description: `Nghỉ Tết Dương Lịch ${nextYear} theo quy định của Nhà nước (3 ngày)`,
-          },
-          {
-            name: `Lễ Sơ kết Học kỳ 1 năm học ${startYear}–${nextYear}`,
-            start_date: new Date(`${nextYear}-01-15`),
-            end_date: new Date(`${nextYear}-01-15`),
-            is_teaching_allowed: true,
-            description: 'Sơ kết công tác chăm sóc, giáo dục trẻ Học kỳ 1 và triển khai kế hoạch Học kỳ 2',
-          },
-          {
-            name: `Nghỉ Tết Nguyên Đán ${nextYear}`,
-            start_date: new Date(`${nextYear}-02-05`),
-            end_date: new Date(`${nextYear}-02-16`),
-            is_teaching_allowed: false,
-            description: 'Nghỉ Tết Nguyên Đán theo kế hoạch năm học ngành GD&ĐT (12 ngày)',
-          },
-          {
-            name: 'Ngày Quốc tế Phụ nữ 8/3',
-            start_date: new Date(`${nextYear}-03-08`),
-            end_date: new Date(`${nextYear}-03-08`),
-            is_teaching_allowed: true,
-            description: 'Hoạt động bé yêu mẹ và cô giáo nhân ngày Quốc tế Phụ nữ 8/3',
-          },
-          {
-            name: 'Nghỉ Lễ Giỗ Tổ Hùng Vương (10/3 Âm lịch)',
-            start_date: new Date(`${nextYear}-04-16`),
-            end_date: new Date(`${nextYear}-04-18`),
-            is_teaching_allowed: false,
-            description: 'Nghỉ Lễ Giỗ Tổ Hùng Vương (10/3 Âm lịch) theo quy định Nhà nước (3 ngày)',
-          },
-          {
-            name: 'Nghỉ Lễ Chiến thắng 30/4 & Quốc tế Lao động 1/5',
-            start_date: new Date(`${nextYear}-04-30`),
-            end_date: new Date(`${nextYear}-05-03`),
-            is_teaching_allowed: false,
-            description: 'Nghỉ Lễ Giải phóng Miền Nam 30/4 và Ngày Quốc tế Lao động 1/5 (4 ngày)',
-          },
-          {
-            name: 'Lễ Bế giảng năm học & Ra trường cho bé 5 tuổi',
-            start_date: new Date(`${nextYear}-05-28`),
-            end_date: new Date(`${nextYear}-05-28`),
-            is_teaching_allowed: true,
-            description: `Lễ Bế giảng năm học ${startYear}–${nextYear} và Lễ ra trường cho trẻ khối Lá (5 tuổi)`,
-          },
-        ];
-  
-        for (const item of defaultEvents) {
-          await prisma.schoolHoliday.create({
-            data: {
-              school_year_id: bigId,
-              name: item.name,
-              start_date: item.start_date,
-              end_date: item.end_date,
-              is_teaching_allowed: item.is_teaching_allowed,
-              description: item.description,
-              created_by: 1n,
-            },
-          });
-        }
-  
-        holidays = await prisma.schoolHoliday.findMany({
-          where: { school_year_id: bigId, deleted_at: null },
-          orderBy: { start_date: 'asc' },
-        });
+          items: [],
+        };
       }
-  
+
       const totalEvents = holidays.length;
       const holidaysCount = holidays.filter((h) => !h.is_teaching_allowed).length;
       const generalActivitiesCount = holidays.filter((h) => h.is_teaching_allowed).length;
-      const specialDaysCount = 2;
+      const specialDaysCount = 0;
   
       return {
         counters: {
@@ -1023,7 +1002,7 @@ export class SchoolYearService {
           generalActivitiesCount,
           specialDaysCount,
           scheduledHolidays: holidaysCount,
-          pendingConfirmCount: 2,
+          pendingConfirmCount: 0,
           syncedCalendarCount: totalEvents,
         },
         items: holidays.map((h) => {
@@ -1045,7 +1024,11 @@ export class SchoolYearService {
               cleanDesc = match[2];
             }
           }
-  
+
+          const isExplicitEvent = (h.description || '').includes('[SỰ KIỆN]') || (h.description || '').includes('[EVENT]');
+          const itemType = isExplicitEvent ? 'EVENT' : (h.is_teaching_allowed ? 'EVENT' : 'HOLIDAY');
+          cleanDesc = cleanDesc.replace(/\[SỰ KIỆN\]\s*/g, '').replace(/\[EVENT\]\s*/g, '').trim();
+
           return {
             id: h.public_id,
             name: h.name,
@@ -1053,8 +1036,8 @@ export class SchoolYearService {
             endDate: h.end_date.toISOString().split('T')[0],
             displayDate: new Date(h.start_date).toLocaleDateString('vi-VN'),
             isTeachingAllowed: h.is_teaching_allowed,
-            type: h.is_teaching_allowed ? 'EVENT' : 'HOLIDAY',
-            typeLabel: h.is_teaching_allowed ? 'Sự kiện' : 'Ngày nghỉ',
+            type: itemType,
+            typeLabel: itemType === 'EVENT' ? 'Sự kiện' : 'Ngày nghỉ',
             description: cleanDesc || h.description,
             scope: itemScope,
             targetGrades: h.target_grades || [],
@@ -1065,7 +1048,7 @@ export class SchoolYearService {
 
   async createHoliday(id, accountId, data) {
       const bigId = BigInt(id);
-      const { name, startDate, endDate, isTeachingAllowed = false, description, scope, targetGrades } = data;
+      const { name, startDate, endDate, isTeachingAllowed = false, description, scope, targetGrades, type } = data;
   
       if (!name?.trim()) throw BadRequest('Vui lòng nhập tên ngày nghỉ hoặc sự kiện.');
       if (!startDate || !endDate) throw BadRequest('Vui lòng chọn ngày bắt đầu và kết thúc.');
@@ -1073,10 +1056,30 @@ export class SchoolYearService {
       const sDate = new Date(startDate);
       const eDate = new Date(endDate);
       if (eDate < sDate) throw BadRequest('Ngày kết thúc không được trước ngày bắt đầu.');
+
+      const schoolYear = await prisma.schoolYear.findUnique({
+        where: { school_year_id: bigId },
+      });
+      if (!schoolYear) throw NotFound('Năm học không tồn tại.');
+
+      const syStart = new Date(schoolYear.start_date);
+      const syEnd = new Date(schoolYear.end_date);
+      // Strip hours for pure date comparison
+      syStart.setHours(0, 0, 0, 0);
+      syEnd.setHours(23, 59, 59, 999);
+      if (sDate < syStart || eDate > syEnd) {
+        const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+        throw BadRequest(
+          `Thời gian sự kiện/ngày nghỉ (${fmt(sDate)} - ${fmt(eDate)}) phải nằm trong khung thời gian của năm học ${schoolYear.name} (${fmt(syStart)} - ${fmt(syEnd)}).`,
+        );
+      }
   
-      let finalDesc = description?.trim() || null;
-      if (scope && scope !== 'Toàn trường' && !finalDesc?.startsWith(`[${scope}]`)) {
-        finalDesc = `[${scope}] ${finalDesc || ''}`.trim();
+      let finalDesc = description?.trim() || '';
+      if (type === 'EVENT' && !finalDesc.includes('[SỰ KIỆN]')) {
+        finalDesc = `[SỰ KIỆN] ${finalDesc}`.trim();
+      }
+      if (scope && scope !== 'Toàn trường' && !finalDesc.startsWith(`[${scope}]`)) {
+        finalDesc = `[${scope}] ${finalDesc}`.trim();
       }
   
       const holiday = await prisma.schoolHoliday.create({
@@ -1087,7 +1090,7 @@ export class SchoolYearService {
           end_date: eDate,
           is_teaching_allowed: Boolean(isTeachingAllowed),
           target_grades: Array.isArray(targetGrades) ? targetGrades : [],
-          description: finalDesc,
+          description: finalDesc || null,
           created_by: accountId ? BigInt(accountId) : 1n,
         },
       });
@@ -1111,6 +1114,14 @@ export class SchoolYearService {
         const sDate = new Date(item.startDate);
         const eDate = item.endDate ? new Date(item.endDate) : sDate;
   
+        let desc = item.description?.trim() || '';
+        if (item.type === 'EVENT' && !desc.includes('[SỰ KIỆN]')) {
+          desc = `[SỰ KIỆN] ${desc}`.trim();
+        }
+        if (item.scope && item.scope !== 'Toàn trường' && !desc.startsWith(`[${item.scope}]`)) {
+          desc = `[${item.scope}] ${desc}`.trim();
+        }
+
         const created = await prisma.schoolHoliday.create({
           data: {
             school_year_id: bigId,
@@ -1119,7 +1130,7 @@ export class SchoolYearService {
             end_date: eDate,
             is_teaching_allowed: Boolean(item.isTeachingAllowed),
             target_grades: Array.isArray(item.targetGrades) ? item.targetGrades : [],
-            description: item.description?.trim() || null,
+            description: desc || null,
             created_by: accountId ? BigInt(accountId) : 1n,
           },
         });
@@ -1158,14 +1169,26 @@ export class SchoolYearService {
       if (data.targetGrades !== undefined) {
         updateData.target_grades = Array.isArray(data.targetGrades) ? data.targetGrades : [];
       }
-      if (data.description !== undefined || data.scope !== undefined) {
+      if (data.description !== undefined || data.scope !== undefined || data.type !== undefined) {
         let desc = data.description !== undefined ? (data.description ? data.description.trim() : '') : (existing.description || '');
-        const cleaned = desc.replace(/^\[.*?\]\s*/, '').trim();
-        if (data.scope && data.scope !== 'Toàn trường') {
-          desc = `[${data.scope}] ${cleaned}`.trim();
-        } else if (data.scope === 'Toàn trường') {
-          desc = cleaned;
+        const cleaned = desc.replace(/^\[.*?\]\s*/, '').replace(/\[SỰ KIỆN\]\s*/g, '').replace(/\[EVENT\]\s*/g, '').trim();
+        
+        let prefix = '';
+        const itemType = data.type !== undefined
+          ? data.type
+          : ((existing.description || '').includes('[SỰ KIỆN]') || existing.is_teaching_allowed ? 'EVENT' : 'HOLIDAY');
+
+        if (itemType === 'EVENT') {
+          prefix += '[SỰ KIỆN] ';
         }
+        if (data.scope && data.scope !== 'Toàn trường') {
+          prefix = `[${data.scope}] ` + prefix;
+        } else if (!data.scope && existing.description) {
+          const scopeMatch = existing.description.match(/^\[(Khối .*?)\]/);
+          if (scopeMatch) prefix = `[${scopeMatch[1]}] ` + prefix;
+        }
+
+        desc = (prefix + cleaned).trim();
         updateData.description = desc || null;
       }
   

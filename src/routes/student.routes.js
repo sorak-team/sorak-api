@@ -44,7 +44,7 @@ router.post(
 router.patch(
   '/:id',
   authMiddleware,
-  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
   validate(updateStudentSchema),
   asyncHandler(updateStudent),
 );
@@ -77,7 +77,7 @@ router.post(
 router.post(
   '/:id/parents',
   authMiddleware,
-  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
   validate(parentSchema),
   asyncHandler(addParent),
 );
@@ -85,7 +85,7 @@ router.post(
 router.patch(
   '/:id/parents/:parentId',
   authMiddleware,
-  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH', 'TEACHER_GV'),
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
   validate(updateParentSchema),
   asyncHandler(updateParent),
 );

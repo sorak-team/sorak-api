@@ -224,6 +224,8 @@ class AttendanceService {
         reason,
         note: reason,
         notes: reason,
+        isTransferred: Boolean(enr.left_at || enr.status === 'TRANSFERRED_CLASS' || st.status === 'TRANSFERRED'),
+        leftAt: enr.left_at,
         checkInTime: att?.check_in_time || null,
         checkOutTime: att?.check_out_time || null,
         pickupPerson: att?.pickup_person_name || '',
@@ -363,6 +365,8 @@ class AttendanceService {
         totalStudents: enrollments.length,
         presentCount,
         absentCount,
+        dismissedCount: dismissedPresentCount,
+        healthCount: healthRecords.length,
         isRecorded: isDateRecorded,
         isHealthRecorded,
         isDismissalRecorded,
@@ -379,7 +383,7 @@ class AttendanceService {
   /**
    * Update student attendance status for a slot/date with live PostgreSQL persistence
    */
-  async updateAttendance({ classId, date, records }) {
+  async updateAttendance({ classId, date, records, accountId }) {
     const defaultDateStr = new Date().toISOString().slice(0, 10);
     const targetDate = date ? new Date(`${date}T00:00:00.000Z`) : new Date(`${defaultDateStr}T00:00:00.000Z`);
     const targetClass = await this._resolveClass(classId);
@@ -388,7 +392,27 @@ class AttendanceService {
     }
     const cId = targetClass.class_id;
 
+    let staffId = 40n;
+    if (accountId) {
+      try {
+        if (typeof accountId === 'string' && accountId.includes('-')) {
+          const userAcc = await prisma.account.findFirst({
+            where: { public_id: accountId },
+            select: { account_id: true },
+          });
+          if (userAcc) {
+            staffId = userAcc.account_id;
+          }
+        }
+      } catch {
+        staffId = 40n;
+      }
+    }
+
     if (Array.isArray(records) && records.length > 0) {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const targetDateStr = targetDate.toISOString().slice(0, 10);
+
       for (const rec of records) {
         const rawId = rec.studentId || rec.id;
         const student = await this._resolveStudent(rawId);
@@ -408,6 +432,19 @@ class AttendanceService {
           ? String(noteText).trim()
           : (status === 'EXCUSED_ABSENCE' ? 'Nghỉ có phép' : null);
 
+        const isPresent = status === 'PRESENT';
+        let defaultCheckInTime = null;
+        if (isPresent) {
+          if (rec.checkInTime) {
+            const parsed = new Date(rec.checkInTime);
+            defaultCheckInTime = !isNaN(parsed.getTime()) ? parsed : new Date(`${targetDateStr}T${rec.checkInTime}:00.000Z`);
+          } else if (targetDateStr === todayStr) {
+            defaultCheckInTime = new Date();
+          } else {
+            defaultCheckInTime = new Date(`${targetDateStr}T07:30:00.000Z`);
+          }
+        }
+
         const existing = await prisma.attendance.findFirst({
           where: {
             student_id: sId,
@@ -422,6 +459,18 @@ class AttendanceService {
             data: {
               status,
               notes: savedReason,
+              check_in_time: isPresent ? (existing.check_in_time || defaultCheckInTime) : null,
+              check_in_by: existing?.check_in_by || staffId,
+              ...(isPresent ? {} : {
+                check_out_time: null,
+                check_out_by: null,
+                pickup_person_name: null,
+                pickup_relationship: null,
+                pickup_person_phone: null,
+                pickup_citizen_id: null,
+                pickup_photo_url: null,
+                pickup_note: null,
+              }),
               updated_at: new Date(),
             },
           });
@@ -432,7 +481,8 @@ class AttendanceService {
               class_id: cId,
               date: targetDate,
               status,
-              check_in_by: 40n,
+              check_in_by: staffId,
+              check_in_time: isPresent ? defaultCheckInTime : null,
               notes: savedReason,
             },
           });
@@ -476,7 +526,7 @@ class AttendanceService {
 
   /**
    * Get child dismissal overview for a class and date
-   * Pre-loads attendance check-in status, parents (can_pickup), and approved pickup authorizations
+   * Pre-loads attendance check-in status, parents, and approved pickup authorizations
    */
   async getDismissalOverview({ classId, date }) {
     // 1. Resolve target class
@@ -574,7 +624,6 @@ class AttendanceService {
         name: p.full_name,
         relationship: p.relationship,
         phone: p.phone,
-        canPickup: p.can_pickup,
         avatarUrl:
           p.avatar_url ||
           `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(p.full_name || 'PH')}`,
@@ -1013,7 +1062,11 @@ class AttendanceService {
       }
     }
 
-    const sId = BigInt(studentId);
+    const student = await this._resolveStudent(studentId);
+    if (!student) {
+      throw new NotFound('Không tìm thấy học sinh để tạo ủy quyền đón.');
+    }
+    const sId = student.student_id;
     const start = new Date(`${startDate}T00:00:00.000Z`);
     const end = new Date(`${endDate}T23:59:59.999Z`);
 
@@ -1050,26 +1103,39 @@ class AttendanceService {
    * Approve a pickup authorization
    */
   async approvePickupAuthorization({ classId, authId, accountId }) {
-    let staffId = 40n;
+    let staffId = null;
     if (accountId) {
       try {
-        if (typeof accountId === 'string' && accountId.includes('-')) {
+        const str = String(accountId).trim();
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+        if (isUuid) {
           const userAcc = await prisma.account.findFirst({
-            where: { public_id: accountId },
+            where: { public_id: str, deleted_at: null },
             select: { account_id: true },
           });
           if (userAcc) staffId = userAcc.account_id;
-        } else {
-          staffId = BigInt(accountId);
+        } else if (/^\d+$/.test(str)) {
+          staffId = BigInt(str);
         }
       } catch (e) {
         console.warn('Could not parse staff accountId:', e);
       }
     }
+    if (!staffId) {
+      const anyStaff = await prisma.account.findFirst({
+        where: { role: { in: ['PRINCIPAL_BGH', 'TEACHER_GV'] }, deleted_at: null },
+        select: { account_id: true },
+      });
+      staffId = anyStaff?.account_id || null;
+    }
 
-    const aId = BigInt(authId);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(authId).trim());
+    const where = isUuid
+      ? { public_id: String(authId).trim() }
+      : { authorization_id: BigInt(authId) };
+
     const updated = await prisma.pickupAuthorization.update({
-      where: { authorization_id: aId },
+      where,
       data: {
         status: 'APPROVED',
         approved_by: staffId,
@@ -1082,7 +1148,7 @@ class AttendanceService {
     });
 
     return {
-      id: updated.authorization_id.toString(),
+      id: updated.public_id || updated.authorization_id.toString(),
       status: updated.status,
       approvedAt: updated.approved_at,
       studentName: updated.student?.full_name,
@@ -1093,26 +1159,39 @@ class AttendanceService {
    * Reject a pickup authorization with reason
    */
   async rejectPickupAuthorization({ classId, authId, accountId, reason }) {
-    let staffId = 40n;
+    let staffId = null;
     if (accountId) {
       try {
-        if (typeof accountId === 'string' && accountId.includes('-')) {
+        const str = String(accountId).trim();
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+        if (isUuid) {
           const userAcc = await prisma.account.findFirst({
-            where: { public_id: accountId },
+            where: { public_id: str, deleted_at: null },
             select: { account_id: true },
           });
           if (userAcc) staffId = userAcc.account_id;
-        } else {
-          staffId = BigInt(accountId);
+        } else if (/^\d+$/.test(str)) {
+          staffId = BigInt(str);
         }
       } catch (e) {
         console.warn('Could not parse staff accountId:', e);
       }
     }
+    if (!staffId) {
+      const anyStaff = await prisma.account.findFirst({
+        where: { role: { in: ['PRINCIPAL_BGH', 'TEACHER_GV'] }, deleted_at: null },
+        select: { account_id: true },
+      });
+      staffId = anyStaff?.account_id || null;
+    }
 
-    const aId = BigInt(authId);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(authId).trim());
+    const where = isUuid
+      ? { public_id: String(authId).trim() }
+      : { authorization_id: BigInt(authId) };
+
     const updated = await prisma.pickupAuthorization.update({
-      where: { authorization_id: aId },
+      where,
       data: {
         status: 'REJECTED',
         approved_by: staffId,
@@ -1125,7 +1204,7 @@ class AttendanceService {
     });
 
     return {
-      id: updated.authorization_id.toString(),
+      id: updated.public_id || updated.authorization_id.toString(),
       status: updated.status,
       approvedAt: updated.approved_at,
       rejectedReason: updated.rejected_reason,

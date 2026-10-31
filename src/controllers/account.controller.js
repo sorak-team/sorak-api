@@ -18,14 +18,14 @@ export const createAccount = async (req, res) => {
 
 export const updateAccount = async (req, res) => {
   const { id } = req.params;
-  const result = await accountService.updateAccount(id, req.body);
+  const result = await accountService.updateAccount(id, req.body, req.user);
   res.success(result);
 };
 
 export const toggleAccountStatus = async (req, res) => {
   const { id } = req.params;
   const { isActive } = req.body;
-  const result = await accountService.changeStatus(id, !!isActive);
+  const result = await accountService.changeStatus(id, !!isActive, req.user);
   res.success(result);
 };
 

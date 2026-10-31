@@ -62,6 +62,25 @@ export function errorHandler(err, req, res, _next) {
     );
   }
 
+  const stripBr = (msg) => {
+    if (typeof msg !== 'string') return msg;
+    return msg
+      .replace(/\s*\([A-Z]*\s*BR[-_ ]?\d+[^)]*\)/gi, '')
+      .replace(/\s*\[[A-Z]*\s*BR[-_ ]?\d+[^\]]*\]/gi, '')
+      .replace(/Theo quy định BR[-_ ]?\d+,\s*/gi, 'Theo quy định, ')
+      .replace(/quy định BR[-_ ]?\d+/gi, 'quy định')
+      .replace(/\bBR[-_]\d+\b/gi, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  };
+
+  message = stripBr(message);
+  if (Array.isArray(details)) {
+    details = details.map((d) =>
+      d && typeof d === 'object' && d.message ? { ...d, message: stripBr(d.message) } : d,
+    );
+  }
+
   res.status(status).json({
     success: false,
     code,

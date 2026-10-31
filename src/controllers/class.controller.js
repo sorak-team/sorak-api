@@ -7,7 +7,7 @@ export const listClasses = async (req, res) => {
 
 export const getClassById = async (req, res) => {
   const { id } = req.params;
-  const result = await classService.getClassById(id);
+  const result = await classService.getClassById(id, req.user);
   res.success(result);
 };
 
@@ -42,7 +42,7 @@ export const removeTeacher = async (req, res) => {
 
 export const getClassStudents = async (req, res) => {
   const { id } = req.params;
-  const result = await classService.getClassStudents(id, req.query);
+  const result = await classService.getClassStudents(id, req.query, req.user);
   res.success(result);
 };
 
@@ -58,11 +58,19 @@ export const allocateStudents = async (req, res) => {
   res.status(200).success(result);
 };
 
+export const unassignStudent = async (req, res) => {
+  const { id, studentId } = req.params;
+  const result = await classService.unassignStudent(id, studentId);
+  res.success(result);
+};
+
 export const removeStudents = async (req, res) => {
   const { id } = req.params;
   const result = await classService.removeStudents(id, req.body);
   res.success(result);
 };
+
+export const unassignStudents = removeStudents;
 
 export const getHistorySources = async (req, res) => {
   const { id } = req.params;
@@ -96,13 +104,13 @@ export const updateTeacherRole = async (req, res) => {
 
 export const getClassTransfers = async (req, res) => {
   const { id } = req.params;
-  const result = await classService.getClassTransfers(id, req.query);
+  const result = await classService.getClassTransfers(id, req.query, req.user);
   res.success(result);
 };
 
 export const createTransferRequest = async (req, res) => {
   const { id } = req.params;
-  const result = await classService.createTransferRequest(id, req.body, req.user?.accountId);
+  const result = await classService.createTransferRequest(id, req.body, req.user?.accountId, req.user);
   res.status(201).success(result);
 };
 
@@ -113,23 +121,43 @@ export const updateTransferStatus = async (req, res) => {
     transferId,
     req.body,
     req.user?.accountId,
+    req.user,
   );
   res.success(result);
 };
 
+export const rejectTransferRequest = async (req, res) => {
+  const { transferId, id } = req.params;
+  const targetId = transferId || id;
+  const result = await classService.rejectTransferRequest(
+    targetId,
+    req.body,
+    req.user?.accountId,
+    req.user,
+  );
+  res.success(result);
+};
+
+export const cancelTransferRequest = async (req, res) => {
+  const { transferId, id } = req.params;
+  const targetId = transferId || id;
+  const result = await classService.cancelTransferRequest(targetId, req.user);
+  res.success(result);
+};
+
 export const getAllTransfers = async (req, res) => {
-  const result = await classService.getAllTransfers(req.query);
+  const result = await classService.getAllTransfers(req.query, req.user);
   res.success(result);
 };
 
 export const createGlobalTransferRequest = async (req, res) => {
-  const result = await classService.createGlobalTransferRequest(req.body, req.user?.accountId);
+  const result = await classService.createGlobalTransferRequest(req.body, req.user?.accountId, req.user);
   res.status(201).success(result);
 };
 
 export const getTransferById = async (req, res) => {
   const { transferId } = req.params;
-  const result = await classService.getTransferById(transferId);
+  const result = await classService.getTransferById(transferId, req.user);
   res.success(result);
 };
 
@@ -163,6 +191,12 @@ export const getStudentReport = async (req, res) => {
   const { id } = req.params;
   const { studentId, semester } = req.query;
   const result = await classService.getStudentReport(id, studentId, semester);
+  res.success(result);
+};
+
+export const graduateStudentFromClass = async (req, res) => {
+  const { id, studentId } = req.params;
+  const result = await classService.graduateStudentFromClass(id, studentId);
   res.success(result);
 };
 

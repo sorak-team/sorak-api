@@ -65,6 +65,9 @@ function resolveAcademicWeekDates(weekId) {
   return null;
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (val) => typeof val === 'string' && UUID_REGEX.test(val.trim());
+
 class PlanningService {
   /**
    * Helper to resolve target class
@@ -72,12 +75,19 @@ class PlanningService {
   async resolveClass(classId) {
     if (classId) {
       const str = String(classId).trim();
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-      if (!isUuid) {
+      const isClassUuid = isUuid(str);
+      const isNum = /^\d+$/.test(str);
+      if (!isClassUuid && !isNum) {
         throw new NotFound('Lớp học không tồn tại hoặc mã định danh không hợp lệ');
       }
       const targetClass = await prisma.class.findFirst({
-        where: { public_id: str, deleted_at: null },
+        where: {
+          OR: [
+            ...(isClassUuid ? [{ public_id: str }] : []),
+            ...(isNum ? [{ class_id: BigInt(str) }] : []),
+          ],
+          deleted_at: null,
+        },
         include: { school_year: true },
       });
       if (!targetClass) {
@@ -95,6 +105,46 @@ class PlanningService {
       throw new NotFound('Không tìm thấy lớp học nào');
     }
     return defaultClass;
+  }
+
+  /**
+   * Helper to resolve staff account ID (BigInt) from JWT accountId / UUID
+   */
+  async resolveStaffAccountId(rawId) {
+    if (!rawId) return null;
+    try {
+      if (typeof rawId === 'bigint') return rawId;
+      if (typeof rawId === 'number') return BigInt(rawId);
+      const str = String(rawId).trim();
+      if (/^\d+$/.test(str)) {
+        const acc = await prisma.account.findUnique({
+          where: { account_id: BigInt(str) },
+          select: { account_id: true },
+        });
+        if (acc) return acc.account_id;
+      }
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)) {
+        const acc = await prisma.account.findFirst({
+          where: { public_id: str },
+          select: { account_id: true },
+        });
+        if (acc) return acc.account_id;
+
+        const teacher = await prisma.teacher.findFirst({
+          where: { public_id: str },
+          select: { account_id: true },
+        });
+        if (teacher?.account_id) return teacher.account_id;
+      }
+      const accByUsername = await prisma.account.findFirst({
+        where: { username: str },
+        select: { account_id: true },
+      });
+      if (accByUsername) return accByUsername.account_id;
+    } catch (err) {
+      logger.warn('Could not resolve staff account ID:', err);
+    }
+    return null;
   }
 
   /**
@@ -161,7 +211,21 @@ class PlanningService {
     const scheduledRecords = targetClass
       ? await prisma.subThemeActivity.findMany({
           where: { class_id: targetClass.class_id },
-          include: { activity: true },
+          include: {
+            activity: true,
+            creator: {
+              select: {
+                username: true,
+                teacher: { select: { full_name: true } },
+              },
+            },
+            updater: {
+              select: {
+                username: true,
+                teacher: { select: { full_name: true } },
+              },
+            },
+          },
         })
       : [];
 
@@ -173,6 +237,8 @@ class PlanningService {
         day: ENUM_TO_DAY_KEY[slot.day_of_week] || 'T2',
         routineSlot: slot.routine_slot,
         date: slot.scheduled_date ? slot.scheduled_date.toISOString().slice(0, 10) : '',
+        creatorName: slot.creator?.teacher?.full_name || slot.creator?.username || null,
+        updaterName: slot.updater?.teacher?.full_name || slot.updater?.username || null,
       };
       const list = scheduledMap.get(actId) || [];
       list.push(slotItem);
@@ -199,6 +265,22 @@ class PlanningService {
             include: {
               activities: {
                 where: { deleted_at: null },
+                include: {
+                  creator: {
+                    select: {
+                      public_id: true,
+                      username: true,
+                      teacher: { select: { full_name: true } },
+                    },
+                  },
+                  updater: {
+                    select: {
+                      public_id: true,
+                      username: true,
+                      teacher: { select: { full_name: true } },
+                    },
+                  },
+                },
               },
             },
           },
@@ -207,11 +289,35 @@ class PlanningService {
       });
 
       if (dbGoals && dbGoals.length > 0) {
+        // Filter activities by assigned teachers of this class (T6 Comment 2)
+        const classTeachers = await prisma.teacherClass.findMany({
+          where: { class_id: targetClass.class_id, left_at: null },
+          select: { teacher: { select: { account_id: true } } },
+        });
+        const allowedAccountIds = new Set(
+          classTeachers.map((tc) => tc.teacher.account_id?.toString()).filter(Boolean)
+        );
+
+        const classScheduledActs = await prisma.subThemeActivity.findMany({
+          where: { class_id: targetClass.class_id },
+          select: { activity_id: true },
+        });
+        const scheduledActIds = new Set(classScheduledActs.map((s) => s.activity_id.toString()));
+
         goalsWithActivities = dbGoals.map((g) => {
           const contentsWithActs = g.contents.map((cnt) => {
-            const activities = cnt.activities.map((act) => {
+            const classActivities = cnt.activities.filter((act) => {
+              if (scheduledActIds.has(act.activity_id.toString())) return true;
+              if (act.created_by && allowedAccountIds.has(act.created_by.toString())) return true;
+              return false;
+            });
+            const activitiesToMap = classActivities;
+            const activities = activitiesToMap.map((act) => {
               const actId = act.public_id || act.activity_id.toString();
               const scheduledSlots = scheduledMap.get(act.public_id) || scheduledMap.get(act.activity_id.toString()) || [];
+              const creatorName = act.creator?.teacher?.full_name || act.creator?.username || null;
+              const updaterName = act.updater?.teacher?.full_name || act.updater?.username || null;
+
               return {
                 id: actId,
                 contentId: cnt.public_id || cnt.content_id.toString(),
@@ -223,6 +329,12 @@ class PlanningService {
                 preparation: act.preparation || '',
                 procedure: act.procedure || '',
                 evaluationCriteria: act.evaluation_criteria || '',
+                creatorName,
+                updaterName,
+                createdBy: act.created_by ? act.created_by.toString() : null,
+                updatedBy: act.updated_by ? act.updated_by.toString() : null,
+                createdAt: act.created_at ? act.created_at.toISOString() : null,
+                updatedAt: act.updated_at ? act.updated_at.toISOString() : null,
                 scheduledSlots,
                 slotsCount: scheduledSlots.length,
                 isScheduled: scheduledSlots.length > 0,
@@ -288,7 +400,7 @@ class PlanningService {
   /**
    * Tab 1: Create or update an educational activity in PostgreSQL
    */
-  async saveEducationalActivity({ classId, activity }) {
+  async saveEducationalActivity({ classId, activity, accountId }) {
     if (!activity.title || !activity.title.trim()) {
       throw new BadRequest('Tiêu đề hoạt động giáo dục không được để trống.');
     }
@@ -296,6 +408,8 @@ class PlanningService {
     if (!activity.contentId) {
       throw new BadRequest('Vui lòng chọn nội dung giáo dục tương ứng.');
     }
+
+    const staffAccountId = await this.resolveStaffAccountId(accountId);
 
     let targetContentId = null;
     if (activity.contentId) {
@@ -317,16 +431,21 @@ class PlanningService {
 
     let existingActivity = null;
     if (activity.id) {
-      const isNum = typeof activity.id === 'number' || (typeof activity.id === 'string' && /^\d+$/.test(String(activity.id).trim()));
-      existingActivity = await prisma.educationalActivity.findFirst({
-        where: {
-          OR: [
-            ...(isNum ? [{ activity_id: BigInt(activity.id) }] : []),
-            { public_id: String(activity.id) },
-          ],
-        },
-      });
+      const strId = String(activity.id).trim();
+      const isNum = typeof activity.id === 'number' || /^\d+$/.test(strId);
+      const isUuidFormat = isUuid(strId);
+      const orConditions = [];
+      if (isNum) orConditions.push({ activity_id: BigInt(strId) });
+      if (isUuidFormat) orConditions.push({ public_id: strId });
+
+      if (orConditions.length > 0) {
+        existingActivity = await prisma.educationalActivity.findFirst({
+          where: { OR: orConditions },
+        });
+      }
     }
+
+    const cleanTitle = activity.title.trim().slice(0, 500);
 
     if (existingActivity) {
       const updated = await prisma.educationalActivity.update({
@@ -334,18 +453,30 @@ class PlanningService {
         data: {
           content_id: targetContentId,
           routine_slot: activity.routineSlot || 'DIRECTED_STUDY',
-          title: activity.title.trim(),
+          title: cleanTitle,
           objective: activity.objective || '',
           preparation: activity.preparation || '',
           procedure: activity.procedure || '',
-          evaluation_criteria: activity.evaluationCriteria || '',
+          evaluation_criteria: activity.evaluationCriteria || activity.evaluation_criteria || activity.evaluation || '',
+          ...(staffAccountId ? { updated_by: staffAccountId } : {}),
           updated_at: new Date(),
+        },
+        include: {
+          creator: {
+            select: { username: true, teacher: { select: { full_name: true } } },
+          },
+          updater: {
+            select: { username: true, teacher: { select: { full_name: true } } },
+          },
         },
       });
 
       return {
         ...activity,
         id: updated.public_id || updated.activity_id.toString(),
+        creatorName: updated.creator?.teacher?.full_name || updated.creator?.username || activity.creatorName || null,
+        updaterName: updated.updater?.teacher?.full_name || updated.updater?.username || activity.updaterName || null,
+        updatedAt: updated.updated_at.toISOString(),
       };
     }
 
@@ -353,17 +484,26 @@ class PlanningService {
       data: {
         content_id: targetContentId,
         routine_slot: activity.routineSlot || 'DIRECTED_STUDY',
-        title: activity.title.trim(),
+        title: cleanTitle,
         objective: activity.objective || '',
         preparation: activity.preparation || '',
         procedure: activity.procedure || '',
-        evaluation_criteria: activity.evaluationCriteria || '',
+        evaluation_criteria: activity.evaluationCriteria || activity.evaluation_criteria || activity.evaluation || '',
+        ...(staffAccountId ? { created_by: staffAccountId } : {}),
+      },
+      include: {
+        creator: {
+          select: { username: true, teacher: { select: { full_name: true } } },
+        },
       },
     });
 
     return {
       ...activity,
       id: created.public_id || created.activity_id.toString(),
+      creatorName: created.creator?.teacher?.full_name || created.creator?.username || activity.creatorName || null,
+      updaterName: null,
+      createdAt: created.created_at.toISOString(),
     };
   }
 
@@ -375,26 +515,37 @@ class PlanningService {
       throw new BadRequest('Mã hoạt động không hợp lệ.');
     }
 
-    const isNum = typeof activityId === 'number' || (typeof activityId === 'string' && /^\d+$/.test(String(activityId).trim()));
-    const existing = await prisma.educationalActivity.findFirst({
-      where: {
-        OR: [
-          ...(isNum ? [{ activity_id: BigInt(activityId) }] : []),
-          { public_id: String(activityId) },
-        ],
-      },
+    const strId = String(activityId).trim();
+    const isNum = typeof activityId === 'number' || /^\d+$/.test(strId);
+    const isUuidFormat = isUuid(strId);
+    const orConditions = [];
+    if (isNum) orConditions.push({ activity_id: BigInt(strId) });
+    if (isUuidFormat) orConditions.push({ public_id: strId });
+
+    const existing = orConditions.length > 0
+      ? await prisma.educationalActivity.findFirst({
+          where: { OR: orConditions },
+        })
+      : null;
+
+    if (!existing) {
+      throw new NotFound('Không tìm thấy hoạt động giáo dục.');
+    }
+
+    // Check if this activity is used in any weekly timetable/plan (sub_theme_activities)
+    const scheduledCount = await prisma.subThemeActivity.count({
+      where: { activity_id: existing.activity_id },
     });
 
-    if (existing) {
-      // Delete any scheduled slots first
-      await prisma.subThemeActivity.deleteMany({
-        where: { activity_id: existing.activity_id },
-      });
-
-      await prisma.educationalActivity.delete({
-        where: { activity_id: existing.activity_id },
-      });
+    if (scheduledCount > 0) {
+      throw new BadRequest(
+        'Không thể xóa hoạt động giáo dục đã được sử dụng trong kế hoạch tuần của lớp.'
+      );
     }
+
+    await prisma.educationalActivity.delete({
+      where: { activity_id: existing.activity_id },
+    });
 
     return { success: true, activityId };
   }
@@ -526,15 +677,18 @@ class PlanningService {
         lte: new Date(`${effectiveEndDate}T23:59:59.999Z`),
       };
     } else if (subThemeId) {
-      const isNum = typeof subThemeId === 'number' || (typeof subThemeId === 'string' && /^\d+$/.test(String(subThemeId).trim()));
-      const st = await prisma.subTheme.findFirst({
-        where: {
-          OR: [
-            ...(isNum ? [{ sub_theme_id: BigInt(subThemeId) }] : []),
-            { public_id: String(subThemeId) },
-          ],
-        },
-      });
+      const strSub = String(subThemeId).trim();
+      const isNum = typeof subThemeId === 'number' || /^\d+$/.test(strSub);
+      const isUuidFormat = isUuid(strSub);
+      const orConditions = [];
+      if (isNum) orConditions.push({ sub_theme_id: BigInt(strSub) });
+      if (isUuidFormat) orConditions.push({ public_id: strSub });
+
+      const st = orConditions.length > 0
+        ? await prisma.subTheme.findFirst({
+            where: { OR: orConditions },
+          })
+        : null;
       if (st) slotWhere.sub_theme_id = st.sub_theme_id;
     } else if (selectedTheme?.subThemes?.length) {
       slotWhere.sub_theme_id = {
@@ -552,6 +706,30 @@ class PlanningService {
             content: {
               include: { goal: true },
             },
+            creator: {
+              select: {
+                username: true,
+                teacher: { select: { full_name: true } },
+              },
+            },
+            updater: {
+              select: {
+                username: true,
+                teacher: { select: { full_name: true } },
+              },
+            },
+          },
+        },
+        creator: {
+          select: {
+            username: true,
+            teacher: { select: { full_name: true } },
+          },
+        },
+        updater: {
+          select: {
+            username: true,
+            teacher: { select: { full_name: true } },
           },
         },
         sub_theme: true,
@@ -572,6 +750,11 @@ class PlanningService {
       const content = act?.content;
       const goal = content?.goal;
       const actId = act?.public_id || rec.activity_id.toString();
+
+      const slotCreatorName = rec.creator?.teacher?.full_name || rec.creator?.username || null;
+      const slotUpdaterName = rec.updater?.teacher?.full_name || rec.updater?.username || null;
+      const actCreatorName = act?.creator?.teacher?.full_name || act?.creator?.username || null;
+      const actUpdaterName = act?.updater?.teacher?.full_name || act?.updater?.username || null;
 
       const slotObj = {
         id: rec.id.toString(),
@@ -599,6 +782,12 @@ class PlanningService {
         procedure: act?.procedure || '',
         evaluation: act?.evaluation_criteria || '',
         evaluationCriteria: act?.evaluation_criteria || '',
+        slotCreatorName,
+        slotUpdaterName,
+        activityCreatorName: actCreatorName,
+        activityUpdaterName: actUpdaterName,
+        creatorName: slotCreatorName,
+        updaterName: slotUpdaterName,
         criteria: act ? {
           domain: goal?.domain || '',
           domainLabel: DOMAIN_LABELS[goal?.domain] || goal?.domain || '',
@@ -652,6 +841,20 @@ class PlanningService {
             include: {
               activities: {
                 where: { deleted_at: null },
+                include: {
+                  creator: {
+                    select: {
+                      username: true,
+                      teacher: { select: { full_name: true } },
+                    },
+                  },
+                  updater: {
+                    select: {
+                      username: true,
+                      teacher: { select: { full_name: true } },
+                    },
+                  },
+                },
               },
             },
           },
@@ -660,9 +863,30 @@ class PlanningService {
       });
 
       if (dbGoals && dbGoals.length > 0) {
+        // Filter activities by assigned teachers of this class (T6 Comment 2)
+        const classTeachers = await prisma.teacherClass.findMany({
+          where: { class_id: targetClass.class_id, left_at: null },
+          select: { teacher: { select: { account_id: true } } },
+        });
+        const allowedAccountIds = new Set(
+          classTeachers.map((tc) => tc.teacher.account_id?.toString()).filter(Boolean)
+        );
+
+        const classScheduledActs = await prisma.subThemeActivity.findMany({
+          where: { class_id: targetClass.class_id },
+          select: { activity_id: true },
+        });
+        const scheduledActIds = new Set(classScheduledActs.map((s) => s.activity_id.toString()));
+
         goalsWithActivities = dbGoals.map((g) => {
           const contentsWithActs = g.contents.map((cnt) => {
-            const activities = cnt.activities.map((act) => {
+            const classActivities = cnt.activities.filter((act) => {
+              if (scheduledActIds.has(act.activity_id.toString())) return true;
+              if (act.created_by && allowedAccountIds.has(act.created_by.toString())) return true;
+              return false;
+            });
+            const activitiesToMap = classActivities;
+            const activities = activitiesToMap.map((act) => {
               const actId = act.public_id || act.activity_id.toString();
               const slots = scheduledMap.get(act.public_id) || scheduledMap.get(act.activity_id.toString()) || [];
               const actPayload = {
@@ -680,6 +904,8 @@ class PlanningService {
                 preparation: act.preparation || '',
                 procedure: act.procedure || '',
                 evaluationCriteria: act.evaluation_criteria || '',
+                creatorName: act.creator?.teacher?.full_name || act.creator?.username || null,
+                updaterName: act.updater?.teacher?.full_name || act.updater?.username || null,
                 scheduledSlots: slots,
                 slotsCount: slots.length,
                 isScheduled: slots.length > 0,
@@ -710,6 +936,36 @@ class PlanningService {
       logger.error('Error fetching goals for weekly timetable:', err);
     }
 
+    // 4. Query school year calendar holidays & events
+    let holidays = [];
+    try {
+      const dbHolidays = await prisma.schoolHoliday.findMany({
+        where: {
+          school_year_id: schoolYearId,
+          deleted_at: null,
+        },
+        orderBy: { start_date: 'asc' },
+      });
+
+      holidays = dbHolidays.map((h) => {
+        const isExplicitEvent = (h.description || '').includes('[SỰ KIỆN]') || (h.description || '').includes('[EVENT]');
+        const itemType = isExplicitEvent ? 'EVENT' : (h.is_teaching_allowed ? 'EVENT' : 'HOLIDAY');
+        return {
+          id: h.public_id,
+          name: h.name,
+          startDate: h.start_date.toISOString().slice(0, 10),
+          endDate: h.end_date.toISOString().slice(0, 10),
+          isTeachingAllowed: h.is_teaching_allowed,
+          type: itemType,
+          targetGrades: h.target_grades || [],
+          description: h.description,
+          affectsClass: !h.target_grades?.length || h.target_grades.includes(ageGroup),
+        };
+      });
+    } catch (err) {
+      logger.error('Error fetching holidays for weekly timetable:', err);
+    }
+
     return {
       theme: selectedTheme || null,
       selectedTheme: selectedTheme || null,
@@ -718,27 +974,46 @@ class PlanningService {
       slots: mappedSlots,
       availableActivities,
       goals: goalsWithActivities,
+      holidays,
+      classInfo: {
+        classId: targetClass.class_id.toString(),
+        publicId: targetClass.public_id,
+        name: targetClass.name,
+        ageGroup,
+        schoolYearId: schoolYearId.toString(),
+      },
     };
   }
 
   /**
    * Tab 2: Assign an activity into a specific day and routine slot in PostgreSQL (sub_theme_activities)
    */
-  async assignActivityToSlot({ classId, activityId, day, routineSlot, date, slotId, isAdd = false, weekId, subThemeId, orderIndex }) {
+  async assignActivityToSlot({ classId, activityId, day, routineSlot, date, slotId, isAdd = false, weekId, subThemeId, orderIndex, accountId }) {
     const targetClass = await this.resolveClass(classId);
     if (!activityId) {
       throw new BadRequest('Hoạt động giáo dục không hợp lệ.');
     }
 
-    const isNum = typeof activityId === 'number' || (typeof activityId === 'string' && /^\d+$/.test(String(activityId).trim()));
+    const staffAccountId = await this.resolveStaffAccountId(accountId);
+
+    const strAct = String(activityId).trim();
+    const isNum = typeof activityId === 'number' || /^\d+$/.test(strAct);
+    const isUuidFormat = isUuid(strAct);
+    const orConditions = [];
+    if (isNum) orConditions.push({ activity_id: BigInt(strAct) });
+    if (isUuidFormat) orConditions.push({ public_id: strAct });
+
+    if (orConditions.length === 0) {
+      throw new BadRequest('Hoạt động giáo dục không hợp lệ.');
+    }
+
     const activity = await prisma.educationalActivity.findFirst({
-      where: {
-        OR: [
-          ...(isNum ? [{ activity_id: BigInt(activityId) }] : []),
-          { public_id: String(activityId) },
-        ],
+      where: { OR: orConditions },
+      include: {
+        content: { include: { goal: true } },
+        creator: { select: { username: true, teacher: { select: { full_name: true } } } },
+        updater: { select: { username: true, teacher: { select: { full_name: true } } } },
       },
-      include: { content: { include: { goal: true } } },
     });
 
     if (!activity) {
@@ -764,6 +1039,28 @@ class PlanningService {
       }
     }
 
+    // Validate if scheduledDate falls on a day locked by SchoolHoliday (is_teaching_allowed === false)
+    const lockedHoliday = await prisma.schoolHoliday.findFirst({
+      where: {
+        school_year_id: targetClass.school_year_id,
+        deleted_at: null,
+        is_teaching_allowed: false,
+        start_date: { lte: scheduledDate },
+        end_date: { gte: scheduledDate },
+      },
+    });
+
+    if (lockedHoliday) {
+      const affectsGrade = !lockedHoliday.target_grades?.length ||
+        lockedHoliday.target_grades.includes(targetClass.age_group);
+      if (affectsGrade) {
+        const dateDisplay = date || scheduledDate.toISOString().slice(0, 10);
+        throw new BadRequest(
+          `Không thể xếp kế hoạch tuần vào ngày ${dateDisplay} vì đã bị khóa dạy bởi sự kiện/ngày nghỉ "${lockedHoliday.name}".`
+        );
+      }
+    }
+
     // Resolve sub_theme_id: prioritize sub_theme covering scheduledDate
     let targetSubThemeId = null;
     const dateSubTheme = await prisma.subTheme.findFirst({
@@ -778,15 +1075,18 @@ class PlanningService {
     if (dateSubTheme) {
       targetSubThemeId = dateSubTheme.sub_theme_id;
     } else if (subThemeId) {
-      const isStNum = typeof subThemeId === 'number' || (typeof subThemeId === 'string' && /^\d+$/.test(String(subThemeId).trim()));
-      const st = await prisma.subTheme.findFirst({
-        where: {
-          OR: [
-            ...(isStNum ? [{ sub_theme_id: BigInt(subThemeId) }] : []),
-            { public_id: String(subThemeId) },
-          ],
-        },
-      });
+      const strSub = String(subThemeId).trim();
+      const isStNum = typeof subThemeId === 'number' || /^\d+$/.test(strSub);
+      const isUuidFormat = isUuid(strSub);
+      const orConditions = [];
+      if (isStNum) orConditions.push({ sub_theme_id: BigInt(strSub) });
+      if (isUuidFormat) orConditions.push({ public_id: strSub });
+
+      const st = orConditions.length > 0
+        ? await prisma.subTheme.findFirst({
+            where: { OR: orConditions },
+          })
+        : null;
       if (st) targetSubThemeId = st.sub_theme_id;
     } else {
       const fallbackSubTheme = await prisma.subTheme.findFirst({
@@ -814,6 +1114,7 @@ class PlanningService {
         routine_slot: slotRoutineSlot,
         scheduled_date: scheduledDate,
         status: 'SCHEDULED',
+        updated_by: staffAccountId,
         updated_at: new Date(),
       };
       if (orderIndex !== undefined && !isNaN(Number(orderIndex))) {
@@ -822,6 +1123,10 @@ class PlanningService {
       savedRec = await prisma.subThemeActivity.update({
         where: { id: parsedSlotId },
         data: updateData,
+        include: {
+          creator: { select: { username: true, teacher: { select: { full_name: true } } } },
+          updater: { select: { username: true, teacher: { select: { full_name: true } } } },
+        },
       });
     } else if (!isAdd) {
       // Slot replacement or single assignment
@@ -840,6 +1145,7 @@ class PlanningService {
           activity_id: realActivityId,
           day_of_week: dayOfWeek,
           status: 'SCHEDULED',
+          updated_by: staffAccountId,
           updated_at: new Date(),
         };
         if (orderIndex !== undefined && !isNaN(Number(orderIndex))) {
@@ -848,6 +1154,10 @@ class PlanningService {
         savedRec = await prisma.subThemeActivity.update({
           where: { id: existing.id },
           data: updateData,
+          include: {
+            creator: { select: { username: true, teacher: { select: { full_name: true } } } },
+            updater: { select: { username: true, teacher: { select: { full_name: true } } } },
+          },
         });
       }
     }
@@ -876,6 +1186,11 @@ class PlanningService {
           scheduled_date: scheduledDate,
           order_index: newOrder,
           status: 'SCHEDULED',
+          created_by: staffAccountId,
+        },
+        include: {
+          creator: { select: { username: true, teacher: { select: { full_name: true } } } },
+          updater: { select: { username: true, teacher: { select: { full_name: true } } } },
         },
       });
     }
@@ -889,6 +1204,9 @@ class PlanningService {
       where: { sub_theme_id: savedRec.sub_theme_id },
       select: { public_id: true },
     });
+
+    const slotCreatorName = savedRec.creator?.teacher?.full_name || savedRec.creator?.username || null;
+    const slotUpdaterName = savedRec.updater?.teacher?.full_name || savedRec.updater?.username || null;
 
     return {
       id: savedRec.id.toString(),
@@ -916,6 +1234,12 @@ class PlanningService {
       procedure: activity.procedure || '',
       evaluation: activity.evaluation_criteria || '',
       evaluationCriteria: activity.evaluation_criteria || '',
+      slotCreatorName,
+      slotUpdaterName,
+      creatorName: slotCreatorName,
+      updaterName: slotUpdaterName,
+      activityCreatorName: activity.creator?.teacher?.full_name || activity.creator?.username || null,
+      activityUpdaterName: activity.updater?.teacher?.full_name || activity.updater?.username || null,
       criteria: {
         domain: goal?.domain || '',
         domainLabel: DOMAIN_LABELS[goal?.domain] || goal?.domain || '',
@@ -938,16 +1262,19 @@ class PlanningService {
   /**
    * Tab 2: Create or update a timetable slot directly in PostgreSQL
    */
-  async saveWeeklySlot({ classId, slot }) {
+  async saveWeeklySlot({ classId, slot, accountId }) {
     if (!slot.title) {
       throw new BadRequest('Tiêu đề hoạt động không được để trống.');
     }
+
+    const staffAccountId = await this.resolveStaffAccountId(accountId);
 
     if (slot.id && !isNaN(Number(slot.id))) {
       const times = SLOT_TIMES[slot.routineSlot] || { start: slot.startTime || '08:30', end: slot.endTime || '09:15' };
       const updateData = {
         notes: slot.notes || slot.title,
         status: slot.status || 'SCHEDULED',
+        updated_by: staffAccountId,
         updated_at: new Date(),
       };
 
@@ -975,6 +1302,27 @@ class PlanningService {
           scheduledDate = new Date(Date.UTC(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)));
         }
         if (scheduledDate) {
+          const targetClass = await this.resolveClass(classId);
+          const lockedHoliday = await prisma.schoolHoliday.findFirst({
+            where: {
+              school_year_id: targetClass.school_year_id,
+              deleted_at: null,
+              is_teaching_allowed: false,
+              start_date: { lte: scheduledDate },
+              end_date: { gte: scheduledDate },
+            },
+          });
+
+          if (lockedHoliday) {
+            const affectsGrade = !lockedHoliday.target_grades?.length ||
+              lockedHoliday.target_grades.includes(targetClass.age_group);
+            if (affectsGrade) {
+              throw new BadRequest(
+                `Không thể xếp kế hoạch tuần vào ngày ${slot.date} vì đã bị khóa dạy bởi sự kiện/ngày nghỉ "${lockedHoliday.name}".`
+              );
+            }
+          }
+
           updateData.scheduled_date = scheduledDate;
         }
       }
@@ -982,19 +1330,26 @@ class PlanningService {
       const updated = await prisma.subThemeActivity.update({
         where: { id: BigInt(slot.id) },
         data: updateData,
+        include: {
+          creator: { select: { username: true, teacher: { select: { full_name: true } } } },
+          updater: { select: { username: true, teacher: { select: { full_name: true } } } },
+        },
       });
 
       // Also update educational activity content if modified
       if (slot.activityId) {
-        const isActNum = typeof slot.activityId === 'number' || (typeof slot.activityId === 'string' && /^\d+$/.test(String(slot.activityId).trim()));
-        const act = await prisma.educationalActivity.findFirst({
-          where: {
-            OR: [
-              ...(isActNum ? [{ activity_id: BigInt(slot.activityId) }] : []),
-              { public_id: String(slot.activityId) },
-            ],
-          },
-        });
+        const strAct = String(slot.activityId).trim();
+        const isActNum = typeof slot.activityId === 'number' || /^\d+$/.test(strAct);
+        const isUuidFormat = isUuid(strAct);
+        const orConditions = [];
+        if (isActNum) orConditions.push({ activity_id: BigInt(strAct) });
+        if (isUuidFormat) orConditions.push({ public_id: strAct });
+
+        const act = orConditions.length > 0
+          ? await prisma.educationalActivity.findFirst({
+              where: { OR: orConditions },
+            })
+          : null;
         if (act) {
           await prisma.educationalActivity.update({
             where: { activity_id: act.activity_id },
@@ -1004,6 +1359,7 @@ class PlanningService {
               preparation: slot.preparation || '',
               procedure: slot.procedure || '',
               evaluation_criteria: slot.evaluationCriteria || slot.evaluation || '',
+              updated_by: staffAccountId,
               updated_at: new Date(),
             },
           }).catch((err) => logger.warn('Could not update educational activity content:', err));
@@ -1015,7 +1371,24 @@ class PlanningService {
         id: updated.id.toString(),
         orderIndex: updated.order_index,
         order_index: updated.order_index,
+        slotCreatorName: updated.creator?.teacher?.full_name || updated.creator?.username || null,
+        slotUpdaterName: updated.updater?.teacher?.full_name || updated.updater?.username || null,
+        creatorName: updated.creator?.teacher?.full_name || updated.creator?.username || null,
+        updaterName: updated.updater?.teacher?.full_name || updated.updater?.username || null,
       };
+    }
+
+    if (slot.activityId) {
+      return this.assignActivityToSlot({
+        classId,
+        activityId: slot.activityId,
+        day: slot.day,
+        routineSlot: slot.routineSlot || slot.routine_slot,
+        date: slot.date,
+        isAdd: true,
+        orderIndex: slot.orderIndex || slot.order_index,
+        accountId,
+      });
     }
 
     return slot;
@@ -1024,10 +1397,12 @@ class PlanningService {
   /**
    * Tab 2: Batch reorder activities in a slot/cell
    */
-  async reorderWeeklySlots({ classId, slots = [] }) {
+  async reorderWeeklySlots({ classId, slots = [], accountId }) {
     if (!Array.isArray(slots) || slots.length === 0) {
       return { success: true, updatedCount: 0 };
     }
+
+    const staffAccountId = await this.resolveStaffAccountId(accountId);
 
     const updates = [];
     for (const item of slots) {
@@ -1039,6 +1414,7 @@ class PlanningService {
               where: { id: BigInt(item.id) },
               data: {
                 order_index: Number(orderVal),
+                updated_by: staffAccountId,
                 updated_at: new Date(),
               },
             })
@@ -1409,17 +1785,20 @@ class PlanningService {
     if (Array.isArray(goalIds) && goalIds.length > 0) {
       const rawIds = goalIds.map((id) => String(id).trim()).filter(Boolean);
       const numericIds = rawIds.filter((id) => /^\d+$/.test(id)).map((id) => BigInt(id));
-      const uuidIds = rawIds.filter((id) => !/^\d+$/.test(id));
+      const uuidIds = rawIds.filter((id) => isUuid(id));
+      const codeIds = rawIds.filter((id) => !/^\d+$/.test(id) && !isUuid(id));
 
-      const matchedGoals = await prisma.educationalGoal.findMany({
-        where: {
-          OR: [
-            ...(numericIds.length > 0 ? [{ goal_id: { in: numericIds } }] : []),
-            ...(uuidIds.length > 0 ? [{ public_id: { in: uuidIds } }] : []),
-          ],
-        },
-        select: { goal_id: true },
-      });
+      const orConditions = [];
+      if (numericIds.length > 0) orConditions.push({ goal_id: { in: numericIds } });
+      if (uuidIds.length > 0) orConditions.push({ public_id: { in: uuidIds } });
+      if (codeIds.length > 0) orConditions.push({ goal_code: { in: codeIds } });
+
+      const matchedGoals = orConditions.length > 0
+        ? await prisma.educationalGoal.findMany({
+            where: { OR: orConditions },
+            select: { goal_id: true },
+          })
+        : [];
       validGoalIds = matchedGoals.map((g) => g.goal_id);
     }
 

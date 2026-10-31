@@ -16,7 +16,8 @@ class AssessmentController {
     try {
       const { classId } = req.params;
       const { slotId, activityId, date, records } = req.body;
-      const data = await assessmentService.saveAssessmentRecords({ classId, slotId, activityId, date, records });
+      const evaluatedBy = req.user?.sub || req.user?.accountId || req.user?.id;
+      const data = await assessmentService.saveAssessmentRecords({ classId, slotId, activityId, date, records, evaluatedBy });
       res.success(data);
     } catch (err) {
       next(err);
@@ -54,7 +55,7 @@ class AssessmentController {
     try {
       const { classId } = req.params;
       const { month, year, records } = req.body;
-      const evaluatedBy = req.user?.accountId || req.user?.id || 1;
+      const evaluatedBy = req.user?.sub || req.user?.accountId || req.user?.id;
       const data = await assessmentService.saveMonthlyAssessments({
         classId,
         month,
@@ -83,7 +84,7 @@ class AssessmentController {
     try {
       const { classId } = req.params;
       const { semester, year, records } = req.body;
-      const evaluatedBy = req.user?.accountId || req.user?.id || 1;
+      const evaluatedBy = req.user?.sub || req.user?.accountId || req.user?.id;
       const data = await assessmentService.saveSemesterAssessments({
         classId,
         semester,
