@@ -38,7 +38,7 @@ export const enrollStudent = async (req, res) => {
 export const transferStudent = async (req, res) => {
   const { id } = req.params;
   const creatorAccountId = req.user.accountId;
-  const result = await studentService.transferStudent(id, req.body, creatorAccountId);
+  const result = await studentService.transferStudent(id, req.body, creatorAccountId, req.user);
   res.status(201).success(result);
 };
 

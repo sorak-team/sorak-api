@@ -1,6 +1,32 @@
 import prisma from '../config/prisma.js';
 import { NotFound, BadRequest, Forbidden } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
+import { getClassificationFromZScores } from '../utils/who-calculator.js';
+
+function resolveAcademicWeekDates(weekId) {
+  if (!weekId) return null;
+  const startMonday = new Date(Date.UTC(2026, 8, 7)); // 07 Sep 2026
+  for (let i = 1; i <= 39; i++) {
+    let id = `w-${i}`;
+    if (i === 1) id = 'w-sep-1';
+    else if (i === 2) id = 'w-sep-2';
+    else if (i === 3) id = 'w-sep-3';
+    else if (i === 4) id = 'w-sep-4';
+    else if (i >= 5) id = `w-${i - 4}`;
+
+    if (id === weekId) {
+      const curStart = new Date(startMonday);
+      curStart.setUTCDate(startMonday.getUTCDate() + (i - 1) * 7);
+      const curEnd = new Date(curStart);
+      curEnd.setUTCDate(curStart.getUTCDate() + 6);
+      return {
+        startDate: curStart.toISOString().slice(0, 10),
+        endDate: curEnd.toISOString().slice(0, 10),
+      };
+    }
+  }
+  return null;
+}
 
 class ParentService {
   /**
@@ -46,13 +72,13 @@ class ParentService {
   /**
    * Helper: Calculate BMI category based on WHO standards for children
    */
-  _calculateBmiCategory(bmi) {
-    if (!bmi) return { label: 'Chưa xác định', color: 'gray' };
-    const num = Number(bmi);
-    if (num < 13.5) return { label: 'Suy dinh dưỡng / Nhẹ cân', color: 'amber' };
-    if (num <= 17.5) return { label: 'Bình thường (Đạt chuẩn WHO)', color: 'emerald' };
-    if (num <= 19.5) return { label: 'Nguy cơ thừa cân', color: 'amber' };
-    return { label: 'Thừa cân / Béo phì', color: 'rose' };
+  _calculateBmiCategory(bmi, zscores = {}) {
+    return getClassificationFromZScores({
+      heightZ: zscores.heightZ ?? zscores.height_for_age_zscore,
+      weightZ: zscores.weightZ ?? zscores.weight_for_age_zscore,
+      bmiZ: zscores.bmiZ ?? zscores.bmi_for_age_zscore,
+      bmiVal: bmi,
+    });
   }
 
   /**
@@ -88,7 +114,7 @@ class ParentService {
     const homeroomClass = selectedEnrollment?.class;
     const isHistorical = Boolean(selectedEnrollment?.left_at || selectedEnrollment?.status === 'COMPLETED');
     const primaryTeacher =
-      homeroomClass?.teacher_classes?.find((tc) => tc.is_primary && !tc.left_at)?.teacher ||
+      homeroomClass?.teacher_classes?.find((tc) => !tc.left_at)?.teacher ||
       homeroomClass?.teacher_classes?.[0]?.teacher;
 
     // Calculate Child Age
@@ -183,7 +209,11 @@ class ParentService {
       orderBy: { assessment_date: 'desc' },
     });
 
-    const bmiInfo = this._calculateBmiCategory(latestHealth?.bmi);
+    const bmiInfo = this._calculateBmiCategory(latestHealth?.bmi, {
+      heightZ: latestHealth?.height_for_age_zscore,
+      weightZ: latestHealth?.weight_for_age_zscore,
+      bmiZ: latestHealth?.bmi_for_age_zscore,
+    });
 
     // 6. Routine slots & Today's timetable
     const routineSlots = [
@@ -287,7 +317,51 @@ class ParentService {
       }
     }
 
+    // Find sibling students sharing any parent phone number
+    const parentPhones = (student.parents || [])
+      .map((p) => p.phone?.trim())
+      .filter(Boolean);
+
+    let siblings = [];
+    if (parentPhones.length > 0) {
+      const siblingRecords = await prisma.student.findMany({
+        where: {
+          deleted_at: null,
+          parents: {
+            some: {
+              phone: { in: parentPhones },
+              deleted_at: null,
+            },
+          },
+        },
+        include: {
+          student_enrollments: {
+            where: { left_at: null },
+            include: {
+              class: true,
+            },
+          },
+          account: true,
+        },
+      });
+
+      siblings = siblingRecords.map((s) => {
+        const activeEnr = s.student_enrollments?.[0];
+        return {
+          id: s.public_id,
+          studentCode: s.student_code,
+          fullName: s.full_name,
+          avatarUrl: s.avatar_url,
+          className: activeEnr?.class?.name || null,
+          classId: activeEnr?.class?.public_id || null,
+          isCurrent: s.student_id === student.student_id,
+          username: s.account?.username || null,
+        };
+      });
+    }
+
     return {
+      siblings,
       student: {
         id: student.public_id,
         code: student.student_code,
@@ -331,15 +405,14 @@ class ParentService {
           email: tc.teacher?.email,
           avatarUrl: tc.teacher?.avatar_url,
           employeeCode: tc.teacher?.employee_code,
-          position: tc.is_primary ? 'Giáo viên chủ nhiệm' : 'Giáo viên bảo mẫu',
-          isPrimary: Boolean(tc.is_primary),
+          position: tc.teacher?.position || 'Giáo viên phụ trách',
         })),
       todayAttendance: {
         isRecorded: Boolean(todayAttendance),
         status: todayAttendance?.status || 'NOT_YET',
         statusLabel:
           todayAttendance?.status === 'PRESENT'
-            ? 'Có mặt tại lớp'
+            ? (todayAttendance.check_out_time ? 'Đã đón về' : 'Đã điểm danh')
             : todayAttendance?.status === 'EXCUSED_ABSENCE'
               ? 'Nghỉ có phép'
               : todayAttendance?.status === 'UNEXCUSED_ABSENCE'
@@ -350,7 +423,7 @@ class ParentService {
               hour: '2-digit',
               minute: '2-digit',
             })
-          : null,
+          : (todayAttendance?.status === 'PRESENT' ? '07:30' : null),
         checkOutTime: todayAttendance?.check_out_time
           ? new Date(todayAttendance.check_out_time).toLocaleTimeString('vi-VN', {
               hour: '2-digit',
@@ -401,7 +474,6 @@ class ParentService {
         fullName: p.full_name,
         relationship: p.relationship,
         phone: p.phone,
-        canPickup: p.can_pickup,
         avatarUrl: p.avatar_url,
       })),
       timeline: routineSlots,
@@ -445,7 +517,7 @@ class ParentService {
     const homeroomClass = selectedEnrollment?.class;
     const isHistorical = Boolean(selectedEnrollment?.left_at || selectedEnrollment?.status === 'COMPLETED');
     const primaryTeacher =
-      homeroomClass?.teacher_classes?.find((tc) => tc.is_primary && !tc.left_at)?.teacher ||
+      homeroomClass?.teacher_classes?.find((tc) => !tc.left_at)?.teacher ||
       homeroomClass?.teacher_classes?.[0]?.teacher;
 
     // Full Health Assessment history
@@ -478,7 +550,51 @@ class ParentService {
       },
     });
 
+    // Find sibling students sharing any parent phone number
+    const parentPhones = (student.parents || [])
+      .map((p) => p.phone?.trim())
+      .filter(Boolean);
+
+    let siblings = [];
+    if (parentPhones.length > 0) {
+      const siblingRecords = await prisma.student.findMany({
+        where: {
+          deleted_at: null,
+          parents: {
+            some: {
+              phone: { in: parentPhones },
+              deleted_at: null,
+            },
+          },
+        },
+        include: {
+          student_enrollments: {
+            where: { left_at: null },
+            include: {
+              class: true,
+            },
+          },
+          account: true,
+        },
+      });
+
+      siblings = siblingRecords.map((s) => {
+        const activeEnr = s.student_enrollments?.[0];
+        return {
+          id: s.public_id,
+          studentCode: s.student_code,
+          fullName: s.full_name,
+          avatarUrl: s.avatar_url,
+          className: activeEnr?.class?.name || null,
+          classId: activeEnr?.class?.public_id || null,
+          isCurrent: s.student_id === student.student_id,
+          username: s.account?.username || null,
+        };
+      });
+    }
+
     return {
+      siblings,
       student: {
         id: student.public_id,
         studentCode: student.student_code,
@@ -521,20 +637,22 @@ class ParentService {
             avatarUrl: primaryTeacher.avatar_url,
           }
         : null,
-      guardians: (student.parents || []).map((p, index) => ({
+      guardians: (student.parents || []).map((p) => ({
         id: p.public_id,
         fullName: p.full_name,
         relationship: p.relationship,
         phone: p.phone,
-        canPickup: p.can_pickup,
         avatarUrl: p.avatar_url,
-        isPrimary: index === 0 || p.relationship === 'Mẹ' || p.relationship === 'Bố',
       })),
       enrollments,
       isHistorical,
       selectedClassId: homeroomClass?.public_id || null,
       healthHistory: healthHistory.map((h) => {
-        const bmiInfo = this._calculateBmiCategory(h.bmi);
+        const bmiInfo = this._calculateBmiCategory(h.bmi, {
+          heightZ: h.height_for_age_zscore,
+          weightZ: h.weight_for_age_zscore,
+          bmiZ: h.bmi_for_age_zscore,
+        });
         return {
           id: h.public_id,
           date: new Date(h.assessment_date).toLocaleDateString('vi-VN'),
@@ -546,8 +664,9 @@ class ParentService {
           bmiColor: bmiInfo.color,
           heightZscore: h.height_for_age_zscore ? Number(h.height_for_age_zscore) : null,
           weightZscore: h.weight_for_age_zscore ? Number(h.weight_for_age_zscore) : null,
+          bmiZscore: h.bmi_for_age_zscore ? Number(h.bmi_for_age_zscore) : null,
           notes: h.notes || 'Bình thường',
-          recordedBy: h.recorder?.teacher?.full_name || 'Y tế trường',
+          recordedBy: h.recorder?.teacher?.full_name || 'Giáo viên phụ trách',
         };
       }),
       pickupAuthorizations: pickupAuthorizations.map((r) => ({
@@ -613,7 +732,51 @@ class ParentService {
       },
     });
 
+    // Find sibling students sharing any parent phone number
+    const parentPhones = (student.parents || [])
+      .map((p) => p.phone?.trim())
+      .filter(Boolean);
+
+    let siblings = [];
+    if (parentPhones.length > 0) {
+      const siblingRecords = await prisma.student.findMany({
+        where: {
+          deleted_at: null,
+          parents: {
+            some: {
+              phone: { in: parentPhones },
+              deleted_at: null,
+            },
+          },
+        },
+        include: {
+          student_enrollments: {
+            where: { left_at: null },
+            include: {
+              class: true,
+            },
+          },
+          account: true,
+        },
+      });
+
+      siblings = siblingRecords.map((s) => {
+        const activeEnr = s.student_enrollments?.[0];
+        return {
+          id: s.public_id,
+          studentCode: s.student_code,
+          fullName: s.full_name,
+          avatarUrl: s.avatar_url,
+          className: activeEnr?.class?.name || null,
+          classId: activeEnr?.class?.public_id || null,
+          isCurrent: s.student_id === student.student_id,
+          username: s.account?.username || null,
+        };
+      });
+    }
+
     return {
+      siblings,
       student: {
         id: student.public_id,
         fullName: student.full_name,
@@ -713,29 +876,30 @@ class ParentService {
       },
     });
 
-    // Create system notification for primary teacher
+    // Create system notification for class teachers
     try {
       const activeEnrollment =
         student.student_enrollments?.find((e) => !e.left_at) || student.student_enrollments?.[0];
       const homeroomClass = activeEnrollment?.class;
-      const primaryTeacherClass = homeroomClass?.teacher_classes?.find(
-        (tc) => tc.is_primary && !tc.left_at,
-      );
+      const activeTeacherClasses =
+        homeroomClass?.teacher_classes?.filter((tc) => !tc.left_at) || [];
 
-      if (primaryTeacherClass?.teacher?.account_id) {
-        await prisma.notification.create({
-          data: {
-            account_id: primaryTeacherClass.teacher.account_id,
-            created_by: account.account_id,
-            type: 'SCHOOL_ANNOUNCEMENT',
-            title: `Yêu cầu đón trẻ mới: ${student.full_name}`,
-            body: `Phụ huynh của bé ${student.full_name} vừa tạo đơn ủy thác đón cho ${pickup_person_name.trim()} (${relationship.trim()}).`,
+      for (const tc of activeTeacherClasses) {
+        if (tc.teacher?.account_id) {
+          await prisma.notification.create({
             data: {
-              authorizationId: newAuth.public_id,
-              studentCode: student.student_code,
+              account_id: tc.teacher.account_id,
+              created_by: account.account_id,
+              type: 'SCHOOL_ANNOUNCEMENT',
+              title: `Yêu cầu đón trẻ mới: ${student.full_name}`,
+              body: `Phụ huynh của bé ${student.full_name} vừa tạo đơn ủy thác đón cho ${pickup_person_name.trim()} (${relationship.trim()}).`,
+              data: {
+                authorizationId: newAuth.public_id,
+                studentCode: student.student_code,
+              },
             },
-          },
-        });
+          });
+        }
       }
     } catch (e) {
       logger.warn({ error: e.message }, 'Failed to emit teacher notification for pickup auth');
@@ -743,7 +907,7 @@ class ParentService {
 
     return {
       id: newAuth.public_id,
-      message: 'Gửi yêu cầu ủy thác đón con thành công. Giáo viên chủ nhiệm sẽ sớm kiểm tra và phê duyệt.',
+      message: 'Gửi yêu cầu ủy thác đón con thành công. Giáo viên phụ trách sẽ sớm kiểm tra và phê duyệt.',
     };
   }
 
@@ -820,13 +984,20 @@ class ParentService {
     });
 
     const today = new Date();
-    let targetMonth = month ? parseInt(month, 10) : today.getMonth() + 1;
-    let targetYear = year ? parseInt(year, 10) : today.getFullYear();
+    let targetMonth = month ? parseInt(month, 10) : null;
+    let targetYear = year ? parseInt(year, 10) : null;
 
-    // If historical class and no explicit month requested, default to latest recorded month of that class
-    if (!month && isHistorical && historyMonths.length > 0) {
-      targetMonth = historyMonths[0].month;
-      targetYear = historyMonths[0].year;
+    // Default to latest recorded month that teacher has actually evaluated for this student
+    if (!targetMonth) {
+      if (historyMonths.length > 0) {
+        targetMonth = historyMonths[0].month;
+        targetYear = historyMonths[0].year;
+      } else {
+        const curM = today.getMonth() + 1;
+        const curY = today.getFullYear();
+        targetMonth = curM === 1 ? 12 : curM - 1;
+        targetYear = curM === 1 ? curY - 1 : curY;
+      }
     }
 
     const assessment = await prisma.monthlyAssessment.findFirst({
@@ -848,40 +1019,46 @@ class ParentService {
     const monthWeeks = targetMonth === 9 ? [1, 2, 3, 4] : [1, 2, 3, 4, 5];
     const weeklyStats = {};
     monthWeeks.forEach((wk) => {
+      const hasAssessment = Boolean(assessment);
       const isRose = Boolean(assessment?.[`week_${wk}_rose`]);
       // If rose is achieved: 5/5 days present (100%), 4/4 goals achieved (100%)
-      // If incomplete or ongoing month: realistic progress
-      const attPresent = isRose ? 5 : (targetMonth === 10 && wk > 2) ? 3 : 4;
+      // If no rose: 4/5 days (80%), 3/4 goals (75%)
+      const attPresent = isRose ? 5 : hasAssessment ? 4 : 0;
       const attRate = Math.round((attPresent / 5) * 100);
-      const goalAchieved = isRose ? 4 : (targetMonth === 10 && wk > 2) ? 2 : 3;
+      const goalAchieved = isRose ? 4 : hasAssessment ? 3 : 0;
       const goalRate = Math.round((goalAchieved / 4) * 100);
-      const healthStatus = 'Bình thường';
+      const healthStatus = hasAssessment
+        ? (targetMonth === 9 ? 'Chưa đánh giá' : 'Bình thường')
+        : 'Chưa có dữ liệu';
 
       weeklyStats[`week${wk}`] = {
         weekNumber: wk,
         weekLabel: `Tuần ${wk}`,
         rose: isRose,
         attendancePresent: attPresent,
-        attendanceTotal: 5,
+        attendanceTotal: hasAssessment ? 5 : 0,
         attendanceRate: attRate,
         meetsAttendance: attRate >= 80,
         goalsAchieved: goalAchieved,
-        goalsTotal: 4,
+        goalsTotal: hasAssessment ? 4 : 0,
         goalsRate: goalRate,
         meetsGoals: goalRate >= 70,
         healthStatus,
-        meetsHealth: true,
-        hasHealthCheckThisWeek: wk === 1 || wk === 3,
+        meetsHealth: hasAssessment && targetMonth !== 9,
+        hasHealthCheckThisWeek: hasAssessment && targetMonth !== 9 && (wk === 1 || wk === 3),
         healthExamDate:
-          wk === 1
+          hasAssessment && targetMonth !== 9 && wk === 1
             ? `05/${String(targetMonth).padStart(2, '0')}/${targetYear}`
-            : wk === 3
+            : hasAssessment && targetMonth !== 9 && wk === 3
               ? `19/${String(targetMonth).padStart(2, '0')}/${targetYear}`
               : null,
-        healthSourceLabel:
-          wk === 1 || wk === 3
-            ? `Đo kiểm tra tuần ${wk}: Thể trạng phát triển tốt theo chuẩn WHO`
-            : `Kế thừa kết quả kiểm tra thể trạng gần nhất (Bình thường)`,
+        healthSourceLabel: hasAssessment
+          ? (targetMonth === 9
+            ? 'Tháng 9 chưa có đợt khám sức khỏe định kỳ'
+            : (wk === 1 || wk === 3
+              ? `Đo kiểm tra tuần ${wk}: Thể trạng phát triển tốt theo chuẩn WHO`
+              : `Kế thừa kết quả kiểm tra thể trạng gần nhất (Bình thường)`))
+          : 'Chưa có dữ liệu đánh giá cho tuần này',
       };
     });
 
@@ -931,7 +1108,51 @@ class ParentService {
     const lotusTarget = monthWeeks.length >= 5 ? 4 : monthWeeks.length;
     const isLotus = (assessment?.roses_count || 0) >= lotusTarget;
 
+    // Find sibling students sharing any parent phone number
+    const parentPhones = (student.parents || [])
+      .map((p) => p.phone?.trim())
+      .filter(Boolean);
+
+    let siblings = [];
+    if (parentPhones.length > 0) {
+      const siblingRecords = await prisma.student.findMany({
+        where: {
+          deleted_at: null,
+          parents: {
+            some: {
+              phone: { in: parentPhones },
+              deleted_at: null,
+            },
+          },
+        },
+        include: {
+          student_enrollments: {
+            where: { left_at: null },
+            include: {
+              class: true,
+            },
+          },
+          account: true,
+        },
+      });
+
+      siblings = siblingRecords.map((s) => {
+        const activeEnr = s.student_enrollments?.[0];
+        return {
+          id: s.public_id,
+          studentCode: s.student_code,
+          fullName: s.full_name,
+          avatarUrl: s.avatar_url,
+          className: activeEnr?.class?.name || null,
+          classId: activeEnr?.class?.public_id || null,
+          isCurrent: s.student_id === student.student_id,
+          username: s.account?.username || null,
+        };
+      });
+    }
+
     return {
+      siblings,
       student: {
         id: student.public_id,
         fullName: student.full_name,
@@ -990,12 +1211,29 @@ class ParentService {
             parentFeedback: '',
             feedbackAt: null,
           },
-      historyMonths: historyMonths.map((h) => ({
-        month: h.month,
-        year: h.year,
-        label: `Tháng ${h.month}/${h.year}`,
-        rosesCount: h.roses_count,
-      })),
+      historyMonths: (() => {
+        const curM = today.getMonth() + 1;
+        const curY = today.getFullYear();
+        const list = historyMonths.map((h) => ({
+          month: h.month,
+          year: h.year,
+          label: `Tháng ${h.month}/${h.year}`,
+          rosesCount: h.roses_count,
+          isEvaluated: true,
+        }));
+        // Ensure current ongoing month is available in dropdown navigation if not already present
+        const hasCurrent = list.some((item) => item.month === curM && item.year === curY);
+        if (!hasCurrent && !isHistorical) {
+          list.unshift({
+            month: curM,
+            year: curY,
+            label: `Tháng ${curM}/${curY} (Hiện tại)`,
+            rosesCount: 0,
+            isEvaluated: false,
+          });
+        }
+        return list;
+      })(),
       semesterAssessments: semesterAssessments.map((sa) => ({
         id: sa.public_id,
         semester: sa.semester,
@@ -1020,8 +1258,19 @@ class ParentService {
    * 6b. GET /parent/schedule
    * Comprehensive Timetable, Attendance, Health, Slot Assessments & Dismissals
    */
-  async getSchedule(accountSub, { classId, date } = {}) {
+  async getSchedule(accountSub, { classId, date, weekId, startDate, endDate } = {}) {
     const { student } = await this._getStudentForAccount(accountSub);
+
+    let effectiveStartDate = startDate || null;
+    let effectiveEndDate = endDate || null;
+
+    if ((!effectiveStartDate || !effectiveEndDate) && weekId) {
+      const resolved = resolveAcademicWeekDates(weekId);
+      if (resolved) {
+        effectiveStartDate = resolved.startDate;
+        effectiveEndDate = resolved.endDate;
+      }
+    }
 
     const enrollments = (student.student_enrollments || []).map((e) => ({
       classId: e.class?.public_id,
@@ -1049,7 +1298,7 @@ class ParentService {
     const homeroomClass = selectedEnrollment?.class;
     const isHistorical = Boolean(selectedEnrollment?.left_at || selectedEnrollment?.status === 'COMPLETED');
     const primaryTeacher =
-      homeroomClass?.teacher_classes?.find((tc) => tc.is_primary && !tc.left_at)?.teacher ||
+      homeroomClass?.teacher_classes?.find((tc) => !tc.left_at)?.teacher ||
       homeroomClass?.teacher_classes?.[0]?.teacher;
 
     // 1. Timetable routine slots
@@ -1128,14 +1377,25 @@ class ParentService {
       },
     ];
 
-    // Weekly scheduled activities
+    // Weekly scheduled activities (Đồng bộ 100% với kế hoạch tuần của lớp)
     let weeklyActivities = [];
     let activeTheme = null;
     let activeSubTheme = null;
     if (homeroomClass) {
       try {
+        const slotWhere = {
+          class_id: homeroomClass.class_id,
+        };
+
+        if (effectiveStartDate && effectiveEndDate) {
+          slotWhere.scheduled_date = {
+            gte: new Date(`${effectiveStartDate}T00:00:00.000Z`),
+            lte: new Date(`${effectiveEndDate}T23:59:59.999Z`),
+          };
+        }
+
         const scheduledActivities = await prisma.subThemeActivity.findMany({
-          where: { class_id: homeroomClass.class_id },
+          where: slotWhere,
           include: {
             activity: {
               include: {
@@ -1144,9 +1404,9 @@ class ParentService {
                 },
               },
             },
+            sub_theme: true,
           },
           orderBy: [{ scheduled_date: 'asc' }, { order_index: 'asc' }],
-          take: 60,
         });
 
         weeklyActivities = scheduledActivities.map((sa) => {
@@ -1167,13 +1427,14 @@ class ParentService {
             goalCode: sa.activity?.content?.goal?.goal_code || null,
             goalTitle: sa.activity?.content?.goal?.title || null,
             status: sa.status,
-            date: sDate ? sDate.toLocaleDateString('vi-VN') : null,
+            date: sDate ? `${pad(sDate.getDate())}/${pad(sDate.getMonth() + 1)}` : null,
             isoDate,
             rawDate: sa.scheduled_date,
           };
         });
 
-        const theme = await prisma.curriculumTheme.findFirst({
+        // Resolve theme & subTheme matching the requested date range
+        const themes = await prisma.curriculumTheme.findMany({
           where: {
             school_year_id: homeroomClass.school_year_id,
             age_group: homeroomClass.age_group,
@@ -1188,15 +1449,38 @@ class ParentService {
           orderBy: { start_date: 'asc' },
         });
 
-        if (theme) {
+        if (themes.length > 0) {
+          let foundTheme = null;
+          let foundSubTheme = null;
+
+          if (effectiveStartDate && effectiveEndDate) {
+            for (const th of themes) {
+              for (const st of th.sub_themes || []) {
+                const stStart = st.start_date.toISOString().slice(0, 10);
+                const stEnd = st.end_date.toISOString().slice(0, 10);
+                if (stStart <= effectiveEndDate && stEnd >= effectiveStartDate) {
+                  foundTheme = th;
+                  foundSubTheme = st;
+                  break;
+                }
+              }
+              if (foundTheme) break;
+            }
+          }
+
+          if (!foundTheme) {
+            foundTheme = themes[0];
+            foundSubTheme = themes[0].sub_themes?.[0] || null;
+          }
+
           activeTheme = {
-            id: theme.public_id,
-            name: theme.name,
+            id: foundTheme.public_id,
+            name: foundTheme.name,
           };
-          if (theme.sub_themes?.length > 0) {
+          if (foundSubTheme) {
             activeSubTheme = {
-              id: theme.sub_themes[0].public_id,
-              name: theme.sub_themes[0].name,
+              id: foundSubTheme.public_id,
+              name: foundSubTheme.name,
             };
           }
         }
@@ -1224,32 +1508,29 @@ class ParentService {
 
     const formattedAttendances = attendances.map((a) => {
       const isAbsent = a.status === 'EXCUSED_ABSENCE' || a.status === 'UNEXCUSED_ABSENCE';
-      const isNotYet = !isAbsent && !a.check_in_time && !a.check_out_time;
+      const hasCheckOut = Boolean(a.check_out_time || a.pickup_person_name);
 
       const checkInTimeStr = a.check_in_time
         ? new Date(a.check_in_time).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
-        : null;
+        : (a.status === 'PRESENT' ? '07:30' : null);
       const checkOutTimeStr = a.check_out_time
         ? new Date(a.check_out_time).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
         : null;
 
       let computedStatus = a.status;
-      let statusLabel = 'Có mặt';
-      if (isNotYet) {
-        computedStatus = 'NOT_YET';
-        statusLabel = 'Chưa điểm danh';
-      } else if (a.status === 'EXCUSED_ABSENCE') {
+      let statusLabel = 'Đã điểm danh';
+      if (a.status === 'EXCUSED_ABSENCE') {
         computedStatus = 'EXCUSED_ABSENCE';
         statusLabel = 'Nghỉ có phép';
       } else if (a.status === 'UNEXCUSED_ABSENCE') {
         computedStatus = 'UNEXCUSED_ABSENCE';
         statusLabel = 'Nghỉ không phép';
-      } else if (checkInTimeStr && !checkOutTimeStr) {
-        computedStatus = 'AT_SCHOOL';
-        statusLabel = 'Đang ở lớp';
-      } else if (checkOutTimeStr) {
+      } else if (hasCheckOut) {
         computedStatus = 'PICKED_UP';
         statusLabel = 'Đã đón';
+      } else {
+        computedStatus = 'AT_SCHOOL';
+        statusLabel = 'Đã điểm danh';
       }
 
       return {
@@ -1274,10 +1555,17 @@ class ParentService {
     });
 
     // 3. Slot Assessments (Đánh giá theo từng slot hoạt động)
+    const assessmentWhere = {
+      student_id: student.student_id,
+    };
+    if (effectiveStartDate && effectiveEndDate) {
+      assessmentWhere.assessment_date = {
+        gte: new Date(`${effectiveStartDate}T00:00:00.000Z`),
+        lte: new Date(`${effectiveEndDate}T23:59:59.999Z`),
+      };
+    }
     const dailyAssessments = await prisma.dailyAssessment.findMany({
-      where: {
-        student_id: student.student_id,
-      },
+      where: assessmentWhere,
       include: {
         activity: {
           include: {
@@ -1291,51 +1579,60 @@ class ParentService {
         },
       },
       orderBy: { assessment_date: 'desc' },
-      take: 30,
+      take: 60,
     });
 
-    const slotAssessments = dailyAssessments.map((da) => ({
-      id: da.public_id,
-      date: new Date(da.assessment_date).toLocaleDateString('vi-VN'),
-      rawDate: da.assessment_date,
-      routineSlot: da.activity?.routine_slot || 'DIRECTED_STUDY',
-      slotName:
-        da.activity?.routine_slot === 'ARRIVAL_PLAY'
-          ? 'Đón trẻ & Thể dục sáng'
-          : da.activity?.routine_slot === 'DIRECTED_STUDY'
-            ? 'Hoạt động học có chủ đích'
-            : da.activity?.routine_slot === 'CORNER_PLAY'
-              ? 'Hoạt động chơi góc'
-              : da.activity?.routine_slot === 'OUTDOOR_PLAY'
-                ? 'Chơi ngoài trời'
-                : da.activity?.routine_slot === 'HYGIENE_MEAL_SLEEP'
-                  ? 'Ăn trưa & Giấc ngủ'
-                  : da.activity?.routine_slot === 'AFTERNOON_ACTIVITY'
-                    ? 'Sinh hoạt chiều'
-                    : 'Hoạt động trong ngày',
-      activityTitle: da.activity?.title || 'Hoạt động giáo dục',
-      goalTitle: da.activity?.content?.goal?.title || 'Phát triển kỹ năng theo lứa tuổi',
-      domain: da.activity?.content?.goal?.domain || 'COGNITIVE',
-      status: da.status,
-      statusLabel:
-        da.status === 'EXCELLENT'
-          ? 'Xuất sắc'
-          : da.status === 'ACHIEVED'
-            ? 'Đạt'
-            : da.status === 'NOT_ACHIEVED'
-              ? 'Cần rèn thêm'
-              : 'Chờ đánh giá',
-      statusColor:
-        da.status === 'EXCELLENT'
-          ? 'emerald'
-          : da.status === 'ACHIEVED'
-            ? 'blue'
-            : da.status === 'NOT_ACHIEVED'
-              ? 'rose'
-              : 'amber',
-      notes: da.notes || 'Bé hợp tác tốt và hoàn thành yêu cầu hoạt động.',
-      evaluatorName: da.evaluator?.teacher?.full_name || 'Cô giáo chủ nhiệm',
-    }));
+    const slotAssessments = dailyAssessments.map((da) => {
+      const aDate = da.assessment_date ? new Date(da.assessment_date) : null;
+      const pad = (n) => String(n).padStart(2, '0');
+      const isoDate = aDate ? `${aDate.getFullYear()}-${pad(aDate.getMonth() + 1)}-${pad(aDate.getDate())}` : null;
+      const dateFormatted = aDate ? `${pad(aDate.getDate())}/${pad(aDate.getMonth() + 1)}` : null;
+
+      return {
+        id: da.public_id,
+        date: aDate ? aDate.toLocaleDateString('vi-VN') : null,
+        dateFormatted,
+        isoDate,
+        rawDate: da.assessment_date,
+        routineSlot: da.activity?.routine_slot || 'DIRECTED_STUDY',
+        slotName:
+          da.activity?.routine_slot === 'ARRIVAL_PLAY'
+            ? 'Đón trẻ & Thể dục sáng'
+            : da.activity?.routine_slot === 'DIRECTED_STUDY'
+              ? 'Hoạt động học có chủ đích'
+              : da.activity?.routine_slot === 'CORNER_PLAY'
+                ? 'Hoạt động chơi góc'
+                : da.activity?.routine_slot === 'OUTDOOR_PLAY'
+                  ? 'Chơi ngoài trời'
+                  : da.activity?.routine_slot === 'HYGIENE_MEAL_SLEEP'
+                    ? 'Ăn trưa & Giấc ngủ'
+                    : da.activity?.routine_slot === 'AFTERNOON_ACTIVITY'
+                      ? 'Sinh hoạt chiều'
+                      : 'Hoạt động trong ngày',
+        activityTitle: da.activity?.title || 'Hoạt động giáo dục',
+        goalTitle: da.activity?.content?.goal?.title || 'Phát triển kỹ năng theo lứa tuổi',
+        domain: da.activity?.content?.goal?.domain || 'COGNITIVE',
+        status: da.status,
+        statusLabel:
+          da.status === 'EXCELLENT'
+            ? 'Xuất sắc'
+            : da.status === 'ACHIEVED'
+              ? 'Đạt'
+              : da.status === 'NOT_ACHIEVED'
+                ? 'Cần rèn thêm'
+                : 'Chờ đánh giá',
+        statusColor:
+          da.status === 'EXCELLENT'
+            ? 'emerald'
+            : da.status === 'ACHIEVED'
+              ? 'blue'
+              : da.status === 'NOT_ACHIEVED'
+                ? 'rose'
+                : 'amber',
+        notes: da.notes || 'Bé hợp tác tốt và hoàn thành yêu cầu hoạt động.',
+        evaluatorName: da.evaluator?.teacher?.full_name || 'Cô giáo chủ nhiệm',
+      };
+    });
 
     // 4. Health Assessments history
     const healthAssessments = await prisma.healthAssessment.findMany({
@@ -1352,7 +1649,11 @@ class ParentService {
     });
 
     const healthRecords = healthAssessments.map((h) => {
-      const bmiInfo = this._calculateBmiCategory(h.bmi);
+      const bmiInfo = this._calculateBmiCategory(h.bmi, {
+        heightZ: h.height_for_age_zscore,
+        weightZ: h.weight_for_age_zscore,
+        bmiZ: h.bmi_for_age_zscore,
+      });
       return {
         id: h.public_id,
         date: new Date(h.assessment_date).toLocaleDateString('vi-VN'),
@@ -1362,8 +1663,11 @@ class ParentService {
         bmi: Number(h.bmi),
         bmiCategory: bmiInfo.label,
         bmiColor: bmiInfo.color,
+        heightZscore: h.height_for_age_zscore ? Number(h.height_for_age_zscore) : null,
+        weightZscore: h.weight_for_age_zscore ? Number(h.weight_for_age_zscore) : null,
+        bmiZscore: h.bmi_for_age_zscore ? Number(h.bmi_for_age_zscore) : null,
         notes: h.notes || 'Sức khỏe bình thường, phát triển cân đối.',
-        recordedBy: h.recorder?.teacher?.full_name || 'Y tế trường mầm non',
+        recordedBy: h.recorder?.teacher?.full_name || 'Giáo viên phụ trách',
       };
     });
 
@@ -1432,7 +1736,51 @@ class ParentService {
       createdAt: new Date(r.created_at).toLocaleDateString('vi-VN'),
     }));
 
+    // Find sibling students sharing any parent phone number
+    const parentPhones = (student.parents || [])
+      .map((p) => p.phone?.trim())
+      .filter(Boolean);
+
+    let siblings = [];
+    if (parentPhones.length > 0) {
+      const siblingRecords = await prisma.student.findMany({
+        where: {
+          deleted_at: null,
+          parents: {
+            some: {
+              phone: { in: parentPhones },
+              deleted_at: null,
+            },
+          },
+        },
+        include: {
+          student_enrollments: {
+            where: { left_at: null },
+            include: {
+              class: true,
+            },
+          },
+          account: true,
+        },
+      });
+
+      siblings = siblingRecords.map((s) => {
+        const activeEnr = s.student_enrollments?.[0];
+        return {
+          id: s.public_id,
+          studentCode: s.student_code,
+          fullName: s.full_name,
+          avatarUrl: s.avatar_url,
+          className: activeEnr?.class?.name || null,
+          classId: activeEnr?.class?.public_id || null,
+          isCurrent: s.student_id === student.student_id,
+          username: s.account?.username || null,
+        };
+      });
+    }
+
     return {
+      siblings,
       student: {
         id: student.public_id,
         fullName: student.full_name,
@@ -1466,8 +1814,7 @@ class ParentService {
           email: tc.teacher?.email,
           avatarUrl: tc.teacher?.avatar_url,
           employeeCode: tc.teacher?.employee_code,
-          position: tc.is_primary ? 'Giáo viên chủ nhiệm' : 'Giáo viên bảo mẫu',
-          isPrimary: Boolean(tc.is_primary),
+          position: tc.teacher?.position || 'Giáo viên phụ trách',
         })),
       enrollments,
       isHistorical,

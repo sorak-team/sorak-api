@@ -34,6 +34,17 @@ function parseAssessmentDate(dateInput) {
   return new Date('2026-10-14T00:00:00.000Z');
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (val) => typeof val === 'string' && UUID_REGEX.test(val.trim());
+
+const DOMAIN_LABELS = {
+  PHYSICAL: 'Phát triển thể chất',
+  COGNITIVE: 'Phát triển nhận thức',
+  LANGUAGE: 'Phát triển ngôn ngữ',
+  SOCIO_EMOTIONAL: 'Phát triển tình cảm - kỹ năng xã hội',
+  AESTHETIC: 'Phát triển thẩm mỹ',
+};
+
 class AssessmentService {
   /**
    * Helper to resolve target class
@@ -41,12 +52,19 @@ class AssessmentService {
   async resolveClass(classId) {
     if (classId) {
       const str = String(classId).trim();
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-      if (!isUuid) {
+      const isClassUuid = isUuid(str);
+      const isNum = /^\d+$/.test(str);
+      if (!isClassUuid && !isNum) {
         throw new NotFound('Lớp học không tồn tại hoặc mã định danh không hợp lệ');
       }
       const targetClass = await prisma.class.findFirst({
-        where: { public_id: str, deleted_at: null },
+        where: {
+          OR: [
+            ...(isClassUuid ? [{ public_id: str }] : []),
+            ...(isNum ? [{ class_id: BigInt(str) }] : []),
+          ],
+          deleted_at: null,
+        },
         include: { school_year: true },
       });
       if (!targetClass) {
@@ -114,9 +132,9 @@ class AssessmentService {
             domain: studyActivity.content?.goal?.domain || 'Phát triển nhận thức',
             goal: `${studyActivity.content?.goal?.goal_code || 'MT 1'} - ${studyActivity.content?.goal?.title || ''}`,
             content: studyActivity.content?.title || studyActivity.title,
-            objective: studyActivity.objective || 'Trẻ đạt yêu cầu hoạt động học.',
-            preparation: studyActivity.preparation || 'Đồ dùng trực quan.',
-            procedure: studyActivity.procedure || 'Các bước tổ chức bài học.',
+            objective: studyActivity.objective || '',
+            preparation: studyActivity.preparation || '',
+            procedure: studyActivity.procedure || '',
             expectedAssessment: studyActivity.evaluation_criteria || '',
           },
         }
@@ -201,20 +219,52 @@ class AssessmentService {
       const times = slotTimes[rec.routine_slot] || { start: '08:30', end: '09:15' };
       const dateStr = rec.scheduled_date ? rec.scheduled_date.toISOString().slice(0, 10) : '';
       const dateFormatted = dateStr ? `${dateStr.slice(8, 10)}/${dateStr.slice(5, 7)}` : '';
+      const act = rec.activity;
+      const content = act?.content;
+      const goal = content?.goal;
 
       return {
         id: rec.id.toString(),
-        activityId: rec.activity?.public_id || rec.activity_id.toString(),
+        activityId: act?.public_id || rec.activity_id.toString(),
         day: dayKey,
         dayKey,
         routineSlot: rec.routine_slot,
         startTime: times.start,
         endTime: times.end,
-        title: rec.activity?.title || '',
-        shortTitle: rec.activity?.title || '',
+        title: act?.title || '',
+        shortTitle: act?.title || '',
         date: dateFormatted,
+        fullDate: dateStr,
         status: rec.status,
         statusLabel: rec.status === 'COMPLETED' ? 'Đã hoàn thành' : 'Đã xếp lịch',
+        domain: goal?.domain || '',
+        domainLabel: goal?.domain ? (DOMAIN_LABELS[goal.domain] || goal.domain) : '',
+        goalCode: goal?.goal_code || '',
+        goalTitle: goal?.title || '',
+        indicatorCode: goal?.indicator_code || '',
+        contentTitle: content?.title || '',
+        objective: act?.objective || '',
+        planObjective: act?.objective || '',
+        preparation: act?.preparation || '',
+        procedure: act?.procedure || '',
+        evaluationCriteria: act?.evaluation_criteria || '',
+        evaluation_criteria: act?.evaluation_criteria || '',
+        criteria: act ? {
+          domain: goal?.domain || '',
+          domainLabel: goal?.domain ? (DOMAIN_LABELS[goal.domain] || goal.domain) : '',
+          goal: goal?.goal_code ? `${goal.goal_code} - ${goal.title || ''}` : '',
+          goalCode: goal?.goal_code || '',
+          goalTitle: goal?.title || '',
+          indicator: goal?.indicator_code || '',
+          indicatorCode: goal?.indicator_code || '',
+          content: content?.title || '',
+          objective: act.objective || '',
+          planObjective: act.objective || '',
+          preparation: act.preparation || '',
+          procedure: act.procedure || '',
+          expectedAssessment: act.evaluation_criteria || '',
+          evaluationCriteria: act.evaluation_criteria || '',
+        } : null,
       };
     });
 
@@ -242,22 +292,29 @@ class AssessmentService {
   /**
    * Save assessment results for students into PostgreSQL
    */
-  async saveAssessmentRecords({ classId, slotId, activityId, date, records }) {
+  async saveAssessmentRecords({ classId, slotId, activityId, date, records, evaluatedBy = 40n }) {
     const today = parseAssessmentDate(date);
     let savedCount = 0;
 
     let targetActivityId = null;
     if (activityId) {
-      const isNum = typeof activityId === 'number' || (typeof activityId === 'string' && /^\d+$/.test(String(activityId).trim()));
-      const act = await prisma.educationalActivity.findFirst({
-        where: {
-          OR: [
-            ...(isNum ? [{ activity_id: BigInt(activityId) }] : []),
-            { public_id: String(activityId) },
-          ],
-        },
-      });
-      if (act) targetActivityId = act.activity_id;
+      const strId = String(activityId).trim();
+      const isNum = typeof activityId === 'number' || /^\d+$/.test(strId);
+      const isUuidFormat = isUuid(strId);
+
+      const orConditions = [];
+      if (isNum) orConditions.push({ activity_id: BigInt(strId) });
+      if (isUuidFormat) orConditions.push({ public_id: strId });
+
+      if (orConditions.length > 0) {
+        const act = await prisma.educationalActivity.findFirst({
+          where: {
+            OR: orConditions,
+            deleted_at: null,
+          },
+        });
+        if (act) targetActivityId = act.activity_id;
+      }
     } else if (slotId && !isNaN(Number(slotId))) {
       try {
         const subSlot = await prisma.subThemeActivity.findUnique({
@@ -271,7 +328,7 @@ class AssessmentService {
 
     if (!targetActivityId) {
       const firstActivity = await prisma.educationalActivity.findFirst({
-        where: { routine_slot: 'DIRECTED_STUDY' },
+        where: { routine_slot: 'DIRECTED_STUDY', deleted_at: null },
       });
       targetActivityId = firstActivity ? firstActivity.activity_id : 629n;
     }
@@ -279,23 +336,65 @@ class AssessmentService {
     if (Array.isArray(records) && records.length > 0) {
       const rawIds = records.map((r) => String(r.studentId || r.id).trim()).filter(Boolean);
       const numericIds = rawIds.filter((id) => /^\d+$/.test(id)).map((id) => BigInt(id));
-      const uuidIds = rawIds.filter((id) => !/^\d+$/.test(id));
+      const uuidIds = rawIds.filter((id) => isUuid(id));
+      const otherCodeIds = rawIds.filter((id) => !/^\d+$/.test(id) && !isUuid(id));
 
-      const matchedStudents = await prisma.student.findMany({
-        where: {
-          OR: [
-            ...(numericIds.length > 0 ? [{ student_id: { in: numericIds } }] : []),
-            ...(uuidIds.length > 0 ? [{ public_id: { in: uuidIds } }] : []),
-          ],
-        },
-        select: { student_id: true, public_id: true },
-      });
+      const orConditions = [];
+      if (numericIds.length > 0) orConditions.push({ student_id: { in: numericIds } });
+      if (uuidIds.length > 0) orConditions.push({ public_id: { in: uuidIds } });
+      if (otherCodeIds.length > 0) orConditions.push({ student_code: { in: otherCodeIds } });
+
+      const matchedStudents = orConditions.length > 0
+        ? await prisma.student.findMany({
+            where: {
+              OR: orConditions,
+              deleted_at: null,
+            },
+            select: { student_id: true, public_id: true, student_code: true },
+          })
+        : [];
 
       const studentIdMap = new Map();
       matchedStudents.forEach((st) => {
         studentIdMap.set(st.student_id.toString(), st.student_id);
         if (st.public_id) studentIdMap.set(st.public_id, st.student_id);
+        if (st.student_code) studentIdMap.set(st.student_code, st.student_id);
       });
+
+      let evalAccountId = 40n;
+      if (evaluatedBy) {
+        const strEval = String(evaluatedBy).trim();
+        if (/^\d+$/.test(strEval)) {
+          evalAccountId = BigInt(strEval);
+        } else if (isUuid(strEval)) {
+          const acc = await prisma.account.findUnique({
+            where: { public_id: strEval },
+            select: { account_id: true },
+          });
+          if (acc) evalAccountId = acc.account_id;
+        }
+      }
+      if (evalAccountId === 40n && classId) {
+        const parsedClass = /^\d+$/.test(String(classId))
+          ? { class_id: BigInt(classId) }
+          : isUuid(String(classId))
+          ? { public_id: String(classId) }
+          : null;
+        if (parsedClass) {
+          const teacherAlloc = await prisma.teacherClass.findFirst({
+            where: {
+              class: parsedClass,
+              left_at: null,
+            },
+            include: {
+              teacher: { select: { account_id: true } },
+            },
+          });
+          if (teacherAlloc?.teacher?.account_id) {
+            evalAccountId = teacherAlloc.teacher.account_id;
+          }
+        }
+      }
 
       for (const rec of records) {
         const rawId = String(rec.studentId || rec.id).trim();
@@ -326,7 +425,7 @@ class AssessmentService {
             assessment_date: today,
             status,
             notes: note,
-            evaluated_by: 40n,
+            evaluated_by: evalAccountId,
           },
         });
         savedCount++;
@@ -357,16 +456,23 @@ class AssessmentService {
 
     let targetActivityId = null;
     if (activityId) {
-      const isNum = typeof activityId === 'number' || (typeof activityId === 'string' && /^\d+$/.test(String(activityId).trim()));
-      const act = await prisma.educationalActivity.findFirst({
-        where: {
-          OR: [
-            ...(isNum ? [{ activity_id: BigInt(activityId) }] : []),
-            { public_id: String(activityId) },
-          ],
-        },
-      });
-      if (act) targetActivityId = act.activity_id;
+      const strId = String(activityId).trim();
+      const isNum = typeof activityId === 'number' || /^\d+$/.test(strId);
+      const isUuidFormat = isUuid(strId);
+
+      const orConditions = [];
+      if (isNum) orConditions.push({ activity_id: BigInt(strId) });
+      if (isUuidFormat) orConditions.push({ public_id: strId });
+
+      if (orConditions.length > 0) {
+        const act = await prisma.educationalActivity.findFirst({
+          where: {
+            OR: orConditions,
+            deleted_at: null,
+          },
+        });
+        if (act) targetActivityId = act.activity_id;
+      }
     } else if (slotId && !isNaN(Number(slotId))) {
       try {
         const subSlot = await prisma.subThemeActivity.findUnique({
@@ -405,14 +511,26 @@ class AssessmentService {
   /**
    * Get Monthly Assessments (Sổ Bé Ngoan) querying live PostgreSQL
    */
-  async getMonthlyAssessments({ classId, month = 9, year = 2026 }) {
-    const numMonth = Number(month) || 9;
-    const numYear = Number(year) || 2026;
-
+  async getMonthlyAssessments({ classId, month, year }) {
     const targetClass = await this.resolveClass(classId);
     const students = await this.getEnrolledStudents(targetClass.class_id);
 
+    // Find the latest month that has assessment records for this class
+    const latestRecord = await prisma.monthlyAssessment.findFirst({
+      where: {
+        class_id: targetClass.class_id,
+      },
+      select: { month: true, year: true },
+      orderBy: [{ year: 'desc' }, { month: 'desc' }],
+    });
+
     const now = new Date();
+    const prevMonth = now.getMonth() === 0 ? 12 : now.getMonth();
+    const prevYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+
+    const numMonth = month ? Number(month) : (latestRecord ? latestRecord.month : prevMonth);
+    const numYear = year ? Number(year) : (latestRecord ? latestRecord.year : prevYear);
+
     // End of queried month (e.g. for Month 9: 30/09/2026 23:59:59)
     const monthEnd = new Date(numYear, numMonth, 0, 23, 59, 59, 999);
     const isEnded = monthEnd < now;
@@ -435,8 +553,227 @@ class AssessmentService {
       assessmentMap.set(item.student_id.toString(), item);
     });
 
+    const startOfMonth = new Date(numYear, numMonth - 1, 1, 0, 0, 0, 0);
+    const endOfMonth = new Date(numYear, numMonth, 0, 23, 59, 59, 999);
+
+    const attendances = await prisma.attendance.findMany({
+      where: {
+        student_id: { in: studentDbIds },
+        date: { gte: startOfMonth, lte: endOfMonth },
+        deleted_at: null,
+      },
+      select: { student_id: true, date: true, status: true },
+    });
+
+    const dailyAssessments = await prisma.dailyAssessment.findMany({
+      where: {
+        student_id: { in: studentDbIds },
+        assessment_date: { gte: startOfMonth, lte: endOfMonth },
+      },
+      select: { student_id: true, assessment_date: true, status: true },
+    });
+
+    // Fetch real health assessments from PostgreSQL for all enrolled students
+    const healthAssessments = await prisma.healthAssessment.findMany({
+      where: {
+        student_id: { in: studentDbIds },
+        deleted_at: null,
+      },
+      orderBy: { assessment_date: 'asc' },
+    });
+
+    // Helper to partition dates by week of the month (1..4 or 5)
+    // For School Year 2026-2027:
+    // - Sept 2026: Official school started on Monday 07/09/2026 (4 weeks total)
+    //   Week 1: 07/09 - 13/09 (5 days: 07..11)
+    //   Week 2: 14/09 - 20/09 (5 days: 14..18)
+    //   Week 3: 21/09 - 27/09 (5 days: 21..25)
+    //   Week 4: 28/09 - 30/09 (3 days: 28..30)
+    const getWeekOfMonth = (date) => {
+      const d = new Date(date);
+      const day = d.getDate();
+      const m = d.getMonth() + 1;
+      const y = d.getFullYear();
+
+      if (m === 9 && y === 2026) {
+        if (day < 7) return 0;
+        if (day <= 13) return 1;
+        if (day <= 20) return 2;
+        if (day <= 27) return 3;
+        return 4;
+      }
+
+      // General: Monday-based week index in month
+      const firstDay = new Date(y, m - 1, 1);
+      const firstDayOfWeek = (firstDay.getDay() + 6) % 7; // 0 for Mon, 6 for Sun
+      const offset = day + firstDayOfWeek - 1;
+      const weekNum = Math.floor(offset / 7) + 1;
+      return Math.min(Math.max(1, weekNum), 5);
+    };
+
+    const getMonthWeekRanges = (m, y) => {
+      const isSept26 = m === 9 && y === 2026;
+      if (isSept26) {
+        return {
+          1: { start: new Date(Date.UTC(2026, 8, 7)), end: new Date(Date.UTC(2026, 8, 13, 23, 59, 59, 999)) },
+          2: { start: new Date(Date.UTC(2026, 8, 14)), end: new Date(Date.UTC(2026, 8, 20, 23, 59, 59, 999)) },
+          3: { start: new Date(Date.UTC(2026, 8, 21)), end: new Date(Date.UTC(2026, 8, 27, 23, 59, 59, 999)) },
+          4: { start: new Date(Date.UTC(2026, 8, 28)), end: new Date(Date.UTC(2026, 8, 30, 23, 59, 59, 999)) },
+        };
+      }
+      const lastDayOfMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      const ranges = {};
+      let currentStartDay = 1;
+      let weekIdx = 1;
+      while (currentStartDay <= lastDayOfMonth && weekIdx <= 5) {
+        const curStartDate = new Date(Date.UTC(y, m - 1, currentStartDay));
+        const dayOfWeek = curStartDate.getUTCDay();
+        const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+        const endDay = Math.min(lastDayOfMonth, currentStartDay + daysUntilSunday);
+        ranges[weekIdx] = {
+          start: new Date(Date.UTC(y, m - 1, currentStartDay)),
+          end: new Date(Date.UTC(y, m - 1, endDay, 23, 59, 59, 999)),
+        };
+        currentStartDay = endDay + 1;
+        weekIdx++;
+      }
+      return ranges;
+    };
+
+    const weekRanges = getMonthWeekRanges(numMonth, numYear);
+
+    const resolveHealthAssessmentStatus = (h) => {
+      if (!h) return { status: 'Chưa đánh giá', dateStr: '' };
+      const d = new Date(h.assessment_date);
+      const pad = (n) => String(n).padStart(2, '0');
+      const dStr = `${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)}`;
+      const notes = (h.notes || '').toLowerCase();
+      const bz = h.bmi_for_age_zscore != null ? Number(h.bmi_for_age_zscore) : null;
+      const wz = h.weight_for_age_zscore != null ? Number(h.weight_for_age_zscore) : null;
+      const hz = h.height_for_age_zscore != null ? Number(h.height_for_age_zscore) : null;
+
+      let st = 'Bình thường';
+      if (bz != null && bz > 2) st = 'Thừa cân';
+      else if (bz != null && bz > 1.5 && wz != null && wz > 1.5) st = 'Nguy cơ thừa cân';
+      else if (bz != null && bz < -2) st = 'Theo dõi nhẹ cân';
+      else if (wz != null && wz < -2) st = 'Theo dõi nhẹ cân';
+      else if (hz != null && hz < -2) st = 'Theo dõi thấp còi';
+      else if (notes.includes('nhẹ cân') || notes.includes('suy dinh dưỡng')) st = 'Theo dõi nhẹ cân';
+      else if (notes.includes('thừa cân') || notes.includes('béo phì')) st = 'Thừa cân';
+
+      return { status: st, dateStr: dStr };
+    };
+
+    const hasRealActivityData = attendances.length > 0 || dailyAssessments.length > 0;
+
+    const buildWeeklyStat = (present, totalAtt = 5, achieved = 0, totalGoals = 4, healthInfo = {}) => {
+      const p = Number(present ?? 0);
+      const tA = Number(totalAtt || 5);
+      const a = Number(achieved ?? 0);
+      const tG = Number(totalGoals || 4);
+      return {
+        attendancePresent: p,
+        attendanceTotal: tA,
+        attendanceRate: Math.round((p / tA) * 100),
+        goalsAchieved: Math.min(a, tG),
+        goalsTotal: tG,
+        goalsRate: Math.round((Math.min(a, tG) / tG) * 100),
+        healthStatus: healthInfo.healthStatus || 'Bình thường',
+        healthSourceLabel: healthInfo.healthSourceLabel || '',
+        healthExamDate: healthInfo.healthExamDate || null,
+        hasHealthCheckThisWeek: Boolean(healthInfo.hasHealthCheckThisWeek),
+      };
+    };
+
     const studentList = students.map((s, idx) => {
-      const existing = assessmentMap.get(s._student_id.toString());
+      const sIdStr = s._student_id.toString();
+      const existing = assessmentMap.get(sIdStr);
+
+      // Student actual attendance by week
+      const sAtt = attendances.filter((a) => a.student_id.toString() === sIdStr);
+      const sAss = dailyAssessments.filter((a) => a.student_id.toString() === sIdStr);
+      const sHealth = healthAssessments.filter((h) => h.student_id.toString() === sIdStr);
+
+      const resolveWeekHealth = (w) => {
+        const range = weekRanges[w];
+        if (!range) {
+          return { healthStatus: 'Bình thường', healthSourceLabel: '' };
+        }
+        const inWeek = sHealth.filter((h) => {
+          const dt = new Date(h.assessment_date);
+          return dt >= range.start && dt <= range.end;
+        });
+
+        if (inWeek.length > 0) {
+          const latest = inWeek[inWeek.length - 1];
+          const res = resolveHealthAssessmentStatus(latest);
+          return {
+            healthStatus: res.status,
+            healthExamDate: latest.assessment_date ? new Date(latest.assessment_date).toISOString().slice(0, 10) : null,
+            hasHealthCheckThisWeek: true,
+            healthSourceLabel: `Đo ngày ${res.dateStr} - Tuần ${w}`,
+          };
+        }
+
+        // Lấy lần đo gần nhất trước đó (tính đến cuối tuần này)
+        const previous = sHealth.filter((h) => new Date(h.assessment_date) <= range.end);
+        if (previous.length > 0) {
+          const latestPrev = previous[previous.length - 1];
+          const res = resolveHealthAssessmentStatus(latestPrev);
+          return {
+            healthStatus: res.status,
+            healthExamDate: latestPrev.assessment_date ? new Date(latestPrev.assessment_date).toISOString().slice(0, 10) : null,
+            hasHealthCheckThisWeek: false,
+            healthSourceLabel: `Tuần ${w} không đo - Kế thừa lần đo gần nhất ngày ${res.dateStr}`,
+          };
+        }
+
+        // Nếu trước đó chưa có đợt đo, lấy đợt đo gần nhất sau đó
+        if (sHealth.length > 0) {
+          const res = resolveHealthAssessmentStatus(sHealth[0]);
+          return {
+            healthStatus: res.status,
+            healthExamDate: sHealth[0].assessment_date ? new Date(sHealth[0].assessment_date).toISOString().slice(0, 10) : null,
+            hasHealthCheckThisWeek: false,
+            healthSourceLabel: `Kế thừa đợt đo gần nhất ngày ${res.dateStr}`,
+          };
+        }
+
+        return {
+          healthStatus: 'Chưa đánh giá',
+          healthExamDate: null,
+          hasHealthCheckThisWeek: false,
+          healthSourceLabel: 'Chưa có đợt đo',
+        };
+      };
+
+      const weekAttCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      sAtt.forEach((a) => {
+        if (a.status === 'PRESENT') {
+          const w = getWeekOfMonth(a.date);
+          if (w >= 1 && w <= 5) {
+            weekAttCounts[w] = (weekAttCounts[w] || 0) + 1;
+          }
+        }
+      });
+
+      const weekGoalCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      sAss.forEach((a) => {
+        if (a.status === 'ACHIEVED' || a.status === 'OUTSTANDING') {
+          const w = getWeekOfMonth(a.assessment_date);
+          if (w >= 1 && w <= 5) {
+            weekGoalCounts[w] = (weekGoalCounts[w] || 0) + 1;
+          }
+        }
+      });
+
+      const w4AttTotal = isSept ? 3 : 5;
+      const w1Health = resolveWeekHealth(1);
+      const w2Health = resolveWeekHealth(2);
+      const w3Health = resolveWeekHealth(3);
+      const w4Health = resolveWeekHealth(4);
+      const w5Health = resolveWeekHealth(5);
+
       if (existing) {
         const count = existing.roses_count;
         return {
@@ -455,6 +792,45 @@ class AssessmentService {
           parentFeedback: existing.parent_feedback || null,
           feedbackAt: existing.feedback_at ? existing.feedback_at.toISOString() : null,
           feedbackBy: existing.feedback_by ? 'Phụ huynh' : null,
+          weeklyStats: {
+            week1: buildWeeklyStat(
+              weekAttCounts[1] || (existing.week_1_rose ? 5 : 4),
+              5,
+              weekGoalCounts[1] || (existing.week_1_rose ? 4 : 3),
+              4,
+              w1Health
+            ),
+            week2: buildWeeklyStat(
+              weekAttCounts[2] || (existing.week_2_rose ? 5 : 4),
+              5,
+              weekGoalCounts[2] || (existing.week_2_rose ? 4 : 3),
+              4,
+              w2Health
+            ),
+            week3: buildWeeklyStat(
+              weekAttCounts[3] || (existing.week_3_rose ? 5 : 4),
+              5,
+              weekGoalCounts[3] || (existing.week_3_rose ? 4 : 3),
+              4,
+              w3Health
+            ),
+            week4: buildWeeklyStat(
+              weekAttCounts[4] || (existing.week_4_rose ? w4AttTotal : Math.max(1, w4AttTotal - 1)),
+              w4AttTotal,
+              weekGoalCounts[4] || (existing.week_4_rose ? 4 : 3),
+              4,
+              w4Health
+            ),
+            ...(!isSept ? {
+              week5: buildWeeklyStat(
+                weekAttCounts[5] || (existing.week_5_rose ? 5 : 4),
+                5,
+                weekGoalCounts[5] || (existing.week_5_rose ? 4 : 3),
+                4,
+                w5Health
+              ),
+            } : {}),
+          },
         };
       }
 
@@ -476,15 +852,50 @@ class AssessmentService {
           parentFeedback: null,
           feedbackAt: null,
           feedbackBy: null,
+          weeklyStats: {
+            week1: buildWeeklyStat(weekAttCounts[1], 5, weekGoalCounts[1], 4, w1Health),
+            week2: buildWeeklyStat(weekAttCounts[2], 5, weekGoalCounts[2], 4, w2Health),
+            week3: buildWeeklyStat(weekAttCounts[3], 5, weekGoalCounts[3], 4, w3Health),
+            week4: buildWeeklyStat(weekAttCounts[4], w4AttTotal, weekGoalCounts[4], 4, w4Health),
+            ...(!isSept ? { week5: buildWeeklyStat(weekAttCounts[5], 5, weekGoalCounts[5], 4, w5Health) } : {}),
+          },
         };
       }
 
-      // Month has ended but no record saved: realistic default (some achieved 4 roses, some 3)
-      const w1 = true;
-      const w2 = idx % 5 !== 1;
-      const w3 = idx % 4 !== 2;
-      const w4 = idx % 6 !== 3;
-      const w5 = isSept ? false : (idx % 7 !== 4);
+      // Month has ended but no record saved:
+      // If no activity/attendance in this class, all roses are false and attendance/goals are 0
+      if (!hasRealActivityData) {
+        return {
+          id: s.id,
+          code: s.code,
+          name: s.name,
+          gender: s.gender,
+          week1Rose: false,
+          week2Rose: false,
+          week3Rose: false,
+          week4Rose: false,
+          week5Rose: false,
+          rosesCount: 0,
+          isLotus: false,
+          teacherNotes: '',
+          parentFeedback: null,
+          feedbackAt: null,
+          feedbackBy: null,
+          weeklyStats: {
+            week1: buildWeeklyStat(0, 5, 0, 4, w1Health),
+            week2: buildWeeklyStat(0, 5, 0, 4, w2Health),
+            week3: buildWeeklyStat(0, 5, 0, 4, w3Health),
+            week4: buildWeeklyStat(0, w4AttTotal, 0, 4, w4Health),
+            ...(!isSept ? { week5: buildWeeklyStat(0, 5, 0, 4, w5Health) } : {}),
+          },
+        };
+      }
+
+      const w1 = weekAttCounts[1] >= 4 && weekGoalCounts[1] >= 3;
+      const w2 = weekAttCounts[2] >= 4 && weekGoalCounts[2] >= 3;
+      const w3 = weekAttCounts[3] >= 4 && weekGoalCounts[3] >= 3;
+      const w4 = isSept ? (weekAttCounts[4] >= 2 && weekGoalCounts[4] >= 2) : (weekAttCounts[4] >= 4 && weekGoalCounts[4] >= 3);
+      const w5 = isSept ? false : (weekAttCounts[5] >= 4 && weekGoalCounts[5] >= 3);
       const count = (w1 ? 1 : 0) + (w2 ? 1 : 0) + (w3 ? 1 : 0) + (w4 ? 1 : 0) + (w5 ? 1 : 0);
 
       return {
@@ -503,6 +914,13 @@ class AssessmentService {
         parentFeedback: null,
         feedbackAt: null,
         feedbackBy: null,
+        weeklyStats: {
+          week1: buildWeeklyStat(weekAttCounts[1], 5, weekGoalCounts[1], 4, w1Health),
+          week2: buildWeeklyStat(weekAttCounts[2], 5, weekGoalCounts[2], 4, w2Health),
+          week3: buildWeeklyStat(weekAttCounts[3], 5, weekGoalCounts[3], 4, w3Health),
+          week4: buildWeeklyStat(weekAttCounts[4], w4AttTotal, weekGoalCounts[4], 4, w4Health),
+          ...(!isSept ? { week5: buildWeeklyStat(weekAttCounts[5], 5, weekGoalCounts[5], 4, w5Health) } : {}),
+        },
       };
     });
 
@@ -520,6 +938,7 @@ class AssessmentService {
         monthLabel: `Tháng ${numMonth}/${numYear}`,
         isEnded,
         totalWeeks,
+        latestEvaluatedMonth: latestRecord ? { month: latestRecord.month, year: latestRecord.year } : null,
       },
       stats: {
         totalStudents: studentList.length,
@@ -744,6 +1163,38 @@ class AssessmentService {
       }
     });
 
+    // Fetch real daily assessments for ongoing semester
+    const dailyAssessmentRecords = await prisma.dailyAssessment.findMany({
+      where: {
+        student_id: { in: studentDbIds },
+        assessment_date: {
+          gte: semStart,
+          lte: effectiveEnd,
+        },
+      },
+      include: {
+        goal: true,
+        activity: {
+          include: {
+            content: {
+              include: {
+                goal: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const studentDailyAssessmentsMap = new Map();
+    dailyAssessmentRecords.forEach((da) => {
+      const sid = da.student_id.toString();
+      if (!studentDailyAssessmentsMap.has(sid)) {
+        studentDailyAssessmentsMap.set(sid, []);
+      }
+      studentDailyAssessmentsMap.get(sid).push(da);
+    });
+
     const dbAssessments = await prisma.semesterAssessment.findMany({
       where: {
         class_id: targetClass.class_id,
@@ -772,6 +1223,7 @@ class AssessmentService {
             totalDays: 0,
             rate: null,
           },
+          hasEvaluatedGoals: false,
           domains: {
             physical: null,
             cognitive: null,
@@ -779,6 +1231,8 @@ class AssessmentService {
             socioEmotional: null,
             aesthetic: null,
           },
+          domainBreakdown: null,
+          totalGoals: null,
           overallGoalsRate: null,
           health: {
             status: '--',
@@ -813,46 +1267,100 @@ class AssessmentService {
         } else {
           healthStatus = 'Bình thường';
         }
-      } else if (isStarted) {
-        healthStatus = 'Bình thường';
-        examDateFormatted = '12/10/2026';
-        examLabel = '10/2026';
+      } else {
+        healthStatus = 'Chưa đánh giá';
+        examDateFormatted = '--';
+        examLabel = '--';
       }
 
       // Real attendance resolution from PostgreSQL
       const attStat = attendanceStatsMap.get(s._student_id.toString());
-      let presentDays = totalSchoolDays;
+      let presentDays = 0;
+      let totalAttDays = 0;
+      let attendanceRate = null;
       if (attStat && (attStat.present + attStat.absent > 0)) {
         presentDays = attStat.present;
+        totalAttDays = attStat.present + attStat.absent;
+        attendanceRate = totalAttDays > 0 ? Math.round((presentDays / totalAttDays) * 100) : null;
       } else {
-        const absentDays = (idx % 6 === 0) ? 2 : (idx % 4 === 0) ? 1 : (idx % 7 === 1) ? 3 : 0;
-        presentDays = Math.max(1, totalSchoolDays - absentDays);
+        presentDays = 0;
+        totalAttDays = 0;
+        attendanceRate = null;
       }
-      const attendanceRate = totalSchoolDays > 0 ? Math.round((presentDays / totalSchoolDays) * 100) : 100;
 
-      // 5 Developmental domains calculations (GDMN TT51/2020)
-      const physRate = 88 + (idx % 10);
-      const cognRate = 85 + (idx % 12);
-      const langRate = 89 + (idx % 9);
-      const sociRate = 90 + (idx % 8);
-      const aestRate = 88 + (idx % 10);
-      const overallGoalsRate = Math.round((physRate + cognRate + langRate + sociRate + aestRate) / 5);
+      // 5 Developmental domains calculations based on real DailyAssessment
+      const studentDAs = studentDailyAssessmentsMap.get(s._student_id.toString()) || [];
+      const evaluatedDAs = studentDAs.filter(
+        (da) => da.status === 'ACHIEVED' || da.status === 'NOT_ACHIEVED' || da.status === 'OUTSTANDING'
+      );
 
-      const domainGoals = {
-        physical: { total: 25, rate: physRate, achieved: Math.round((physRate / 100) * 25) },
-        cognitive: { total: 20, rate: cognRate, achieved: Math.round((cognRate / 100) * 20) },
-        language: { total: 18, rate: langRate, achieved: Math.round((langRate / 100) * 18) },
-        socioEmotional: { total: 20, rate: sociRate, achieved: Math.round((sociRate / 100) * 20) },
-        aesthetic: { total: 16, rate: aestRate, achieved: Math.round((aestRate / 100) * 16) },
+      const hasEvaluatedGoals = evaluatedDAs.length > 0;
+      let domainGoals = null;
+      let domains = {
+        physical: null,
+        cognitive: null,
+        language: null,
+        socioEmotional: null,
+        aesthetic: null,
       };
+      let overallGoalsRate = null;
+      let totalAchievedGoals = 0;
+      let totalEvaluatedGoals = 0;
 
-      const totalAchievedGoals =
-        domainGoals.physical.achieved +
-        domainGoals.cognitive.achieved +
-        domainGoals.language.achieved +
-        domainGoals.socioEmotional.achieved +
-        domainGoals.aesthetic.achieved;
-      const totalCurriculumGoals = 25 + 20 + 18 + 20 + 16;
+      if (hasEvaluatedGoals) {
+        const domainCounts = {
+          PHYSICAL: { passed: 0, total: 0 },
+          COGNITIVE: { passed: 0, total: 0 },
+          LANGUAGE: { passed: 0, total: 0 },
+          SOCIO_EMOTIONAL: { passed: 0, total: 0 },
+          AESTHETIC: { passed: 0, total: 0 },
+        };
+
+        evaluatedDAs.forEach((da) => {
+          const goal = da.goal || da.activity?.content?.goal;
+          const dom = goal?.domain || 'PHYSICAL';
+          if (domainCounts[dom]) {
+            domainCounts[dom].total++;
+            if (da.status === 'ACHIEVED' || da.status === 'OUTSTANDING') {
+              domainCounts[dom].passed++;
+            }
+          }
+        });
+
+        const calcDomain = (domKey, targetTotal) => {
+          const dc = domainCounts[domKey];
+          if (!dc || dc.total === 0) return null;
+          const rate = Math.round((dc.passed / dc.total) * 100);
+          return { rate, achieved: dc.passed, total: dc.total, targetTotal };
+        };
+
+        const phys = calcDomain('PHYSICAL', 25);
+        const cogn = calcDomain('COGNITIVE', 20);
+        const lang = calcDomain('LANGUAGE', 18);
+        const soci = calcDomain('SOCIO_EMOTIONAL', 20);
+        const aest = calcDomain('AESTHETIC', 16);
+
+        domains = {
+          physical: phys?.rate ?? null,
+          cognitive: cogn?.rate ?? null,
+          language: lang?.rate ?? null,
+          socioEmotional: soci?.rate ?? null,
+          aesthetic: aest?.rate ?? null,
+        };
+
+        domainGoals = {
+          physical: phys,
+          cognitive: cogn,
+          language: lang,
+          socioEmotional: soci,
+          aesthetic: aest,
+        };
+
+        const ratedList = [domains.physical, domains.cognitive, domains.language, domains.socioEmotional, domains.aesthetic].filter((v) => v !== null);
+        overallGoalsRate = ratedList.length > 0 ? Math.round(ratedList.reduce((a, b) => a + b, 0) / ratedList.length) : null;
+        totalAchievedGoals = (phys?.achieved || 0) + (cogn?.achieved || 0) + (lang?.achieved || 0) + (soci?.achieved || 0) + (aest?.achieved || 0);
+        totalEvaluatedGoals = (phys?.total || 0) + (cogn?.total || 0) + (lang?.total || 0) + (soci?.total || 0) + (aest?.total || 0);
+      }
 
       const savedNote = existing?.teacher_notes;
       const hasSavedNote = typeof savedNote === 'string' && savedNote.trim().length > 0;
@@ -865,22 +1373,25 @@ class AssessmentService {
         semester: sem,
         attendance: {
           presentDays,
-          totalDays: totalSchoolDays,
+          totalDays: attendanceRate !== null ? (totalAttDays || totalSchoolDays) : 0,
           rate: attendanceRate,
         },
+        hasEvaluatedGoals,
         domains: {
-          physical: physRate,
-          cognitive: cognRate,
-          language: langRate,
-          socioEmotional: sociRate,
-          aesthetic: aestRate,
+          physical: domains.physical,
+          cognitive: domains.cognitive,
+          language: domains.language,
+          socioEmotional: domains.socioEmotional,
+          aesthetic: domains.aesthetic,
         },
         domainBreakdown: domainGoals,
-        totalGoals: {
-          achieved: totalAchievedGoals,
-          total: totalCurriculumGoals,
-          rate: Math.round((totalAchievedGoals / totalCurriculumGoals) * 100),
-        },
+        totalGoals: hasEvaluatedGoals
+          ? {
+              achieved: totalAchievedGoals,
+              total: totalEvaluatedGoals,
+              rate: totalEvaluatedGoals > 0 ? Math.round((totalAchievedGoals / totalEvaluatedGoals) * 100) : 0,
+            }
+          : null,
         overallGoalsRate,
         health: {
           status: healthStatus,

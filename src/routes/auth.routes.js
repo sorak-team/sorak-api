@@ -10,6 +10,7 @@ import {
   verify2FASchema,
   confirmEnable2FASchema,
   disable2FASchema,
+  changePasswordSchema,
 } from '../validators/auth.schema.js';
 import {
   login,
@@ -17,6 +18,7 @@ import {
   requestEnable2FA,
   confirmEnable2FA,
   disable2FA,
+  changePassword,
   forgotPassword,
   verifyOtp,
   resetPassword,
@@ -46,10 +48,34 @@ router.delete('/sessions/others', authMiddleware, asyncHandler(revokeOtherSessio
 
 
 // Protected Profile & Security Endpoints
+router.post(
+  '/change-password',
+  authMiddleware,
+  validate(changePasswordSchema),
+  asyncHandler(changePassword),
+);
+
+router.post(
+  '/2fa/request-enable',
+  authMiddleware,
+  asyncHandler(requestEnable2FA),
+);
+
+router.post(
   '/2fa/confirm-enable',
   authMiddleware,
   validate(confirmEnable2FASchema),
   asyncHandler(confirmEnable2FA),
 );
+
+router.post(
+  '/2fa/disable',
+  authMiddleware,
+  validate(disable2FASchema),
+  asyncHandler(disable2FA),
+);
+
+router.delete('/sessions/:sessionId', authMiddleware, asyncHandler(revokeSession));
+router.delete('/sessions', authMiddleware, asyncHandler(revokeAllSessions));
 
 export default router;

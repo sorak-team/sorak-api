@@ -11,6 +11,7 @@ import {
   updateGoalBankStatus,
   getSingleGoalDetail,
   updateGoalContents,
+  createGoal,
   updateGoal,
   deleteGoal,
   queryAiAssistant,
@@ -29,6 +30,7 @@ router.get('/goals/detail', authMiddleware, asyncHandler(getGoalBankDetail));
 router.patch('/goals/status', authMiddleware, asyncHandler(updateGoalBankStatus));
 router.get('/goals/single-detail', authMiddleware, asyncHandler(getSingleGoalDetail));
 router.put('/goals/single-detail/contents', authMiddleware, asyncHandler(updateGoalContents));
+router.post('/goals/item', authMiddleware, asyncHandler(createGoal));
 router.put('/goals/item', authMiddleware, asyncHandler(updateGoal));
 router.delete('/goals/item', authMiddleware, asyncHandler(deleteGoal));
 router.post('/goals/ai-assistant', authMiddleware, asyncHandler(queryAiAssistant));

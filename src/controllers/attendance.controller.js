@@ -23,7 +23,8 @@ class AttendanceController {
     try {
       const { classId } = req.params;
       const { date, records } = req.body;
-      const data = await attendanceService.updateAttendance({ classId, date, records });
+      const accountId = req.user?.sub;
+      const data = await attendanceService.updateAttendance({ classId, date, records, accountId });
       res.success(data);
     } catch (err) {
       next(err);

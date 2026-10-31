@@ -4,7 +4,7 @@ import prisma from '../src/config/prisma.js';
 async function seed() {
   console.log('🌱 Seeding authentication accounts & profiles...');
 
-  const defaultPassword = await bcrypt.hash('123456', 10);
+  const defaultPassword = await bcrypt.hash('Sorak@2026', 10);
 
   // 1. School Years & Classes Seeding First (for relations)
   console.log('🌱 Seeding school years and homeroom classrooms...');
@@ -82,18 +82,21 @@ async function seed() {
 
   // 2. Admin / Principal Account (Pure credentials)
   const adminAcc = await prisma.account.upsert({
-    where: { username: 'ADMIN01' },
+    where: { username: 'CB20001' },
     update: {
       role: 'PRINCIPAL_BGH',
+      password_hash: defaultPassword,
+      is_active: true,
     },
     create: {
-      username: 'ADMIN01',
+      username: 'CB20001',
       password_hash: defaultPassword,
       role: 'PRINCIPAL_BGH',
       is_active: true,
       last_login_at: new Date(),
     },
   });
+
 
   await prisma.teacher.upsert({
     where: { citizen_id: '079185001111' },
@@ -126,7 +129,7 @@ async function seed() {
       address: 'Phường Bến Nghé, Quận 1, TP.HCM',
     },
   });
-  console.log('✅ Created Principal account & profile: ADMIN01 (role: PRINCIPAL_BGH)');
+  console.log('✅ Created Principal account & profile: CB20001 (role: PRINCIPAL_BGH)');
 
   // 3. Teacher Accounts & Profiles (Pure credentials on accounts, contact/profile on teachers)
   const defaultTeachers = [
@@ -144,7 +147,6 @@ async function seed() {
       start_date: new Date('2024-08-15'),
       address: '123 Nguyễn Văn Cừ, Quận 5, TP.HCM',
       assigned_class: 'Mầm 1',
-      is_primary: true,
     },
     {
       username: 'CB25001',
@@ -160,7 +162,6 @@ async function seed() {
       start_date: new Date('2025-07-01'),
       address: '45 Lê Hồng Phong, Quận 10, TP.HCM',
       assigned_class: 'Mầm 1',
-      is_primary: false,
     },
     {
       username: 'CB26001',
@@ -176,7 +177,6 @@ async function seed() {
       start_date: new Date('2026-09-01'),
       address: '78 Trường Chinh, Tân Bình, TP.HCM',
       assigned_class: 'Chồi 1',
-      is_primary: true,
     },
     {
       username: 'CB26002',
@@ -192,7 +192,6 @@ async function seed() {
       start_date: new Date('2026-09-01'),
       address: '24 Điện Biên Phủ, TP. Rạch Giá, Kiên Giang',
       assigned_class: null,
-      is_primary: false,
     },
     {
       username: 'CB24002',
@@ -208,7 +207,6 @@ async function seed() {
       start_date: new Date('2024-06-10'),
       address: '89 Điện Biên Phủ, Bình Thạnh, TP.HCM',
       assigned_class: null,
-      is_primary: false,
     },
     {
       username: 'CB26003',
@@ -224,7 +222,6 @@ async function seed() {
       start_date: new Date('2026-09-01'),
       address: '56 Hoàng Hoa Thám, TP. Rạch Giá, Kiên Giang',
       assigned_class: null,
-      is_primary: false,
     },
   ];
 
@@ -233,6 +230,7 @@ async function seed() {
       where: { username: t.username },
       update: {
         role: 'TEACHER_GV',
+        password_hash: defaultPassword,
       },
       create: {
         username: t.username,
@@ -289,6 +287,7 @@ async function seed() {
         },
         data: {
           left_at: new Date('2026-09-05'),
+          leave_reason: 'COMPLETED_SCHOOL_YEAR',
         },
       });
 
@@ -305,7 +304,6 @@ async function seed() {
           data: {
             teacher_id: teacherRec.teacher_id,
             class_id: classRec.class_id,
-            is_primary: t.is_primary,
             assigned_at: new Date('2026-09-05'),
           },
         });
@@ -327,7 +325,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: null,
-      parents: [{ full_name: 'Nguyễn Văn Minh', relationship: 'Bố', phone: '0901111001', can_pickup: true }],
+      parents: [{ full_name: 'Nguyễn Văn Minh', relationship: 'Bố', phone: '0901111001' }],
     },
     {
       username: 'HS26002',
@@ -339,7 +337,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: 'NT-B1 · 2025–26',
       class_name: null,
-      parents: [{ full_name: 'Trần Văn Bảo', relationship: 'Bố', phone: '0901111002', can_pickup: true }],
+      parents: [{ full_name: 'Trần Văn Bảo', relationship: 'Bố', phone: '0901111002' }],
     },
     {
       username: 'HS26003',
@@ -351,7 +349,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: 'NT-A2 · 2025–26',
       class_name: null,
-      parents: [{ full_name: 'Lê Hoàng Nam', relationship: 'Bố', phone: '0901111003', can_pickup: true }],
+      parents: [{ full_name: 'Lê Hoàng Nam', relationship: 'Bố', phone: '0901111003' }],
     },
     {
       username: 'HS26004',
@@ -363,7 +361,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: null,
-      parents: [{ full_name: 'Phạm Văn Duy', relationship: 'Bố', phone: '0901111004', can_pickup: true }],
+      parents: [{ full_name: 'Phạm Văn Duy', relationship: 'Bố', phone: '0901111004' }],
     },
     {
       username: 'HS26005',
@@ -375,7 +373,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: 'NT-C1 · 2025–26',
       class_name: null,
-      parents: [{ full_name: 'Võ Minh Hà', relationship: 'Bố', phone: '0901111005', can_pickup: true }],
+      parents: [{ full_name: 'Võ Minh Hà', relationship: 'Bố', phone: '0901111005' }],
     },
     {
       username: 'HS26006',
@@ -387,7 +385,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: 'NT-A1 · 2025–26',
       class_name: null,
-      parents: [{ full_name: 'Nguyễn Tuấn Hân', relationship: 'Bố', phone: '0901111006', can_pickup: true }],
+      parents: [{ full_name: 'Nguyễn Tuấn Hân', relationship: 'Bố', phone: '0901111006' }],
     },
     {
       username: 'HS26007',
@@ -399,7 +397,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: null,
-      parents: [{ full_name: 'Trần Quốc Khang', relationship: 'Bố', phone: '0901111007', can_pickup: true }],
+      parents: [{ full_name: 'Trần Quốc Khang', relationship: 'Bố', phone: '0901111007' }],
     },
     {
       username: 'HS26008',
@@ -411,7 +409,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: 'NT-B2 · 2025–26',
       class_name: null,
-      parents: [{ full_name: 'Lê Văn Khôi', relationship: 'Bố', phone: '0901111008', can_pickup: true }],
+      parents: [{ full_name: 'Lê Văn Khôi', relationship: 'Bố', phone: '0901111008' }],
     },
 
     // Enrolled in Nhà trẻ A1 (18 students)
@@ -425,7 +423,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Nguyễn Quốc Thư', relationship: 'Bố', phone: '0901111016', can_pickup: true }],
+      parents: [{ full_name: 'Nguyễn Quốc Thư', relationship: 'Bố', phone: '0901111016' }],
     },
     {
       username: 'HS26017',
@@ -437,7 +435,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Trần Đình Yến', relationship: 'Bố', phone: '0901111017', can_pickup: true }],
+      parents: [{ full_name: 'Trần Đình Yến', relationship: 'Bố', phone: '0901111017' }],
     },
     {
       username: 'HS26018',
@@ -449,7 +447,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Lê Tuấn Anh', relationship: 'Bố', phone: '0901111018', can_pickup: true }],
+      parents: [{ full_name: 'Lê Tuấn Anh', relationship: 'Bố', phone: '0901111018' }],
     },
     {
       username: 'HS26009',
@@ -461,7 +459,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Phạm Hải Lâm', relationship: 'Bố', phone: '0901111009', can_pickup: true }],
+      parents: [{ full_name: 'Phạm Hải Lâm', relationship: 'Bố', phone: '0901111009' }],
     },
     {
       username: 'HS26010',
@@ -473,7 +471,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Võ Anh Linh', relationship: 'Bố', phone: '0901111010', can_pickup: true }],
+      parents: [{ full_name: 'Võ Anh Linh', relationship: 'Bố', phone: '0901111010' }],
     },
     {
       username: 'HS26011',
@@ -485,7 +483,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Nguyễn Hoàng Minh', relationship: 'Bố', phone: '0901111011', can_pickup: true }],
+      parents: [{ full_name: 'Nguyễn Hoàng Minh', relationship: 'Bố', phone: '0901111011' }],
     },
     {
       username: 'HS26019',
@@ -497,7 +495,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Đặng Văn Huy', relationship: 'Bố', phone: '0901111019', can_pickup: true }],
+      parents: [{ full_name: 'Đặng Văn Huy', relationship: 'Bố', phone: '0901111019' }],
     },
     {
       username: 'HS26020',
@@ -509,7 +507,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Hoàng Đức Uyên', relationship: 'Bố', phone: '0901111020', can_pickup: true }],
+      parents: [{ full_name: 'Hoàng Đức Uyên', relationship: 'Bố', phone: '0901111020' }],
     },
     {
       username: 'HS26021',
@@ -521,7 +519,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Bùi Thế Khang', relationship: 'Bố', phone: '0901111021', can_pickup: true }],
+      parents: [{ full_name: 'Bùi Thế Khang', relationship: 'Bố', phone: '0901111021' }],
     },
     {
       username: 'HS26022',
@@ -533,7 +531,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Đỗ Tiến Trang', relationship: 'Bố', phone: '0901111022', can_pickup: true }],
+      parents: [{ full_name: 'Đỗ Tiến Trang', relationship: 'Bố', phone: '0901111022' }],
     },
     {
       username: 'HS26023',
@@ -545,7 +543,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Vũ Hải Long', relationship: 'Bố', phone: '0901111023', can_pickup: true }],
+      parents: [{ full_name: 'Vũ Hải Long', relationship: 'Bố', phone: '0901111023' }],
     },
     {
       username: 'HS26024',
@@ -557,7 +555,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Phan Duy Ngọc', relationship: 'Bố', phone: '0901111024', can_pickup: true }],
+      parents: [{ full_name: 'Phan Duy Ngọc', relationship: 'Bố', phone: '0901111024' }],
     },
     {
       username: 'HS26025',
@@ -569,7 +567,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Lý Thế Bảo', relationship: 'Bố', phone: '0901111025', can_pickup: true }],
+      parents: [{ full_name: 'Lý Thế Bảo', relationship: 'Bố', phone: '0901111025' }],
     },
     {
       username: 'HS26026',
@@ -581,7 +579,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ A1',
-      parents: [{ full_name: 'Trương Văn Ngân', relationship: 'Bố', phone: '0901111026', can_pickup: true }],
+      parents: [{ full_name: 'Trương Văn Ngân', relationship: 'Bố', phone: '0901111026' }],
     },
     {
       username: 'HS26027',
@@ -593,7 +591,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ 1',
-      parents: [{ full_name: 'Mai Thanh Linh', relationship: 'Bố', phone: '0901111027', can_pickup: true }],
+      parents: [{ full_name: 'Mai Thanh Linh', relationship: 'Bố', phone: '0901111027' }],
     },
     {
       username: 'HS26028',
@@ -605,7 +603,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ 1',
-      parents: [{ full_name: 'Đoàn Văn Hưng', relationship: 'Bố', phone: '0901111028', can_pickup: true }],
+      parents: [{ full_name: 'Đoàn Văn Hưng', relationship: 'Bố', phone: '0901111028' }],
     },
     {
       username: 'HS26029',
@@ -617,7 +615,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ 1',
-      parents: [{ full_name: 'Cao Văn Dương', relationship: 'Bố', phone: '0901111029', can_pickup: true }],
+      parents: [{ full_name: 'Cao Văn Dương', relationship: 'Bố', phone: '0901111029' }],
     },
     {
       username: 'HS26030',
@@ -629,7 +627,7 @@ async function seed() {
       status: 'STUDYING',
       previous_school: null,
       class_name: 'Nhà trẻ 1',
-      parents: [{ full_name: 'Lâm Văn An', relationship: 'Bố', phone: '0901111030', can_pickup: true }],
+      parents: [{ full_name: 'Lâm Văn An', relationship: 'Bố', phone: '0901111030' }],
     },
   ];
 
@@ -638,6 +636,7 @@ async function seed() {
       where: { username: s.username },
       update: {
         role: 'PARENT_PH',
+        password_hash: defaultPassword,
       },
       create: {
         username: s.username,
@@ -689,7 +688,6 @@ async function seed() {
             full_name: p.full_name,
             relationship: p.relationship,
             phone: p.phone,
-            can_pickup: p.can_pickup,
           },
         });
       }

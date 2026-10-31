@@ -52,6 +52,12 @@ export const updateGoalContents = async (req, res) => {
   res.success(result);
 };
 
+export const createGoal = async (req, res) => {
+  const { year, ageGroup, data } = req.body;
+  const result = await curriculumService.createGoal({ year, ageGroup, data });
+  res.status(201).success(result);
+};
+
 export const updateGoal = async (req, res) => {
   const { year, ageGroup, goalId, data } = req.body;
   const result = await curriculumService.updateGoal({ year, ageGroup, goalId, data });

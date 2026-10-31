@@ -22,6 +22,7 @@ class PlanningController {
       const data = await planningService.saveEducationalActivity({
         classId,
         activity: req.body,
+        accountId: req.user?.sub || req.user?.accountId,
       });
       res.success(data);
     } catch (err) {
@@ -76,6 +77,7 @@ class PlanningController {
         weekId,
         subThemeId,
         orderIndex: orderIndex !== undefined ? orderIndex : order_index,
+        accountId: req.user?.sub || req.user?.accountId,
       });
       res.success(data);
     } catch (err) {
@@ -89,6 +91,7 @@ class PlanningController {
       const data = await planningService.saveWeeklySlot({
         classId,
         slot: req.body,
+        accountId: req.user?.sub || req.user?.accountId,
       });
       res.success(data);
     } catch (err) {
@@ -103,6 +106,7 @@ class PlanningController {
       const data = await planningService.reorderWeeklySlots({
         classId,
         slots,
+        accountId: req.user?.sub || req.user?.accountId,
       });
       res.success(data);
     } catch (err) {

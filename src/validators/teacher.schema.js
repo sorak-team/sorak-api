@@ -1,10 +1,8 @@
 import Joi from 'joi';
 
 export const createTeacherSchema = Joi.object({
-  employeeCode: Joi.string().trim().min(2).max(50).required().messages({
-    'string.empty': 'Mã giáo viên không được để trống',
+  employeeCode: Joi.string().trim().min(2).max(50).allow('', null).optional().messages({
     'string.min': 'Mã giáo viên phải có ít nhất 2 ký tự',
-    'any.required': 'Mã giáo viên là bắt buộc',
   }),
   fullName: Joi.string().trim().min(2).max(150).required().messages({
     'string.empty': 'Họ và tên không được để trống',
@@ -41,12 +39,20 @@ export const createTeacherSchema = Joi.object({
     .allow('', null)
     .optional(),
   username: Joi.string().trim().min(3).max(100).optional(),
-  password: Joi.string().min(6).default('123456'),
+  password: Joi.string()
+    .min(8)
+    .max(100)
+    .pattern(/^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>_\-+=~`[\]\\;/])/)
+    .default('Sorak@2026')
+    .messages({
+      'string.min': 'Mật khẩu phải tối thiểu 8 ký tự',
+      'string.pattern.base': 'Mật khẩu phải tối thiểu 8 ký tự, bao gồm ít nhất 1 chữ hoa, 1 chữ số và 1 ký tự đặc biệt',
+    }),
   avatarUrl: Joi.string().trim().max(500).allow('', null).optional(),
 
   // Optional initial class assignment
   classId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).allow(null).optional(),
-  isPrimary: Joi.boolean().default(false),
+  isPrimary: Joi.boolean().optional(),
 });
 
 export const updateTeacherSchema = Joi.object({
@@ -87,7 +93,7 @@ export const assignTeacherClassSchema = Joi.object({
   classId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).required().messages({
     'any.required': 'Mã lớp học (classId) là bắt buộc',
   }),
-  isPrimary: Joi.boolean().default(false),
+  isPrimary: Joi.boolean().optional(),
   assignedAt: Joi.date()
     .iso()
     .default(() => new Date()),
@@ -96,4 +102,8 @@ export const assignTeacherClassSchema = Joi.object({
 export const updateTeacherClassSchema = Joi.object({
   isPrimary: Joi.boolean().optional(),
   leftAt: Joi.date().iso().allow(null).optional(),
+  leaveReason: Joi.string()
+    .valid('COMPLETED_SCHOOL_YEAR', 'LEAVE_OF_ABSENCE', 'RESIGNED')
+    .allow(null)
+    .optional(),
 });

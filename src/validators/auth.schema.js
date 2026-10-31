@@ -40,10 +40,9 @@ export const forgotPasswordSchema = Joi.object({
   });
 
 export const verifyOtpSchema = Joi.object({
-  email: Joi.string().trim().email().required().messages({
-    'string.empty': 'Vui lòng cung cấp email',
-    'string.email': 'Địa chỉ email không đúng định dạng',
-    'any.required': 'Vui lòng cung cấp email',
+  email: Joi.string().trim().min(2).max(150).required().messages({
+    'string.empty': 'Vui lòng cung cấp email hoặc tên đăng nhập',
+    'any.required': 'Vui lòng cung cấp email hoặc tên đăng nhập',
   }),
   otp: Joi.string()
     .trim()
@@ -59,20 +58,25 @@ export const verifyOtpSchema = Joi.object({
 });
 
 export const resetPasswordSchema = Joi.object({
-  email: Joi.string().trim().email().required().messages({
-    'string.empty': 'Vui lòng cung cấp email',
-    'string.email': 'Địa chỉ email không đúng định dạng',
-    'any.required': 'Vui lòng cung cấp email',
+  email: Joi.string().trim().min(2).max(150).required().messages({
+    'string.empty': 'Vui lòng cung cấp email hoặc tên đăng nhập',
+    'any.required': 'Vui lòng cung cấp email hoặc tên đăng nhập',
   }),
   resetToken: Joi.string().required().messages({
     'string.empty': 'Mã xác thực đặt lại mật khẩu không hợp lệ',
     'any.required': 'Mã xác thực đặt lại mật khẩu không hợp lệ',
   }),
-  password: Joi.string().min(6).max(100).required().messages({
-    'string.empty': 'Vui lòng nhập mật khẩu mới',
-    'string.min': 'Mật khẩu mới phải có ít nhất 6 ký tự',
-    'any.required': 'Vui lòng nhập mật khẩu mới',
-  }),
+  password: Joi.string()
+    .min(8)
+    .max(100)
+    .pattern(/^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>_\-+=~`[\]\\;/])/)
+    .required()
+    .messages({
+      'string.empty': 'Vui lòng nhập mật khẩu mới',
+      'string.min': 'Mật khẩu mới phải tối thiểu 8 ký tự',
+      'string.pattern.base': 'Mật khẩu phải tối thiểu 8 ký tự, bao gồm ít nhất 1 chữ hoa, 1 chữ số và 1 ký tự đặc biệt',
+      'any.required': 'Vui lòng nhập mật khẩu mới',
+    }),
 });
 
 export const verify2FASchema = Joi.object({
@@ -112,4 +116,22 @@ export const disable2FASchema = Joi.object({
     'string.empty': 'Vui lòng nhập mật khẩu xác nhận',
     'any.required': 'Vui lòng nhập mật khẩu xác nhận',
   }),
+});
+
+export const changePasswordSchema = Joi.object({
+  currentPassword: Joi.string().required().messages({
+    'string.empty': 'Vui lòng nhập mật khẩu hiện tại',
+    'any.required': 'Vui lòng nhập mật khẩu hiện tại',
+  }),
+  newPassword: Joi.string()
+    .min(8)
+    .max(100)
+    .pattern(/^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>_\-+=~`[\]\\;/])/)
+    .required()
+    .messages({
+      'string.empty': 'Vui lòng nhập mật khẩu mới',
+      'string.min': 'Mật khẩu mới phải tối thiểu 8 ký tự',
+      'string.pattern.base': 'Mật khẩu phải tối thiểu 8 ký tự, bao gồm ít nhất 1 chữ hoa, 1 chữ số và 1 ký tự đặc biệt',
+      'any.required': 'Vui lòng nhập mật khẩu mới',
+    }),
 });

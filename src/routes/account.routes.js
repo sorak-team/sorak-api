@@ -29,8 +29,10 @@ router.get('/', validate(queryAccountSchema, 'query'), asyncHandler(listAccounts
 router.get('/:id', asyncHandler(getAccountById));
 router.post('/', validate(createAccountSchema), asyncHandler(createAccount));
 router.patch('/:id', validate(updateAccountSchema), asyncHandler(updateAccount));
+router.patch('/:id/status', asyncHandler(toggleAccountStatus));
+router.delete('/:id', asyncHandler(deleteAccount));
 
-
+router.post(
   '/:id/reset-password',
   validate(resetPasswordSchema),
   asyncHandler(resetAccountPassword),

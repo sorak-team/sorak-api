@@ -10,6 +10,9 @@ const AGE_GROUPS = [
   { key: 'la', label: 'Khối Lá', dbKey: 'LA', ageRange: '5–6 tuổi' },
 ];
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (val) => typeof val === 'string' && UUID_REGEX.test(val.trim());
+
 class CurriculumService {
   /**
    * List overview of Theme sets grouped by grade/age-group querying live PostgreSQL
@@ -132,27 +135,22 @@ class CurriculumService {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     const normalizedYear = (year || '2026–2027').replace('-', '–');
 
-    // Find school year ID
-    const schoolYear = await prisma.schoolYear.findFirst({
-      where: {
-        OR: [
-          { name: { contains: normalizedYear } },
-          { name: { contains: normalizedYear.replace('–', '-') } },
-          { school_year_id: 1n },
-        ],
-        deleted_at: null,
-      },
-    });
-
-    const schoolYearId = schoolYear?.school_year_id || 1n;
-
+    // Query themes directly using Prisma Relation Filter (single DB query)
     const dbThemes = await prisma.curriculumTheme.findMany({
       where: {
-        school_year_id: schoolYearId,
+        school_year: {
+          OR: [
+            { name: { contains: normalizedYear } },
+            { name: { contains: normalizedYear.replace('–', '-') } },
+            { school_year_id: 1n },
+          ],
+          deleted_at: null,
+        },
         age_group: ageGroupInfo.dbKey,
         deleted_at: null,
       },
       include: {
+        school_year: true,
         sub_themes: {
           where: { deleted_at: null },
           orderBy: { start_date: 'asc' },
@@ -160,6 +158,9 @@ class CurriculumService {
       },
       orderBy: { start_date: 'asc' },
     });
+
+    const schoolYear = dbThemes[0]?.school_year;
+    const schoolYearId = schoolYear?.school_year_id || 1n;
 
     if (dbThemes && dbThemes.length > 0) {
       const mappedThemes = dbThemes.map((t, idx) => ({
@@ -255,34 +256,22 @@ class CurriculumService {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     const normalizedYear = (year || '2026–2027').replace('-', '–');
 
-    // 1. Tìm năm học
-    const schoolYear = await prisma.schoolYear.findFirst({
-      where: {
-        OR: [
-          { name: { contains: normalizedYear } },
-          { name: { contains: normalizedYear.replace('–', '-') } },
-          { school_year_id: 1n },
-        ],
-        deleted_at: null,
-      },
-    });
-
-    if (!schoolYear) {
-      throw new NotFound('Không tìm thấy năm học phù hợp');
-    }
-
-    const schoolYearId = schoolYear.school_year_id;
-    const syStart = schoolYear.start_date.toISOString().slice(0, 10);
-    const syEnd = schoolYear.end_date.toISOString().slice(0, 10);
-
-    // 2. Lấy danh sách theme hiện tại từ DB để merge nếu chỉ truyền 1 theme
+    // 1. Fetch themes and associated school year in a single DB query using Relation Filter
     const dbThemes = await prisma.curriculumTheme.findMany({
       where: {
-        school_year_id: schoolYearId,
+        school_year: {
+          OR: [
+            { name: { contains: normalizedYear } },
+            { name: { contains: normalizedYear.replace('–', '-') } },
+            { school_year_id: 1n },
+          ],
+          deleted_at: null,
+        },
         age_group: ageGroupInfo.dbKey,
         deleted_at: null,
       },
       include: {
+        school_year: true,
         sub_themes: {
           where: { deleted_at: null },
           orderBy: { start_date: 'asc' },
@@ -290,6 +279,11 @@ class CurriculumService {
       },
       orderBy: { start_date: 'asc' },
     });
+
+    const schoolYear = dbThemes[0]?.school_year;
+    const schoolYearId = schoolYear?.school_year_id || 1n;
+    const syStart = schoolYear?.start_date ? schoolYear.start_date.toISOString().slice(0, 10) : '2026-09-01';
+    const syEnd = schoolYear?.end_date ? schoolYear.end_date.toISOString().slice(0, 10) : '2027-05-31';
 
     let targetThemes = [];
     if (Array.isArray(themes) && themes.length > 0) {
@@ -823,10 +817,13 @@ class CurriculumService {
     }
 
     let targetGoal = null;
-    if (!isNaN(Number(goalId))) {
-      targetGoal = await prisma.educationalGoal.findFirst({ where: { goal_id: BigInt(goalId) } });
+    const strGoal = String(goalId).trim();
+    if (/^\d+$/.test(strGoal)) {
+      targetGoal = await prisma.educationalGoal.findFirst({ where: { goal_id: BigInt(strGoal) } });
+    } else if (isUuid(strGoal)) {
+      targetGoal = await prisma.educationalGoal.findFirst({ where: { public_id: strGoal } });
     } else {
-      targetGoal = await prisma.educationalGoal.findFirst({ where: { public_id: String(goalId) } });
+      targetGoal = await prisma.educationalGoal.findFirst({ where: { goal_code: strGoal } });
     }
     if (!targetGoal) {
       throw new NotFound('Không tìm thấy mục tiêu giáo dục.');
@@ -861,26 +858,95 @@ class CurriculumService {
   }
 
   /**
+   * Create educational goal item in PostgreSQL
+   */
+  async createGoal({ year = '2026–2027', ageGroup = 'nhatre', data = {} }) {
+    const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
+    const totalExisting = await prisma.educationalGoal.count({
+      where: {
+        school_year_id: 1n,
+        age_group: ageGroupInfo.dbKey,
+        deleted_at: null,
+      },
+    });
+    const codeNumber = totalExisting + 1;
+    const goalCode = `MT${codeNumber < 10 ? '0' + codeNumber : codeNumber}`;
+
+    const created = await prisma.educationalGoal.create({
+      data: {
+        school_year_id: 1n,
+        age_group: ageGroupInfo.dbKey,
+        goal_code: goalCode,
+        indicator_code: data.indicatorCode?.trim() || null,
+        title: data.title?.trim() || 'Mục tiêu giáo dục mới',
+        domain: data.domain || 'PHYSICAL',
+      },
+    });
+
+    return {
+      success: true,
+      goal: {
+        id: created.public_id || created.goal_id.toString(),
+        code: created.goal_code,
+        indicatorCode: created.indicator_code || '',
+        title: created.title,
+        domain: created.domain,
+        type: 'Mục tiêu học tập',
+        contentsCount: 0,
+        contents: [],
+      },
+    };
+  }
+
+  /**
    * Update educational goal item in PostgreSQL
    */
   async updateGoal({ year = '2026–2027', ageGroup = 'nhatre', goalId, data = {} }) {
+    const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     let targetGoal = null;
-    if (!isNaN(Number(goalId))) {
-      targetGoal = await prisma.educationalGoal.findFirst({ where: { goal_id: BigInt(goalId) } });
+    const strGoal = String(goalId || '').trim();
+
+    if (/^\d+$/.test(strGoal)) {
+      targetGoal = await prisma.educationalGoal.findFirst({
+        where: { goal_id: BigInt(strGoal), deleted_at: null },
+      });
+    } else if (isUuid(strGoal)) {
+      targetGoal = await prisma.educationalGoal.findFirst({
+        where: { public_id: strGoal, deleted_at: null },
+      });
     } else {
-      targetGoal = await prisma.educationalGoal.findFirst({ where: { public_id: String(goalId) } });
-    }
-    if (targetGoal) {
-      await prisma.educationalGoal.update({
-        where: { goal_id: targetGoal.goal_id },
-        data: {
-          title: data.title,
-          indicator_code: data.indicatorCode,
-          domain: data.domain,
-          updated_at: new Date(),
+      const numMatch = strGoal.match(/\d+/);
+      const num = numMatch ? parseInt(numMatch[0], 10) : null;
+      const variations = [
+        strGoal,
+        strGoal.replace(/\s+/g, '').toUpperCase(),
+        num !== null ? `MT ${num}` : null,
+        num !== null ? `MT ${String(num).padStart(2, '0')}` : null,
+        num !== null ? `MT${String(num).padStart(2, '0')}` : null,
+        num !== null ? `MT${num}` : null,
+      ].filter(Boolean);
+
+      targetGoal = await prisma.educationalGoal.findFirst({
+        where: {
+          goal_code: { in: variations },
+          age_group: ageGroupInfo.dbKey,
+          deleted_at: null,
         },
       });
     }
+
+    if (targetGoal) {
+      const updateData = { updated_at: new Date() };
+      if (data.title !== undefined) updateData.title = data.title?.trim();
+      if (data.indicatorCode !== undefined) updateData.indicator_code = data.indicatorCode?.trim() || null;
+      if (data.domain) updateData.domain = data.domain;
+
+      await prisma.educationalGoal.update({
+        where: { goal_id: targetGoal.goal_id },
+        data: updateData,
+      });
+    }
+
     return { success: true, goal: { id: goalId, ...data } };
   }
 
@@ -888,18 +954,46 @@ class CurriculumService {
    * Delete educational goal item from PostgreSQL
    */
   async deleteGoal({ year = '2026–2027', ageGroup = 'nhatre', goalId }) {
+    const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     let targetGoal = null;
-    if (!isNaN(Number(goalId))) {
-      targetGoal = await prisma.educationalGoal.findFirst({ where: { goal_id: BigInt(goalId) } });
+    const strGoal = String(goalId || '').trim();
+
+    if (/^\d+$/.test(strGoal)) {
+      targetGoal = await prisma.educationalGoal.findFirst({
+        where: { goal_id: BigInt(strGoal), deleted_at: null },
+      });
+    } else if (isUuid(strGoal)) {
+      targetGoal = await prisma.educationalGoal.findFirst({
+        where: { public_id: strGoal, deleted_at: null },
+      });
     } else {
-      targetGoal = await prisma.educationalGoal.findFirst({ where: { public_id: String(goalId) } });
+      const numMatch = strGoal.match(/\d+/);
+      const num = numMatch ? parseInt(numMatch[0], 10) : null;
+      const variations = [
+        strGoal,
+        strGoal.replace(/\s+/g, '').toUpperCase(),
+        num !== null ? `MT ${num}` : null,
+        num !== null ? `MT ${String(num).padStart(2, '0')}` : null,
+        num !== null ? `MT${String(num).padStart(2, '0')}` : null,
+        num !== null ? `MT${num}` : null,
+      ].filter(Boolean);
+
+      targetGoal = await prisma.educationalGoal.findFirst({
+        where: {
+          goal_code: { in: variations },
+          age_group: ageGroupInfo.dbKey,
+          deleted_at: null,
+        },
+      });
     }
+
     if (targetGoal) {
       await prisma.educationalGoal.update({
         where: { goal_id: targetGoal.goal_id },
         data: { deleted_at: new Date() },
       });
     }
+
     return { success: true, goalId };
   }
 

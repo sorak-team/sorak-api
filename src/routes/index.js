@@ -26,6 +26,7 @@ router.use('/curriculum', curriculumRouter);
 router.use('/planning', planningRouter);
 router.use('/attendance', attendanceRouter);
 router.use('/health', healthRouter);
+router.use('/student-health', healthRouter);
 router.use('/upload', uploadRouter);
 router.use('/assessment', assessmentRouter);
 router.use('/good-behavior', goodBehaviorRouter);

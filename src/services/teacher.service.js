@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import prisma from '../config/prisma.js';
-import { BadRequest, NotFound, Conflict } from '../utils/http-error.js';
+import { BadRequest, NotFound, Conflict, Forbidden } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
 
 export class TeacherService {
@@ -9,20 +9,24 @@ export class TeacherService {
    * Rejects numeric sequence IDs to prevent enumeration.
    */
   _parseId(id) {
+    if (!id) return { public_id: '00000000-0000-0000-0000-000000000000' };
     const str = String(id).trim();
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
     if (isUuid) return { public_id: str };
-    if (/^[A-Za-z0-9_-]+$/.test(str) && !/^\d+$/.test(str)) return { employee_code: str };
-    return { public_id: '00000000-0000-0000-0000-000000000000' };
+    if (/^\d+$/.test(str)) return { teacher_id: BigInt(str) };
+    return { employee_code: str };
   }
 
   /**
-   * Helper to parse class identifier (uuid only)
+   * Helper to parse class identifier (uuid or numeric class_id)
    */
   _parseClassId(id) {
+    if (!id) return { public_id: '00000000-0000-0000-0000-000000000000' };
     const str = String(id).trim();
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-    return { public_id: isUuid ? str : '00000000-0000-0000-0000-000000000000' };
+    if (isUuid) return { public_id: str };
+    if (/^\d+$/.test(str)) return { class_id: BigInt(str) };
+    return { name: str };
   }
 
   /**
@@ -172,7 +176,6 @@ export class TeacherService {
         className: tc.class.name,
         roomNumber: tc.class.room_number,
         schoolYearName: tc.class.school_year?.name,
-        isPrimary: tc.is_primary,
         assignedAt: tc.assigned_at,
       })),
     }));
@@ -265,7 +268,6 @@ export class TeacherService {
           roomNumber: tc.class.room_number,
           ageGroup: tc.class.age_group,
           schoolYear: tc.class.school_year?.name,
-          isPrimary: tc.is_primary,
           assignedAt: tc.assigned_at,
         })),
       assignmentHistory: teacher.teacher_classes.map((tc) => ({
@@ -273,9 +275,9 @@ export class TeacherService {
         classId: tc.class.public_id || tc.class.class_id.toString(),
         className: tc.class.name,
         schoolYear: tc.class.school_year?.name,
-        isPrimary: tc.is_primary,
         assignedAt: tc.assigned_at,
         leftAt: tc.left_at,
+        leaveReason: tc.leave_reason || null,
         isActive: tc.left_at === null,
       })),
     };
@@ -355,6 +357,24 @@ export class TeacherService {
       throw new Conflict(`Số CCCD '${data.citizenId}' đã được đăng ký bởi giáo viên khác`);
     }
 
+    if (data.phone && data.phone.trim()) {
+      const phoneConflict = await prisma.teacher.findFirst({
+        where: { phone: data.phone.trim(), deleted_at: null },
+      });
+      if (phoneConflict) {
+        throw new Conflict(`Số điện thoại '${data.phone.trim()}' đã được đăng ký bởi giáo viên khác (${phoneConflict.full_name})`);
+      }
+    }
+
+    if (data.email && data.email.trim()) {
+      const emailConflict = await prisma.teacher.findFirst({
+        where: { email: { equals: data.email.trim(), mode: 'insensitive' }, deleted_at: null },
+      });
+      if (emailConflict) {
+        throw new Conflict(`Email '${data.email.trim()}' đã được đăng ký bởi giáo viên khác (${emailConflict.full_name})`);
+      }
+    }
+
     // 2. Create teacher profile (without auto-creating account)
     const createdTeacher = await prisma.$transaction(async (tx) => {
       const teacher = await tx.teacher.create({
@@ -386,7 +406,6 @@ export class TeacherService {
             data: {
               teacher_id: teacher.teacher_id,
               class_id: targetClass.class_id,
-              is_primary: !!data.isPrimary,
               assigned_at: new Date(),
             },
           });
@@ -407,11 +426,26 @@ export class TeacherService {
   /**
    * Update teacher profile
    */
-  async updateTeacher(id, data) {
+  async updateTeacher(id, data, currentUser = null) {
     const where = { ...this._parseId(id), deleted_at: null };
-    const teacher = await prisma.teacher.findFirst({ where });
+    const teacher = await prisma.teacher.findFirst({
+      where,
+      include: { account: true },
+    });
     if (!teacher) {
       throw new NotFound('Giáo viên không tồn tại trên hệ thống');
+    }
+
+    if (currentUser) {
+      const isSelf =
+        (teacher.account_id && currentUser.accountId && String(teacher.account_id) === String(currentUser.accountId)) ||
+        (teacher.public_id && currentUser.teacherId && teacher.public_id === currentUser.teacherId) ||
+        (currentUser.sub && (teacher.public_id === currentUser.sub || String(teacher.account_id) === String(currentUser.sub)));
+      if (isSelf) {
+        delete data.position;
+        delete data.role;
+        delete data.workStatus;
+      }
     }
 
     if (data.citizenId && data.citizenId !== teacher.citizen_id) {
@@ -423,6 +457,38 @@ export class TeacherService {
       }
     }
 
+    if (data.phone && data.phone.trim() && data.phone.trim() !== (teacher.phone || '').trim()) {
+      const conflict = await prisma.teacher.findFirst({
+        where: {
+          phone: data.phone.trim(),
+          teacher_id: { not: teacher.teacher_id },
+          deleted_at: null,
+        },
+      });
+      if (conflict) {
+        throw new Conflict(`Số điện thoại '${data.phone.trim()}' đã được sử dụng bởi giáo viên khác (${conflict.full_name})`);
+      }
+    }
+
+    if (data.email && data.email.trim() && data.email.trim().toLowerCase() !== (teacher.email || '').trim().toLowerCase()) {
+      const conflict = await prisma.teacher.findFirst({
+        where: {
+          email: { equals: data.email.trim(), mode: 'insensitive' },
+          teacher_id: { not: teacher.teacher_id },
+          deleted_at: null,
+        },
+      });
+      if (conflict) {
+        throw new Conflict(`Email '${data.email.trim()}' đã được sử dụng bởi giáo viên khác (${conflict.full_name})`);
+      }
+    }
+
+    const normWorkStatus = data.workStatus ? (
+      data.workStatus.toLowerCase() === 'resigned' ? 'RESIGNED' :
+      data.workStatus.toLowerCase() === 'on_leave' || data.workStatus.toLowerCase() === 'leave_of_absence' ? 'LEAVE_OF_ABSENCE' :
+      data.workStatus.toUpperCase()
+    ) : undefined;
+
     const teacherUpdate = {};
     if (data.fullName !== undefined) teacherUpdate.full_name = data.fullName;
     if (data.dateOfBirth !== undefined) teacherUpdate.date_of_birth = new Date(data.dateOfBirth);
@@ -433,14 +499,51 @@ export class TeacherService {
     if (data.avatarUrl !== undefined) teacherUpdate.avatar_url = data.avatarUrl || null;
     if (data.address !== undefined) teacherUpdate.address = data.address || null;
     if (data.position !== undefined) teacherUpdate.position = data.position || null;
-    if (data.workStatus !== undefined) teacherUpdate.work_status = data.workStatus;
+    if (normWorkStatus !== undefined) teacherUpdate.work_status = normWorkStatus;
     if (data.startDate !== undefined) teacherUpdate.start_date = new Date(data.startDate);
-    if (data.endDate !== undefined)
+    if (data.endDate !== undefined) {
       teacherUpdate.end_date = data.endDate ? new Date(data.endDate) : null;
+    } else if (normWorkStatus === 'RESIGNED' && !teacher.end_date) {
+      teacherUpdate.end_date = new Date();
+    }
 
-    await prisma.teacher.update({
-      where: { teacher_id: teacher.teacher_id },
-      data: teacherUpdate,
+    await prisma.$transaction(async (tx) => {
+      // 1. Update teacher profile
+      await tx.teacher.update({
+        where: { teacher_id: teacher.teacher_id },
+        data: teacherUpdate,
+      });
+
+      // 2. If status changes to LEAVE_OF_ABSENCE or RESIGNED -> terminate active class assignment (left_at = now, leave_reason = workStatus)
+      if (
+        normWorkStatus === 'LEAVE_OF_ABSENCE' ||
+        normWorkStatus === 'RESIGNED'
+      ) {
+        const activeAllocation = await tx.teacherClass.findFirst({
+          where: {
+            teacher_id: teacher.teacher_id,
+            left_at: null,
+          },
+        });
+        if (activeAllocation) {
+          await tx.teacherClass.update({
+            where: { id: activeAllocation.id },
+            data: {
+              left_at: new Date(),
+              leave_reason: normWorkStatus,
+            },
+          });
+        }
+      }
+
+      // 3. If status changes to RESIGNED -> lock user account (is_active = false)
+      const targetAccountId = teacher.account_id || teacher.account?.account_id;
+      if (normWorkStatus === 'RESIGNED' && targetAccountId) {
+        await tx.account.update({
+          where: { account_id: targetAccountId },
+          data: { is_active: false },
+        });
+      }
     });
 
     return this.getTeacherById(teacher.public_id || teacher.teacher_id.toString());
@@ -449,7 +552,7 @@ export class TeacherService {
   /**
    * Assign teacher to homeroom class
    */
-  async assignTeacherToClass(teacherId, { classId, isPrimary = false, assignedAt = new Date() }) {
+  async assignTeacherToClass(teacherId, { classId, assignedAt = new Date() } = {}) {
     const teacher = await prisma.teacher.findFirst({
       where: { ...this._parseId(teacherId), deleted_at: null },
     });
@@ -491,29 +594,10 @@ export class TeacherService {
       );
     }
 
-    // If isPrimary, check if class already has a primary teacher
-    if (isPrimary) {
-      const existingPrimary = await prisma.teacherClass.findFirst({
-        where: {
-          class_id: classRecord.class_id,
-          is_primary: true,
-          left_at: null,
-        },
-      });
-      if (existingPrimary) {
-        // Demote previous primary teacher to co-teacher
-        await prisma.teacherClass.update({
-          where: { id: existingPrimary.id },
-          data: { is_primary: false },
-        });
-      }
-    }
-
     const created = await prisma.teacherClass.create({
       data: {
         teacher_id: teacher.teacher_id,
         class_id: classRecord.class_id,
-        is_primary: isPrimary,
         assigned_at: new Date(assignedAt),
       },
       include: { class: true },
@@ -524,7 +608,6 @@ export class TeacherService {
       teacherId: teacher.public_id || teacher.teacher_id.toString(),
       classId: created.class.public_id || created.class_id.toString(),
       className: created.class.name,
-      isPrimary: created.is_primary,
       assignedAt: created.assigned_at,
     };
   }
@@ -540,6 +623,7 @@ export class TeacherService {
 
     const classRecord = await prisma.class.findFirst({
       where: { ...this._parseClassId(classId), deleted_at: null },
+      include: { school_year: true },
     });
     if (!classRecord) throw new NotFound('Lớp học không tồn tại');
 
@@ -554,21 +638,80 @@ export class TeacherService {
       throw new NotFound('Không tìm thấy bản ghi phân công lớp đang hoạt động');
     }
 
+    // Preserve assignment history by setting left_at and leave_reason
     await prisma.teacherClass.update({
       where: { id: active.id },
-      data: { left_at: new Date() },
+      data: {
+        left_at: new Date(),
+        leave_reason: 'REMOVED',
+      },
     });
 
-    return { success: true, message: 'Đã hoàn tất phân công giáo viên rời khỏi lớp học' };
+    return { success: true, message: 'Đã hoàn tất gỡ giáo viên khỏi lớp học' };
   }
 
   /**
    * Soft delete teacher
    */
-  async deleteTeacher(id) {
+  async deleteTeacher(id, currentUser = null) {
+    // 1. Query teacher existence
     const where = { ...this._parseId(id), deleted_at: null };
     const teacher = await prisma.teacher.findFirst({ where });
     if (!teacher) throw new NotFound('Giáo viên không tồn tại');
+
+    if (currentUser) {
+      const isSelf =
+        (teacher.account_id && currentUser.accountId && String(teacher.account_id) === String(currentUser.accountId)) ||
+        (teacher.public_id && currentUser.teacherId && teacher.public_id === currentUser.teacherId) ||
+        (currentUser.sub && (teacher.public_id === currentUser.sub || String(teacher.account_id) === String(currentUser.sub)));
+      if (isSelf) {
+        throw new Forbidden('Không thể tự xóa hồ sơ của chính mình');
+      }
+    }
+
+    // 2. Query related assignments and account-authored activities
+    const teacherData = await prisma.teacher.findUnique({
+      where: { teacher_id: teacher.teacher_id },
+      select: {
+        _count: {
+          select: {
+            teacher_classes: true,
+          },
+        },
+      },
+    });
+    const totalAssignments = teacherData?._count?.teacher_classes || 0;
+
+    let authoredCount = 0;
+    if (teacher.account_id) {
+      const accountData = await prisma.account.findUnique({
+        where: { account_id: teacher.account_id },
+        select: {
+          _count: {
+            select: {
+              attendances_checked_in: true,
+              attendances_checked_out: true,
+              health_assessments_recorded: true,
+              daily_assessments_evaluated: true,
+              monthly_assessments_evaluated: true,
+              semester_assessments_evaluated: true,
+              created_educational_activities: true,
+              created_sub_theme_activities: true,
+              sub_themes_created: true,
+            },
+          },
+        },
+      });
+      if (accountData?._count) {
+        authoredCount = Object.values(accountData._count).reduce((acc, c) => acc + (c || 0), 0);
+      }
+    }
+
+    if (totalAssignments > 0 || authoredCount > 0) {
+      throw new BadRequest(
+        'Không thể xóa giáo viên đã có dữ liệu phân công giảng dạy hoặc dữ liệu phát sinh trong hệ thống. Vui lòng chuyển trạng thái sang Nghỉ việc.'
+      );
+    }
 
     await prisma.$transaction(async (tx) => {
       // 1. Soft delete teacher
@@ -576,18 +719,10 @@ export class TeacherService {
         where: { teacher_id: teacher.teacher_id },
         data: {
           deleted_at: new Date(),
-          work_status: 'RESIGNED',
-          end_date: new Date(),
         },
       });
 
-      // 2. Terminate active class allocations
-      await tx.teacherClass.updateMany({
-        where: { teacher_id: teacher.teacher_id, left_at: null },
-        data: { left_at: new Date() },
-      });
-
-      // 3. Deactivate associated account if exists
+      // 2. Deactivate associated account if exists (BR-14(3), BR-24(3))
       if (teacher.account_id) {
         await tx.account.update({
           where: { account_id: teacher.account_id },

@@ -28,3 +28,40 @@ export const createSchoolYearSchema = Joi.object({
   colorTheme: Joi.string().optional(),
 });
 
+export const updateSchoolYearSchema = Joi.object({
+  name: Joi.string().trim().min(3).max(50).optional(),
+  startDate: Joi.date().iso().optional(),
+  semester1EndDate: Joi.date().iso().optional(),
+  endDate: Joi.date().iso().optional(),
+  status: Joi.string().valid('UPCOMING', 'ACTIVE', 'COMPLETED').optional(),
+  colorTheme: Joi.string().allow('', null).optional(),
+});
+
+export const querySchoolYearSchema = Joi.object({
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+  search: Joi.string().trim().allow('', null).optional(),
+  status: Joi.string().valid('ALL', 'UPCOMING', 'ACTIVE', 'COMPLETED').default('ALL'),
+});
+
+export const createHolidaySchema = Joi.object({
+  name: Joi.string().trim().min(1).max(100).required().messages({
+    'string.empty': 'Vui lòng nhập tên ngày nghỉ hoặc sự kiện',
+    'any.required': 'Vui lòng nhập tên ngày nghỉ hoặc sự kiện',
+  }),
+  startDate: Joi.date().iso().required().messages({
+    'date.base': 'Ngày bắt đầu không đúng định dạng ngày tháng (YYYY-MM-DD)',
+    'any.required': 'Vui lòng chọn ngày bắt đầu',
+  }),
+  endDate: Joi.date().iso().min(Joi.ref('startDate')).required().messages({
+    'date.base': 'Ngày kết thúc không đúng định dạng ngày tháng (YYYY-MM-DD)',
+    'date.min': 'Ngày kết thúc không được trước ngày bắt đầu',
+    'any.required': 'Vui lòng chọn ngày kết thúc',
+  }),
+  isTeachingAllowed: Joi.boolean().default(false),
+  type: Joi.string().valid('HOLIDAY', 'EVENT').default('HOLIDAY'),
+  scope: Joi.string().allow('', null).optional(),
+  targetGrades: Joi.array().items(Joi.string()).default([]),
+  description: Joi.string().allow('', null).optional(),
+});
+

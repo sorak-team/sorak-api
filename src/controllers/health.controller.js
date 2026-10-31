@@ -16,8 +16,13 @@ class HealthController {
   async saveHealthRecords(req, res, next) {
       try {
         const { classId } = req.params;
-        const { date, records } = req.body;
-        const data = await healthService.saveHealthRecords({ classId, date, records });
+        const { date, records } = req.body || {};
+        const data = await healthService.saveHealthRecords({
+          classId,
+          date,
+          records,
+          recordedBy: req.user?.sub || req.user?.accountId || req.user?.id,
+        });
         res.success(data);
       } catch (err) {
         next(err);
