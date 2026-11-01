@@ -692,7 +692,7 @@ class CurriculumService {
         deleted_at: null,
       },
       include: {
-        contents: { where: { deleted_at: null } },
+        contents: { where: { deleted_at: null }, orderBy: { content_id: 'asc' } },
       },
       orderBy: { goal_id: 'asc' },
     });
@@ -790,7 +790,7 @@ class CurriculumService {
         deleted_at: null,
       },
       include: {
-        contents: { where: { deleted_at: null } },
+        contents: { where: { deleted_at: null }, orderBy: { content_id: 'asc' } },
       },
     });
 
@@ -864,22 +864,58 @@ class CurriculumService {
 
     const gId = targetGoal.goal_id;
 
-    // Save newly added contents
-    if (Array.isArray(contents)) {
-      for (const item of contents) {
-        if (!item.id || isNaN(Number(item.id))) {
-          await prisma.educationalContent.create({
-            data: {
-              goal_id: gId,
-              title: item.title,
-            },
+    // Get current active contents in DB
+    const currentDbContents = await prisma.educationalContent.findMany({
+      where: { goal_id: gId, deleted_at: null },
+      orderBy: { content_id: 'asc' },
+    });
+
+    const receivedContents = Array.isArray(contents) ? contents : [];
+    const keptDbContentIds = new Set();
+
+    for (const item of receivedContents) {
+      const title = item.title?.trim();
+      if (!title) continue;
+
+      const itemIdStr = item.id ? String(item.id).trim() : '';
+      const matchingDb = currentDbContents.find((c) => {
+        if (!itemIdStr) return false;
+        if (c.public_id && c.public_id.toLowerCase() === itemIdStr.toLowerCase()) return true;
+        if (c.content_id.toString() === itemIdStr) return true;
+        return false;
+      });
+
+      if (matchingDb) {
+        keptDbContentIds.add(matchingDb.content_id.toString());
+        if (matchingDb.title !== title) {
+          await prisma.educationalContent.update({
+            where: { content_id: matchingDb.content_id },
+            data: { title },
           });
         }
+      } else {
+        await prisma.educationalContent.create({
+          data: {
+            goal_id: gId,
+            title,
+          },
+        });
+      }
+    }
+
+    // Soft-delete removed contents
+    for (const c of currentDbContents) {
+      if (!keptDbContentIds.has(c.content_id.toString())) {
+        await prisma.educationalContent.update({
+          where: { content_id: c.content_id },
+          data: { deleted_at: new Date() },
+        });
       }
     }
 
     const updated = await prisma.educationalContent.findMany({
       where: { goal_id: gId, deleted_at: null },
+      orderBy: { content_id: 'asc' },
     });
 
     return {

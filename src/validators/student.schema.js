@@ -17,6 +17,23 @@ const parentItemSchema = Joi.object({
       'string.pattern.base': 'Số điện thoại phụ huynh phải từ 9 đến 15 chữ số',
       'any.required': 'Số điện thoại phụ huynh là bắt buộc',
     }),
+  citizenId: Joi.string()
+    .trim()
+    .pattern(/^[0-9]{9,12}$/)
+    .allow('', null)
+    .optional()
+    .messages({
+      'string.pattern.base': 'Số CCCD phải có từ 9 đến 12 chữ số',
+    }),
+  citizen_id: Joi.string()
+    .trim()
+    .pattern(/^[0-9]{9,12}$/)
+    .allow('', null)
+    .optional(),
+  id: Joi.any().optional(),
+  publicId: Joi.any().optional(),
+  avatarUrl: Joi.any().optional(),
+  isPrimary: Joi.any().optional(),
 });
 
 export const createStudentSchema = Joi.object({
@@ -153,5 +170,18 @@ export const updateParentSchema = Joi.object({
   phone: Joi.string()
     .trim()
     .pattern(/^[0-9]{9,15}$/)
+    .optional(),
+  citizenId: Joi.string()
+    .trim()
+    .pattern(/^[0-9]{9,12}$/)
+    .allow('', null)
+    .optional()
+    .messages({
+      'string.pattern.base': 'Số CCCD phải có từ 9 đến 12 chữ số',
+    }),
+  citizen_id: Joi.string()
+    .trim()
+    .pattern(/^[0-9]{9,12}$/)
+    .allow('', null)
     .optional(),
 });
