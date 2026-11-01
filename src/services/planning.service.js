@@ -1,6 +1,7 @@
 import prisma from '../config/prisma.js';
 import { BadRequest, NotFound } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
+import { cleanGoalTitle } from '../utils/goal-sanitizer.js';
 
 const DAY_MAP_TO_ENUM = {
   T2: 'MONDAY',
@@ -1536,7 +1537,7 @@ class PlanningService {
     const formatGoal = (g) => ({
       id: g.public_id || g.goal_id.toString(),
       code: g.goal_code + (g.indicator_code ? ` (${g.indicator_code})` : ''),
-      title: g.title,
+      title: cleanGoalTitle(g.goal_code, g.title, targetClass.age_group),
       domain: g.domain,
       domainLabel: DOMAIN_LABELS[g.domain] || g.domain,
       contents: (g.contents || []).map((c) => ({
