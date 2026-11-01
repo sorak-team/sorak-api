@@ -1,6 +1,7 @@
 import prisma from '../config/prisma.js';
 import { BadRequest, NotFound } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
+import { cleanGoalTitle } from '../utils/goal-sanitizer.js';
 
 // Pedagogical Age Group configurations
 const AGE_GROUPS = [
@@ -712,7 +713,7 @@ class CurriculumService {
           id: g.public_id || g.goal_id.toString(),
           code: g.goal_code,
           indicatorCode: g.indicator_code || '',
-          title: g.title,
+          title: cleanGoalTitle(g.goal_code, g.title, ageGroupInfo.dbKey),
           type: 'Mục tiêu học tập',
           contentsCount: g.contents.length,
           contents: (g.contents || []).map((c) => ({
@@ -812,7 +813,7 @@ class CurriculumService {
       id: g.public_id || g.goal_id.toString(),
       code: g.goal_code,
       indicatorCode: g.indicator_code || '',
-      title: g.title,
+      title: cleanGoalTitle(g.goal_code, g.title, ageGroupInfo.dbKey),
       domain: g.domain,
       contentsCount: g.contents.length,
     }));
@@ -832,7 +833,7 @@ class CurriculumService {
         id: dbGoal.public_id || dbGoal.goal_id.toString(),
         code: dbGoal.goal_code,
         indicatorCode: dbGoal.indicator_code || '',
-        title: dbGoal.title,
+        title: cleanGoalTitle(dbGoal.goal_code, dbGoal.title, ageGroupInfo.dbKey),
         domain: dbGoal.domain,
         contentsCount: contents.length,
       },
