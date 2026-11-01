@@ -847,6 +847,16 @@ export class ClassService {
       where,
       orderBy: { student_code: 'asc' },
       include: {
+        account: {
+          select: {
+            account_id: true,
+            public_id: true,
+            username: true,
+            role: true,
+            is_active: true,
+            deleted_at: true,
+          },
+        },
         student_enrollments: {
           include: {
             class: {
@@ -870,6 +880,9 @@ export class ClassService {
       }
 
       const suitable = this._calculateSuitableGrade(s.date_of_birth);
+      const isAccountLinked = Boolean(
+        s.account_id && s.account && !s.account.deleted_at && s.account.is_active
+      );
 
       // Previous class lookup (Must display the class from the previous school year, e.g. 2025-2026 for 2026-2027)
       let previousClass = null;
@@ -947,6 +960,9 @@ export class ClassService {
           `https://api.dicebear.com/10.x/critters/svg?seed=${encodeURIComponent(s.student_code || s.full_name)}&backgroundColor=ff2e63,00c2a8,ffb300,3d5afe,8e24aa,00e676`,
         dateOfBirth: s.date_of_birth,
         gender: s.gender,
+        hasAccount: isAccountLinked,
+        accountId: s.account_id ? s.account_id.toString() : null,
+        accountUsername: s.account?.username || null,
         suitableGrade: suitable.label,
         suitableAgeGroup: suitable.key,
         previousClass,
@@ -1001,11 +1017,30 @@ export class ClassService {
         }),
         deleted_at: null,
       },
-      select: { student_id: true, public_id: true, full_name: true },
+      select: {
+        student_id: true,
+        public_id: true,
+        full_name: true,
+        account_id: true,
+        account: {
+          select: { account_id: true, is_active: true, deleted_at: true },
+        },
+      },
     });
 
     if (students.length === 0) {
       throw new BadRequest('Không tìm thấy học sinh hợp lệ để thêm vào lớp');
+    }
+
+    // Check if any student does NOT have a linked active account
+    const unlinkedStudents = students.filter(
+      (s) => !s.account_id || !s.account || s.account.deleted_at !== null || !s.account.is_active
+    );
+    if (unlinkedStudents.length > 0) {
+      const unlinkedNames = unlinkedStudents.map((s) => s.full_name).join(', ');
+      throw new BadRequest(
+        `Hồ sơ học sinh (${unlinkedNames}) chưa được liên kết tài khoản. Vui lòng liên kết tài khoản cho học sinh trước khi phân lớp.`
+      );
     }
 
     // Check if any student already has an active class in this school year

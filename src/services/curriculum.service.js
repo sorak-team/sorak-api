@@ -129,23 +129,60 @@ class CurriculumService {
   }
 
   /**
+   * Dynamically resolve SchoolYear record matching year string (e.g. '2026-2027')
+   */
+  async resolveSchoolYear(yearStr) {
+    const raw = (yearStr || '2026-2027').trim();
+    const cleanYear = raw.replace('–', '-');
+    const parts = cleanYear.match(/\d{4}/g);
+
+    let sy = await prisma.schoolYear.findFirst({
+      where: {
+        OR: [
+          { name: { contains: cleanYear } },
+          { name: { contains: cleanYear.replace('-', '–') } },
+        ],
+        deleted_at: null,
+      },
+      orderBy: { start_date: 'desc' },
+    });
+
+    if (!sy && parts && parts.length > 0) {
+      sy = await prisma.schoolYear.findFirst({
+        where: {
+          start_date: {
+            gte: new Date(`${parts[0]}-01-01T00:00:00.000Z`),
+            lte: new Date(`${parts[0]}-12-31T23:59:59.999Z`),
+          },
+          deleted_at: null,
+        },
+        orderBy: { start_date: 'desc' },
+      });
+    }
+
+    if (!sy) {
+      sy = await prisma.schoolYear.findFirst({
+        where: { deleted_at: null },
+        orderBy: { start_date: 'desc' },
+      });
+    }
+
+    return sy;
+  }
+
+  /**
    * Get detailed Theme Set for a specific year and age-group from live PostgreSQL
    */
   async getThemeSetDetail({ year = '2026–2027', ageGroup = 'nhatre' }) {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     const normalizedYear = (year || '2026–2027').replace('-', '–');
+    const schoolYear = await this.resolveSchoolYear(year);
+    const schoolYearId = schoolYear?.school_year_id;
 
     // Query themes directly using Prisma Relation Filter (single DB query)
     const dbThemes = await prisma.curriculumTheme.findMany({
       where: {
-        school_year: {
-          OR: [
-            { name: { contains: normalizedYear } },
-            { name: { contains: normalizedYear.replace('–', '-') } },
-            { school_year_id: 1n },
-          ],
-          deleted_at: null,
-        },
+        ...(schoolYearId ? { school_year_id: schoolYearId } : {}),
         age_group: ageGroupInfo.dbKey,
         deleted_at: null,
       },
@@ -158,9 +195,6 @@ class CurriculumService {
       },
       orderBy: { start_date: 'asc' },
     });
-
-    const schoolYear = dbThemes[0]?.school_year;
-    const schoolYearId = schoolYear?.school_year_id || 1n;
 
     if (dbThemes && dbThemes.length > 0) {
       const mappedThemes = dbThemes.map((t, idx) => ({
@@ -188,7 +222,7 @@ class CurriculumService {
       return {
         info: {
           year: normalizedYear,
-          schoolYearId: schoolYearId.toString(),
+          schoolYearId: schoolYearId?.toString() || '1',
           startDate: schoolYear?.start_date ? schoolYear.start_date.toISOString().slice(0, 10) : '2026-09-05',
           endDate: schoolYear?.end_date ? schoolYear.end_date.toISOString().slice(0, 10) : '2027-05-31',
           ageGroup: ageGroupInfo.key,
@@ -210,7 +244,7 @@ class CurriculumService {
     return {
       info: {
         year: normalizedYear,
-        schoolYearId: schoolYearId.toString(),
+        schoolYearId: schoolYearId?.toString() || '1',
         startDate: schoolYear?.start_date ? schoolYear.start_date.toISOString().slice(0, 10) : '2026-09-05',
         endDate: schoolYear?.end_date ? schoolYear.end_date.toISOString().slice(0, 10) : '2027-05-31',
         ageGroup: ageGroupInfo.key,
@@ -234,9 +268,12 @@ class CurriculumService {
    */
   async updateThemeSetStatus({ year = '2026–2027', ageGroup = 'nhatre', status = 'DRAFT' }) {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
+    const schoolYear = await this.resolveSchoolYear(year);
+    const schoolYearId = schoolYear?.school_year_id;
+
     await prisma.curriculumTheme.updateMany({
       where: {
-        school_year_id: 1n,
+        ...(schoolYearId ? { school_year_id: schoolYearId } : {}),
         age_group: ageGroupInfo.dbKey,
         deleted_at: null,
       },
@@ -255,18 +292,15 @@ class CurriculumService {
   async updateThemeSetDetail({ year = '2026–2027', ageGroup = 'nhatre', themes = [], theme, note }) {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     const normalizedYear = (year || '2026–2027').replace('-', '–');
+    const schoolYear = await this.resolveSchoolYear(year);
+    const schoolYearId = schoolYear?.school_year_id || 1n;
+    const syStart = schoolYear?.start_date ? schoolYear.start_date.toISOString().slice(0, 10) : '2026-09-01';
+    const syEnd = schoolYear?.end_date ? schoolYear.end_date.toISOString().slice(0, 10) : '2027-05-31';
 
     // 1. Fetch themes and associated school year in a single DB query using Relation Filter
     const dbThemes = await prisma.curriculumTheme.findMany({
       where: {
-        school_year: {
-          OR: [
-            { name: { contains: normalizedYear } },
-            { name: { contains: normalizedYear.replace('–', '-') } },
-            { school_year_id: 1n },
-          ],
-          deleted_at: null,
-        },
+        school_year_id: schoolYearId,
         age_group: ageGroupInfo.dbKey,
         deleted_at: null,
       },
@@ -279,11 +313,6 @@ class CurriculumService {
       },
       orderBy: { start_date: 'asc' },
     });
-
-    const schoolYear = dbThemes[0]?.school_year;
-    const schoolYearId = schoolYear?.school_year_id || 1n;
-    const syStart = schoolYear?.start_date ? schoolYear.start_date.toISOString().slice(0, 10) : '2026-09-01';
-    const syEnd = schoolYear?.end_date ? schoolYear.end_date.toISOString().slice(0, 10) : '2027-05-31';
 
     let targetThemes = [];
     if (Array.isArray(themes) && themes.length > 0) {
@@ -653,10 +682,12 @@ class CurriculumService {
   async getGoalBankDetail({ year = '2026–2027', ageGroup = 'nhatre' }) {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     const normalizedYear = (year || '2026–2027').replace('-', '–');
+    const schoolYear = await this.resolveSchoolYear(year);
+    const schoolYearId = schoolYear?.school_year_id;
 
     const dbGoals = await prisma.educationalGoal.findMany({
       where: {
-        school_year_id: 1n,
+        ...(schoolYearId ? { school_year_id: schoolYearId } : {}),
         age_group: ageGroupInfo.dbKey,
         deleted_at: null,
       },
@@ -738,6 +769,8 @@ class CurriculumService {
   async getSingleGoalDetail({ year = '2026–2027', ageGroup = 'nhatre', goalId }) {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     const normalizedYear = (year || '2026–2027').replace('-', '–');
+    const schoolYear = await this.resolveSchoolYear(year);
+    const schoolYearId = schoolYear?.school_year_id;
 
     let gId = null;
     const isUuid = typeof goalId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(goalId);
@@ -752,7 +785,7 @@ class CurriculumService {
           isUuid ? { public_id: goalId } : undefined,
           { goal_code: goalId },
         ].filter(Boolean),
-        school_year_id: 1n,
+        ...(schoolYearId ? { school_year_id: schoolYearId } : {}),
         age_group: ageGroupInfo.dbKey,
         deleted_at: null,
       },
@@ -767,7 +800,7 @@ class CurriculumService {
 
     const allDbGoals = await prisma.educationalGoal.findMany({
       where: {
-        school_year_id: 1n,
+        ...(schoolYearId ? { school_year_id: schoolYearId } : {}),
         age_group: ageGroupInfo.dbKey,
         deleted_at: null,
       },
@@ -862,9 +895,12 @@ class CurriculumService {
    */
   async createGoal({ year = '2026–2027', ageGroup = 'nhatre', data = {} }) {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
+    const schoolYear = await this.resolveSchoolYear(year);
+    const schoolYearId = schoolYear?.school_year_id || 1n;
+
     const totalExisting = await prisma.educationalGoal.count({
       where: {
-        school_year_id: 1n,
+        school_year_id: schoolYearId,
         age_group: ageGroupInfo.dbKey,
         deleted_at: null,
       },
@@ -874,7 +910,7 @@ class CurriculumService {
 
     const created = await prisma.educationalGoal.create({
       data: {
-        school_year_id: 1n,
+        school_year_id: schoolYearId,
         age_group: ageGroupInfo.dbKey,
         goal_code: goalCode,
         indicator_code: data.indicatorCode?.trim() || null,
