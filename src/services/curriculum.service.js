@@ -714,6 +714,8 @@ class CurriculumService {
           code: g.goal_code,
           indicatorCode: g.indicator_code || '',
           title: cleanGoalTitle(g.goal_code, g.title, ageGroupInfo.dbKey),
+          domain: g.domain,
+          domainLabel: target.domainLabel,
           type: 'Mục tiêu học tập',
           contentsCount: g.contents.length,
           contents: (g.contents || []).map((c) => ({
@@ -823,6 +825,14 @@ class CurriculumService {
       title: c.title,
     }));
 
+    const domainLabels = {
+      PHYSICAL: 'Phát triển thể chất',
+      COGNITIVE: 'Phát triển nhận thức',
+      LANGUAGE: 'Phát triển ngôn ngữ',
+      SOCIO_EMOTIONAL: 'Phát triển tình cảm - KNXH',
+      AESTHETIC: 'Phát triển thẩm mỹ',
+    };
+
     return {
       info: {
         year: normalizedYear,
@@ -835,6 +845,7 @@ class CurriculumService {
         indicatorCode: dbGoal.indicator_code || '',
         title: cleanGoalTitle(dbGoal.goal_code, dbGoal.title, ageGroupInfo.dbKey),
         domain: dbGoal.domain,
+        domainLabel: domainLabels[dbGoal.domain] || 'Phát triển thể chất',
         contentsCount: contents.length,
       },
       allGoals,
