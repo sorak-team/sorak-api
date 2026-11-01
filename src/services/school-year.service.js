@@ -116,66 +116,89 @@ export class SchoolYearService {
     }
 
   async getSchoolYearById(id) {
-      const bigId = BigInt(id);
-      const item = await prisma.schoolYear.findFirst({
+    let item = null;
+    const strId = String(id || '').trim();
+
+    const classSelect = {
+      where: { deleted_at: null },
+      select: {
+        class_id: true,
+        public_id: true,
+        name: true,
+        age_group: true,
+        room_number: true,
+        description: true,
+      },
+      orderBy: { name: 'asc' },
+    };
+
+    if (/^\d+$/.test(strId)) {
+      item = await prisma.schoolYear.findFirst({
+        where: { school_year_id: BigInt(strId), deleted_at: null },
+        include: { classes: classSelect },
+      });
+    } else if (strId.toLowerCase() === 'active') {
+      item = await prisma.schoolYear.findFirst({
+        where: { status: 'ACTIVE', deleted_at: null },
+        include: { classes: classSelect },
+      });
+    } else {
+      const normalizedYear = strId.replace('-', '–');
+      item = await prisma.schoolYear.findFirst({
         where: {
-          school_year_id: bigId,
+          OR: [
+            { name: { contains: strId, mode: 'insensitive' } },
+            { name: { contains: normalizedYear, mode: 'insensitive' } },
+          ],
           deleted_at: null,
         },
-        include: {
-          classes: {
-            where: { deleted_at: null },
-            select: {
-              class_id: true,
-              public_id: true,
-              name: true,
-              age_group: true,
-              room_number: true,
-              max_capacity: true,
-              description: true,
-            },
-            orderBy: { name: 'asc' },
-          },
+        include: { classes: classSelect },
+      });
+    }
+
+    if (!item) {
+      throw NotFound('Không tìm thấy năm học');
+    }
+
+    const bigId = item.school_year_id;
+
+    const [attendanceCount, themeCount, goalCount] = await Promise.all([
+      prisma.attendance.count({
+        where: {
+          class: { school_year_id: bigId, deleted_at: null },
+          deleted_at: null,
         },
-      });
-  
-      if (!item) {
-        throw NotFound('Không tìm thấy năm học');
-      }
-  
-      const [attendanceCount, themeCount, goalCount] = await Promise.all([
-        prisma.attendance.count({
+      }),
+      prisma.curriculumTheme.count({
+        where: { school_year_id: bigId, deleted_at: null },
+      }),
+      prisma.educationalGoal.count({
+        where: { school_year_id: bigId, deleted_at: null },
+      }),
+    ]);
+
+    const classIds = item.classes.map((c) => c.class_id);
+
+    // Real enrolled students in this school year
+    const enrolledStudentsCount = classIds.length > 0
+      ? await prisma.studentEnrollment.count({
           where: {
-            class: { school_year_id: bigId, deleted_at: null },
-            deleted_at: null,
+            class_id: { in: classIds },
+            status: 'ENROLLED',
+            left_at: null,
           },
-        }),
-        prisma.curriculumTheme.count({
-          where: { school_year_id: bigId, deleted_at: null },
-        }),
-        prisma.educationalGoal.count({
-          where: { school_year_id: bigId, deleted_at: null },
-        }),
-      ]);
-  
-      
-      const classIds = item.classes.map((c) => c.class_id);
+        })
+      : 0;
 
-      // Real enrolled students in this school year
-      const enrolledStudentsCount = classIds.length > 0
-        ? await prisma.studentEnrollment.count({
-            where: {
-              class_id: { in: classIds },
-              status: 'ENROLLED',
-              left_at: null,
-            },
-          })
-        : 0;
-
-      // Real active teachers in school
-      const totalTeachersCount = await prisma.teacher.count({
-        where: { work_status: 'WORKING', deleted_at: null },
-      });
+    // Real active teachers in school (strictly teaching staff, excluding Principal/BGH/non-teaching)
+    const allActiveStaff = await prisma.teacher.findMany({
+      where: { work_status: 'WORKING', deleted_at: null },
+    });
+    const activeTeachingStaff = allActiveStaff.filter((t) => {
+      const pos = (t.position || '').trim().toLowerCase();
+      return !pos.includes('hiệu trưởng') && !pos.includes('bgh') && (pos.includes('giáo viên') || !pos);
+    });
+    const totalTeachersCount = activeTeachingStaff.length;
 
       // Teachers assigned to at least one class in this school year
       const assignedTeacherRecords = classIds.length > 0

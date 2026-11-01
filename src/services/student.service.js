@@ -472,8 +472,23 @@ export class StudentService {
           },
         });
   
-        // 2. Create Parents
+        // 2. Validate & Create Parents
         if (Array.isArray(parents) && parents.length > 0) {
+          const cccds = parents
+            .map((p) => (p.citizenId || p.citizen_id || '').trim())
+            .filter(Boolean);
+          if (new Set(cccds).size !== cccds.length) {
+            throw new BadRequest('Số CCCD của các phụ huynh/người giám hộ không được trùng nhau.');
+          }
+          for (const cccd of cccds) {
+            const existing = await prisma.parent.findFirst({
+              where: { citizen_id: cccd, deleted_at: null },
+            });
+            if (existing) {
+              throw new BadRequest(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
+            }
+          }
+
           for (const p of parents) {
             if (p.fullName && p.fullName.trim()) {
               await tx.parent.create({
@@ -482,6 +497,7 @@ export class StudentService {
                   full_name: p.fullName.trim(),
                   relationship: p.relationship || 'Bố',
                   phone: p.phone || '',
+                  citizen_id: (p.citizenId || p.citizen_id || '').trim() || null,
                 },
               });
             }
@@ -638,6 +654,25 @@ export class StudentService {
       }
   
       if (Array.isArray(payload.parents)) {
+        const cccds = payload.parents
+          .map((p) => (p.citizenId || p.citizen_id || '').trim())
+          .filter(Boolean);
+        if (new Set(cccds).size !== cccds.length) {
+          throw new BadRequest('Số CCCD của các phụ huynh/người giám hộ không được trùng nhau.');
+        }
+        for (const cccd of cccds) {
+          const existing = await prisma.parent.findFirst({
+            where: {
+              citizen_id: cccd,
+              student_id: { not: student.student_id },
+              deleted_at: null,
+            },
+          });
+          if (existing) {
+            throw new BadRequest(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
+          }
+        }
+
         await prisma.$transaction(async (tx) => {
           await tx.parent.deleteMany({
             where: { student_id: student.student_id },
@@ -650,6 +685,7 @@ export class StudentService {
                   full_name: p.fullName.trim(),
                   relationship: p.relationship || 'Bố',
                   phone: p.phone || '',
+                  citizen_id: (p.citizenId || p.citizen_id || '').trim() || null,
                 },
               });
             }
@@ -757,23 +793,41 @@ export class StudentService {
         where: { ...this._parseId(studentId), deleted_at: null },
       });
       if (!student) throw new NotFound('Hồ sơ học sinh không tồn tại');
-  
+
+      const cccd = (parentData.citizenId || parentData.citizen_id || '').trim();
+      if (cccd) {
+        const existingInStudent = await prisma.parent.findFirst({
+          where: { student_id: student.student_id, citizen_id: cccd, deleted_at: null },
+        });
+        if (existingInStudent) {
+          throw new BadRequest('Số CCCD đã tồn tại trong danh sách phụ huynh của học sinh này.');
+        }
+        const existingOther = await prisma.parent.findFirst({
+          where: { student_id: { not: student.student_id }, citizen_id: cccd, deleted_at: null },
+        });
+        if (existingOther) {
+          throw new BadRequest(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
+        }
+      }
+
       const created = await prisma.parent.create({
         data: {
           student_id: student.student_id,
           full_name: parentData.fullName,
           relationship: parentData.relationship,
           phone: parentData.phone,
+          citizen_id: cccd || null,
           avatar_url: parentData.avatarUrl || null,
         },
       });
-  
+
       return {
         id: created.parent_id.toString(),
         publicId: created.public_id,
         fullName: created.full_name,
         relationship: created.relationship,
         phone: created.phone,
+        citizenId: created.citizen_id || '',
         avatarUrl: created.avatar_url || null,
       };
     }
@@ -783,24 +837,37 @@ export class StudentService {
         where: { ...this._parseParentId(parentId), deleted_at: null },
       });
       if (!parent) throw new NotFound('Thông tin phụ huynh không tồn tại');
-  
+
       const updateData = {};
       if (parentData.fullName !== undefined) updateData.full_name = parentData.fullName;
       if (parentData.relationship !== undefined) updateData.relationship = parentData.relationship;
       if (parentData.phone !== undefined) updateData.phone = parentData.phone;
       if (parentData.avatarUrl !== undefined) updateData.avatar_url = parentData.avatarUrl || null;
-  
+      if (parentData.citizenId !== undefined || parentData.citizen_id !== undefined) {
+        const cccd = (parentData.citizenId !== undefined ? parentData.citizenId : parentData.citizen_id || '').trim();
+        if (cccd) {
+          const existing = await prisma.parent.findFirst({
+            where: { parent_id: { not: parent.parent_id }, citizen_id: cccd, deleted_at: null },
+          });
+          if (existing) {
+            throw new BadRequest(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
+          }
+        }
+        updateData.citizen_id = cccd || null;
+      }
+
       const updated = await prisma.parent.update({
         where: { parent_id: parent.parent_id },
         data: updateData,
       });
-  
+
       return {
         id: updated.public_id || updated.parent_id.toString(),
         publicId: updated.public_id,
         fullName: updated.full_name,
         relationship: updated.relationship,
         phone: updated.phone,
+        citizenId: updated.citizen_id || '',
         avatarUrl: updated.avatar_url || null,
       };
     }
@@ -1002,6 +1069,7 @@ export class StudentService {
             fullName: primaryParent.full_name,
             relationship: primaryParent.relationship,
             phone: primaryParent.phone,
+            citizenId: primaryParent.citizen_id || '',
             isPrimary: true,
             avatarUrl: primaryParent.avatar_url || null,
           }
@@ -1012,6 +1080,7 @@ export class StudentService {
         fullName: p.full_name,
         relationship: p.relationship,
         phone: p.phone,
+        citizenId: p.citizen_id || '',
         isPrimary: p.is_primary || idx === 0,
         avatarUrl: p.avatar_url || null,
       })),
@@ -1065,6 +1134,7 @@ export class StudentService {
             fullName: primaryParent.full_name,
             relationship: primaryParent.relationship,
             phone: primaryParent.phone,
+            citizenId: primaryParent.citizen_id || '',
             isPrimary: true,
             avatarUrl: primaryParent.avatar_url || null,
           }
@@ -1095,6 +1165,7 @@ export class StudentService {
         fullName: p.full_name,
         relationship: p.relationship,
         phone: p.phone,
+        citizenId: p.citizen_id || '',
         isPrimary: idx === 0,
         avatarUrl: p.avatar_url || null,
       })),
