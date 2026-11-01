@@ -637,26 +637,81 @@ export class ClassService {
   }
 
   /**
-   * Calculate suitable grade based on date of birth
+   * Calculate age in months relative to a reference date (start of school year)
    */
-  _calculateSuitableGrade(dob) {
-    if (!dob) return { key: 'NHA_TRE', label: 'Nhà trẻ' };
-    const birthDate = new Date(dob);
-    const birthYear = birthDate.getFullYear();
-    // In Sorak system:
-    // Children born 2023-2025 -> Nhà trẻ (12–36+ tháng)
-    // Children born 2022 -> Mầm (3–4 tuổi)
-    // Children born 2021 -> Chồi (4–5 tuổi)
-    // Children born 2020 or earlier -> Lá (5–6 tuổi)
-    if (birthYear >= 2023) {
-      return { key: 'NHA_TRE', label: 'Nhà trẻ' };
-    } else if (birthYear === 2022) {
-      return { key: 'MAM', label: 'Mầm' };
-    } else if (birthYear === 2021) {
-      return { key: 'CHOI', label: 'Chồi' };
-    } else {
-      return { key: 'LA', label: 'Lá' };
+  _calculateAgeInMonths(dob, refDate) {
+    if (!dob) return null;
+    const birth = new Date(dob);
+    if (isNaN(birth.getTime())) return null;
+    const ref = refDate ? new Date(refDate) : new Date('2026-09-01');
+    let months = (ref.getFullYear() - birth.getFullYear()) * 12 + (ref.getMonth() - birth.getMonth());
+    if (ref.getDate() < birth.getDate()) {
+      months--;
     }
+    return Math.max(0, months);
+  }
+
+  /**
+   * Get matching grade based on exact age in months according to preschool regulations:
+   * - Nhà trẻ: Từ đủ 24 tháng đến dưới 36 tháng
+   * - Mầm: Từ đủ 36 tháng đến dưới 48 tháng
+   * - Chồi: Từ đủ 48 tháng đến dưới 60 tháng
+   * - Lá: Từ đủ 60 tháng đến dưới 72 tháng
+   */
+  _getGradeByAgeInMonths(months) {
+    if (months === null || months === undefined) return null;
+    if (months >= 24 && months < 36) {
+      return { key: 'NHA_TRE', label: 'Khối Nhà trẻ', minMonths: 24, maxMonths: 36 };
+    }
+    if (months >= 36 && months < 48) {
+      return { key: 'MAM', label: 'Khối Mầm', minMonths: 36, maxMonths: 48 };
+    }
+    if (months >= 48 && months < 60) {
+      return { key: 'CHOI', label: 'Khối Chồi', minMonths: 48, maxMonths: 60 };
+    }
+    if (months >= 60 && months < 72) {
+      return { key: 'LA', label: 'Khối Lá', minMonths: 60, maxMonths: 72 };
+    }
+    return null;
+  }
+
+  /**
+   * Check if student's age is eligible for the class age group
+   */
+  _isAgeEligible(dob, classAgeGroup, refDate) {
+    if (!dob || !classAgeGroup) return false;
+    const months = this._calculateAgeInMonths(dob, refDate);
+    if (months === null) return false;
+
+    const norm = String(classAgeGroup).toUpperCase().replace(/-/g, '_');
+    if (norm === 'NHA_TRE' || norm === 'NHATRE') {
+      return months >= 24 && months < 36;
+    }
+    if (norm === 'MAM') {
+      return months >= 36 && months < 48;
+    }
+    if (norm === 'CHOI') {
+      return months >= 48 && months < 60;
+    }
+    if (norm === 'LA') {
+      return months >= 60 && months < 72;
+    }
+    return true;
+  }
+
+  /**
+   * Calculate suitable grade based on date of birth relative to school year
+   */
+  _calculateSuitableGrade(dob, refDate) {
+    const months = this._calculateAgeInMonths(dob, refDate);
+    const grade = this._getGradeByAgeInMonths(months);
+    if (grade) {
+      return grade;
+    }
+    if (months !== null && months < 24) {
+      return { key: 'UNDER_AGE', label: 'Dưới 24 tháng', minMonths: 0, maxMonths: 24 };
+    }
+    return { key: 'OVER_AGE', label: 'Trên 72 tháng', minMonths: 72, maxMonths: 999 };
   }
 
   /**
@@ -879,7 +934,10 @@ export class ClassService {
         continue;
       }
 
-      const suitable = this._calculateSuitableGrade(s.date_of_birth);
+      const refDate = classRecord.school_year?.start_date || new Date('2026-09-01');
+      const ageInMonths = this._calculateAgeInMonths(s.date_of_birth, refDate);
+      const suitable = this._calculateSuitableGrade(s.date_of_birth, refDate);
+      const isAgeEligible = this._isAgeEligible(s.date_of_birth, classRecord.age_group, refDate);
       const isAccountLinked = Boolean(
         s.account_id && s.account && !s.account.deleted_at && s.account.is_active
       );
@@ -960,6 +1018,8 @@ export class ClassService {
           `https://api.dicebear.com/10.x/critters/svg?seed=${encodeURIComponent(s.student_code || s.full_name)}&backgroundColor=ff2e63,00c2a8,ffb300,3d5afe,8e24aa,00e676`,
         dateOfBirth: s.date_of_birth,
         gender: s.gender,
+        ageInMonths,
+        isAgeEligible,
         hasAccount: isAccountLinked,
         accountId: s.account_id ? s.account_id.toString() : null,
         accountUsername: s.account?.username || null,
@@ -1021,6 +1081,7 @@ export class ClassService {
         student_id: true,
         public_id: true,
         full_name: true,
+        date_of_birth: true,
         account_id: true,
         account: {
           select: { account_id: true, is_active: true, deleted_at: true },
@@ -1041,6 +1102,15 @@ export class ClassService {
       throw new BadRequest(
         `Hồ sơ học sinh (${unlinkedNames}) chưa được liên kết tài khoản. Vui lòng liên kết tài khoản cho học sinh trước khi phân lớp.`
       );
+    }
+
+    // Check if any student does NOT have suitable age for this class's age bracket
+    const refDate = classRecord.school_year?.start_date || new Date('2026-09-01');
+    const ineligibleStudents = students.filter(
+      (s) => !this._isAgeEligible(s.date_of_birth, classRecord.age_group, refDate)
+    );
+    if (ineligibleStudents.length > 0) {
+      throw new BadRequest('Độ tuổi học sinh không phù hợp với khối lớp được chọn.');
     }
 
     // Check if any student already has an active class in this school year

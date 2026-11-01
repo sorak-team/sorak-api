@@ -127,7 +127,7 @@ export class TeacherService {
             },
           },
           teacher_classes: {
-            where: { left_at: null },
+            orderBy: { assigned_at: 'desc' },
             include: {
               class: {
                 select: {
@@ -170,13 +170,25 @@ export class TeacherService {
             isActive: t.account.is_active,
           }
         : null,
-      assignedClasses: t.teacher_classes.map((tc) => ({
+      assignedClasses: t.teacher_classes
+        .filter((tc) => tc.left_at === null)
+        .map((tc) => ({
+          allocationId: tc.id.toString(),
+          classId: tc.class.public_id || tc.class.class_id.toString(),
+          className: tc.class.name,
+          roomNumber: tc.class.room_number,
+          schoolYearName: tc.class.school_year?.name,
+          assignedAt: tc.assigned_at,
+        })),
+      assignmentHistory: t.teacher_classes.map((tc) => ({
         allocationId: tc.id.toString(),
         classId: tc.class.public_id || tc.class.class_id.toString(),
         className: tc.class.name,
-        roomNumber: tc.class.room_number,
-        schoolYearName: tc.class.school_year?.name,
+        schoolYear: tc.class.school_year?.name,
         assignedAt: tc.assigned_at,
+        leftAt: tc.left_at,
+        leaveReason: tc.leave_reason || null,
+        isActive: tc.left_at === null,
       })),
     }));
 
