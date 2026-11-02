@@ -11,11 +11,23 @@ const getCookieOptions = () => ({
   maxAge: COOKIE_MAX_AGE,
 });
 
+export const isMobileClient = (req) => {
+  const platform = String(
+    req.headers['x-client-platform'] ||
+    req.headers['x-platform'] ||
+    req.headers['x-client'] ||
+    req.query?.platform ||
+    ''
+  ).toLowerCase().trim();
+  return ['android', 'ios', 'mobile', 'react-native', 'flutter'].includes(platform);
+};
+
 export const login = async (req, res) => {
   const { username, identifier, password, role, captchaToken } = req.body;
   const loginUsername = (username || identifier || '').trim();
   const deviceInfo = req.headers['user-agent'];
   const ipAddress = req.ip || req.socket.remoteAddress;
+  const isMobile = isMobileClient(req);
 
   const result = await authService.login({
     username: loginUsername,
@@ -25,6 +37,7 @@ export const login = async (req, res) => {
     captchaToken,
     deviceInfo,
     ipAddress,
+    isMobile,
   });
 
   // If account has 2FA enabled, return tempToken and masked email for OTP challenge
@@ -37,19 +50,28 @@ export const login = async (req, res) => {
     });
   }
 
-  // Set refresh token in secure httpOnly cookie
+  // Set refresh token in secure httpOnly cookie (for web browsers)
   res.cookie(REFRESH_COOKIE_NAME, result.refreshToken, getCookieOptions());
 
-  res.success({
+  const responseData = {
     user: result.user,
     accessToken: result.accessToken,
-  });
+  };
+
+  if (isMobile) {
+    responseData.refreshToken = result.refreshToken;
+    responseData.accessExpiresAt = result.accessExpiresAt;
+    responseData.sessionId = result.sessionId;
+  }
+
+  res.success(responseData);
 };
 
 export const verify2FA = async (req, res) => {
   const { tempToken, otp } = req.body;
   const deviceInfo = req.headers['user-agent'];
   const ipAddress = req.ip || req.socket.remoteAddress;
+  const isMobile = isMobileClient(req);
 
   const result = await authService.verify2FALogin({
     tempToken,
@@ -60,10 +82,18 @@ export const verify2FA = async (req, res) => {
 
   res.cookie(REFRESH_COOKIE_NAME, result.refreshToken, getCookieOptions());
 
-  res.success({
+  const responseData = {
     user: result.user,
     accessToken: result.accessToken,
-  });
+  };
+
+  if (isMobile) {
+    responseData.refreshToken = result.refreshToken;
+    responseData.accessExpiresAt = result.accessExpiresAt;
+    responseData.sessionId = result.sessionId;
+  }
+
+  res.success(responseData);
 };
 
 export const requestEnable2FA = async (req, res) => {
@@ -121,6 +151,7 @@ export const refreshToken = async (req, res) => {
   const rawToken = req.cookies?.[REFRESH_COOKIE_NAME] || req.body?.refreshToken;
   const deviceInfo = req.headers['user-agent'];
   const ipAddress = req.ip || req.socket.remoteAddress;
+  const isMobile = isMobileClient(req);
 
   const result = await authService.refreshToken({
     rawToken,
@@ -131,9 +162,17 @@ export const refreshToken = async (req, res) => {
   // Update rotated refresh token in cookie
   res.cookie(REFRESH_COOKIE_NAME, result.refreshToken, getCookieOptions());
 
-  res.success({
+  const responseData = {
     accessToken: result.accessToken,
-  });
+  };
+
+  if (isMobile) {
+    responseData.refreshToken = result.refreshToken;
+    responseData.accessExpiresAt = result.accessExpiresAt;
+    responseData.sessionId = result.sessionId;
+  }
+
+  res.success(responseData);
 };
 
 export const logout = async (req, res) => {
@@ -187,4 +226,142 @@ export const revokeAllSessions = async (req, res) => {
     sameSite: 'lax',
   });
   res.success(result);
+};
+
+export const mobileChallenge = (req, res) => {
+  // Allow Cloudflare Turnstile scripts and iframes without Helmet blocking
+  res.removeHeader('Content-Security-Policy');
+  res.removeHeader('Cross-Origin-Opener-Policy');
+  res.removeHeader('X-Frame-Options');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self' https: data: 'unsafe-inline' 'unsafe-eval'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https:;",
+  );
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+
+  const html = `<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Bảo mật Sorak Mobile</title>
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 16px;
+      background: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #334155;
+    }
+    .card {
+      width: 100%;
+      max-width: 360px;
+      padding: 24px 20px;
+      background: #ffffff;
+      border-radius: 16px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
+      text-align: center;
+    }
+    .logo {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 12px;
+      border-radius: 12px;
+      background: #4f46e5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+      font-weight: bold;
+      font-size: 20px;
+    }
+    h2 {
+      font-size: 1.15rem;
+      margin: 0 0 8px;
+      color: #0f172a;
+    }
+    p {
+      font-size: 0.875rem;
+      color: #64748b;
+      margin: 0 0 20px;
+      line-height: 1.4;
+    }
+    #turnstile-widget {
+      display: flex;
+      justify-content: center;
+      min-height: 65px;
+    }
+    .footer {
+      margin-top: 16px;
+      font-size: 0.75rem;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">S</div>
+    <h2>Xác thực an toàn</h2>
+    <p>Hệ thống mầm non Sorak đang tiến hành xác thực thiết bị trước khi tiếp tục.</p>
+    <div id="turnstile-widget"></div>
+    <div class="footer">Bảo vệ bởi Cloudflare Turnstile</div>
+  </div>
+  <script>
+    function emitToken(token) {
+      var msg = JSON.stringify({ type: 'TURNSTILE_TOKEN', token: token });
+      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+        window.ReactNativeWebView.postMessage(msg);
+      }
+      if (window.FlutterChannel && window.FlutterChannel.postMessage) {
+        window.FlutterChannel.postMessage(msg);
+      }
+      if (window.parent) {
+        window.parent.postMessage(msg, '*');
+      }
+    }
+
+    function emitError() {
+      var msg = JSON.stringify({ type: 'TURNSTILE_ERROR' });
+      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+        window.ReactNativeWebView.postMessage(msg);
+      }
+      if (window.FlutterChannel && window.FlutterChannel.postMessage) {
+        window.FlutterChannel.postMessage(msg);
+      }
+      if (window.parent) {
+        window.parent.postMessage(msg, '*');
+      }
+    }
+
+    function renderWidget() {
+      if (window.turnstile) {
+        try {
+          window.turnstile.render('#turnstile-widget', {
+            sitekey: '0x4AAAAAAFJSrvza3ZMzppmy',
+            callback: function(token) {
+              emitToken(token);
+            },
+            'error-callback': function() {
+              emitError();
+            }
+          });
+        } catch(e) {
+          console.error(e);
+        }
+      } else {
+        setTimeout(renderWidget, 100);
+      }
+    }
+    window.addEventListener('load', renderWidget);
+  </script>
+</body>
+</html>`;
+  res.send(html);
 };
