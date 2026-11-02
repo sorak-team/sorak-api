@@ -1044,14 +1044,14 @@ class AttendanceService {
       targetClassId = defaultCls.class_id;
     }
 
-    const targetDate = date ? new Date(date) : new Date();
+    const filterDate = date ? new Date(date) : new Date();
     const enrollments = await prisma.studentEnrollment.findMany({
       where: {
         class_id: targetClassId,
         status: { notIn: ['TRANSFERRED_CLASS', 'TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
         OR: [
           { left_at: null },
-          { left_at: { gt: targetDate } },
+          { left_at: { gt: filterDate } },
         ],
         student: { deleted_at: null },
       },
