@@ -84,10 +84,7 @@ class HealthService {
         student: { deleted_at: null },
         AND: [
           {
-            OR: [
-              { enrolled_at: null },
-              { enrolled_at: { lte: targetDateEnd } },
-            ],
+            enrolled_at: { lte: targetDateEnd },
           },
           {
             OR: [

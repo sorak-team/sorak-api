@@ -97,10 +97,7 @@ class AttendanceService {
         student: { deleted_at: null },
         AND: [
           {
-            OR: [
-              { enrolled_at: null },
-              { enrolled_at: { lte: targetDateEnd } },
-            ],
+            enrolled_at: { lte: targetDateEnd },
           },
           {
             OR: [
@@ -705,10 +702,7 @@ class AttendanceService {
         student: { deleted_at: null },
         AND: [
           {
-            OR: [
-              { enrolled_at: null },
-              { enrolled_at: { lte: targetDateEnd } },
-            ],
+            enrolled_at: { lte: targetDateEnd },
           },
           {
             OR: [
@@ -1091,10 +1085,7 @@ class AttendanceService {
         student: { deleted_at: null },
         AND: [
           {
-            OR: [
-              { enrolled_at: null },
-              { enrolled_at: { lte: filterDateEnd } },
-            ],
+            enrolled_at: { lte: filterDateEnd },
           },
           {
             OR: [
