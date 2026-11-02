@@ -485,7 +485,7 @@ export class StudentService {
               where: { citizen_id: cccd, deleted_at: null },
             });
             if (existing) {
-              throw new BadRequest(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
+              throw new Conflict(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
             }
           }
 
@@ -669,7 +669,7 @@ export class StudentService {
             },
           });
           if (existing) {
-            throw new BadRequest(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
+            throw new Conflict(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
           }
         }
 
@@ -850,7 +850,7 @@ export class StudentService {
             where: { parent_id: { not: parent.parent_id }, citizen_id: cccd, deleted_at: null },
           });
           if (existing) {
-            throw new BadRequest(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
+            throw new Conflict(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
           }
         }
         updateData.citizen_id = cccd || null;
