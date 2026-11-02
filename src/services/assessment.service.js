@@ -87,7 +87,7 @@ class AssessmentService {
   /**
    * Helper to resolve enrolled students
    */
-  async getEnrolledStudents(classId) {
+  async getEnrolledStudents(classId, targetDate = null) {
     const enrollments = await prisma.studentEnrollment.findMany({
       where: {
         class_id: classId,
@@ -99,13 +99,30 @@ class AssessmentService {
       orderBy: { student: { student_code: 'asc' } },
     });
 
-    return enrollments.map((e) => ({
+    const targetDateMidnight = targetDate ? new Date(Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate())) : null;
+
+    const filtered = enrollments.filter((e) => {
+      if (targetDateMidnight) {
+        if (e.left_at) {
+          const leftAtMidnight = new Date(Date.UTC(e.left_at.getUTCFullYear(), e.left_at.getUTCMonth(), e.left_at.getUTCDate()));
+          if (targetDateMidnight >= leftAtMidnight) return false;
+        }
+        if (e.enrolled_at) {
+          const enrolledAtMidnight = new Date(Date.UTC(e.enrolled_at.getUTCFullYear(), e.enrolled_at.getUTCMonth(), e.enrolled_at.getUTCDate()));
+          if (targetDateMidnight < enrolledAtMidnight) return false;
+        }
+      }
+      return true;
+    });
+
+    return filtered.map((e) => ({
       _student_id: e.student.student_id,
       id: e.student.public_id || e.student.student_id.toString(),
       publicId: e.student.public_id,
       code: e.student.student_code,
       name: e.student.full_name,
       gender: e.student.gender,
+      isTransferred: false,
     }));
   }
 
@@ -505,6 +522,72 @@ class AssessmentService {
     return {
       success: true,
       message: 'Đã xóa toàn bộ đánh giá của tiết này',
+    };
+  }
+
+  /**
+   * Get saved assessment records for a specific slot/activity and date
+   */
+  async getSlotAssessmentRecords({ classId, slotId, activityId, date }) {
+    const today = parseAssessmentDate(date);
+    let targetActivityId = null;
+
+    if (activityId) {
+      const strId = String(activityId).trim();
+      const isNum = typeof activityId === 'number' || /^\d+$/.test(strId);
+      const isUuidFormat = isUuid(strId);
+
+      const orConditions = [];
+      if (isNum) orConditions.push({ activity_id: BigInt(strId) });
+      if (isUuidFormat) orConditions.push({ public_id: strId });
+
+      if (orConditions.length > 0) {
+        const act = await prisma.educationalActivity.findFirst({
+          where: {
+            OR: orConditions,
+            deleted_at: null,
+          },
+        });
+        if (act) targetActivityId = act.activity_id;
+      }
+    } else if (slotId && !isNaN(Number(slotId))) {
+      try {
+        const subSlot = await prisma.subThemeActivity.findUnique({
+          where: { id: BigInt(slotId) },
+        });
+        if (subSlot) {
+          targetActivityId = subSlot.activity_id;
+        }
+      } catch {}
+    }
+
+    if (!targetActivityId) {
+      return { records: [] };
+    }
+
+    const records = await prisma.dailyAssessment.findMany({
+      where: {
+        activity_id: targetActivityId,
+        assessment_date: today,
+      },
+      include: {
+        student: {
+          select: {
+            student_id: true,
+            public_id: true,
+            student_code: true,
+          },
+        },
+      },
+    });
+
+    return {
+      records: records.map((r) => ({
+        studentId: r.student?.public_id || r.student?.student_id?.toString() || r.student_id?.toString(),
+        studentCode: r.student?.student_code,
+        status: r.status,
+        note: r.notes || '',
+      })),
     };
   }
 

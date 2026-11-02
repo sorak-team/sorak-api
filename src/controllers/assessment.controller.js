@@ -12,6 +12,17 @@ class AssessmentController {
     }
   }
 
+  async getSlotAssessmentRecords(req, res, next) {
+    try {
+      const { classId } = req.params;
+      const { slotId, activityId, date } = req.query;
+      const data = await assessmentService.getSlotAssessmentRecords({ classId, slotId, activityId, date });
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   async saveAssessmentRecords(req, res, next) {
     try {
       const { classId } = req.params;

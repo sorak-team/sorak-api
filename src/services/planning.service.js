@@ -184,9 +184,12 @@ class PlanningService {
           const eDate = `${pad(th.end_date.getDate())}/${pad(th.end_date.getMonth() + 1)}/${th.end_date.getFullYear()}`;
           return {
             id: th.public_id || th.theme_id.toString(),
+            _theme_id: th.theme_id,
             code,
             name: th.name,
             status: th.status,
+            startDate: th.start_date.toISOString().slice(0, 10),
+            endDate: th.end_date.toISOString().slice(0, 10),
             dateRange: `${sDate} – ${eDate}`,
             weeksCount: th.sub_themes.length,
             subThemes: th.sub_themes.map((st, sIdx) => ({
@@ -362,7 +365,7 @@ class PlanningService {
             domain: g.domain,
             domainCode: '',
             domainLabel: g.domain,
-            title: g.title,
+            title: cleanGoalTitle(g.goal_code, g.title, ageGroup),
             contents: contentsWithActs,
           };
         });
@@ -601,9 +604,12 @@ class PlanningService {
           const eDate = `${pad(th.end_date.getDate())}/${pad(th.end_date.getMonth() + 1)}/${th.end_date.getFullYear()}`;
           return {
             id: th.public_id || th.theme_id.toString(),
+            _theme_id: th.theme_id,
             code,
             name: th.name,
             status: th.status,
+            startDate: th.start_date.toISOString().slice(0, 10),
+            endDate: th.end_date.toISOString().slice(0, 10),
             dateRange: `${sDate} – ${eDate}`,
             weeksCount: th.sub_themes.length,
             subThemes: th.sub_themes.map((st, sIdx) => ({
@@ -927,7 +933,7 @@ class PlanningService {
           return {
             id: g.public_id || g.goal_id.toString(),
             goalCode: g.goal_code,
-            title: g.title,
+            title: cleanGoalTitle(g.goal_code, g.title, ageGroup),
             domain: g.domain,
             contents: contentsWithActs,
           };
@@ -967,6 +973,51 @@ class PlanningService {
       logger.error('Error fetching holidays for weekly timetable:', err);
     }
 
+    // Fetch theme allocations for this class to filter activities by active theme
+    let themeAllocations = [];
+    try {
+      const classAllocations = await prisma.classThemeGoal.findMany({
+        where: {
+          class_id: targetClass.class_id,
+          goal: {
+            deleted_at: null,
+            school_year_id: schoolYearId,
+            age_group: ageGroup,
+          },
+        },
+        include: {
+          goal: true,
+        },
+      });
+
+      themeAllocations = (themes || []).map((th) => {
+        const sStr = th.startDate || (th.start_date ? th.start_date.toISOString().slice(0, 10) : '');
+        const eStr = th.endDate || (th.end_date ? th.end_date.toISOString().slice(0, 10) : '');
+        const allocs = classAllocations.filter(
+          (a) => a.theme_id.toString() === (th._theme_id || th.id)?.toString()
+        );
+        const goalIds = [];
+        const goalCodes = [];
+        allocs.forEach((a) => {
+          if (a.goal) {
+            if (a.goal.public_id) goalIds.push(a.goal.public_id);
+            if (a.goal.goal_id) goalIds.push(a.goal.goal_id.toString());
+            if (a.goal.goal_code) goalCodes.push(a.goal.goal_code.trim().toUpperCase());
+          }
+        });
+        return {
+          themeId: th.id,
+          themeName: th.name,
+          startDate: sStr,
+          endDate: eStr,
+          goalIds,
+          goalCodes,
+        };
+      });
+    } catch (err) {
+      logger.error('Error fetching themeAllocations for weekly timetable:', err);
+    }
+
     return {
       theme: selectedTheme || null,
       selectedTheme: selectedTheme || null,
@@ -975,6 +1026,7 @@ class PlanningService {
       slots: mappedSlots,
       availableActivities,
       goals: goalsWithActivities,
+      themeAllocations,
       holidays,
       classInfo: {
         classId: targetClass.class_id.toString(),
@@ -1536,7 +1588,10 @@ class PlanningService {
 
     const formatGoal = (g) => ({
       id: g.public_id || g.goal_id.toString(),
+      goalId: g.goal_id.toString(),
+      publicId: g.public_id,
       code: g.goal_code + (g.indicator_code ? ` (${g.indicator_code})` : ''),
+      goalCode: g.goal_code,
       title: cleanGoalTitle(g.goal_code, g.title, targetClass.age_group),
       domain: g.domain,
       domainLabel: DOMAIN_LABELS[g.domain] || g.domain,
@@ -1557,6 +1612,11 @@ class PlanningService {
     let dbAllocations = await prisma.classThemeGoal.findMany({
       where: {
         class_id: targetClass.class_id,
+        goal: {
+          deleted_at: null,
+          school_year_id: targetClass.school_year_id,
+          age_group: targetClass.age_group,
+        },
       },
       include: {
         goal: {
@@ -1569,44 +1629,6 @@ class PlanningService {
         },
       },
     });
-
-    // If completely empty for this class, auto-initialize default allocations into PostgreSQL
-    if (dbAllocations.length === 0 && themes.length > 0 && allGoals.length > 0) {
-      const initialInserts = [];
-      themes.forEach((t, idx) => {
-        const goalsPerTheme = Math.max(10, Math.min(16, Math.ceil(allGoals.length / themes.length) + 3));
-        const offset = (idx * 11) % allGoals.length;
-        for (let k = 0; k < goalsPerTheme; k++) {
-          const g = allGoals[(offset + k) % allGoals.length];
-          if (g) {
-            initialInserts.push({
-              class_id: targetClass.class_id,
-              theme_id: t.theme_id,
-              goal_id: g.goal_id,
-            });
-          }
-        }
-      });
-      if (initialInserts.length > 0) {
-        await prisma.classThemeGoal.createMany({
-          data: initialInserts,
-          skipDuplicates: true,
-        });
-        dbAllocations = await prisma.classThemeGoal.findMany({
-          where: { class_id: targetClass.class_id },
-          include: {
-            goal: {
-              include: {
-                contents: {
-                  where: { deleted_at: null },
-                  orderBy: { content_id: 'asc' },
-                },
-              },
-            },
-          },
-        });
-      }
-    }
 
     // Group allocations by theme_id (as string)
     const dbAllocationsByTheme = new Map();
@@ -1656,26 +1678,12 @@ class PlanningService {
       // Check if user has explicitly saved allocations for this theme in PostgreSQL
       const savedRecords = dbAllocationsByTheme.get(t.theme_id.toString()) || [];
 
+      let allocatedGoals = [];
       if (savedRecords.length > 0) {
-        themeGoalMap.clear();
-        savedRecords.forEach((rec) => {
-          if (rec.goal) {
-            themeGoalMap.set(rec.goal.goal_id.toString(), formatGoal(rec.goal));
-          }
-        });
-      } else if (themeGoalMap.size === 0 && allGoals.length > 0) {
-        // Fallback distribution if not in DB and no activities
-        const goalsPerTheme = Math.max(10, Math.min(16, Math.ceil(allGoals.length / themes.length) + 3));
-        const offset = (idx * 11) % allGoals.length;
-        for (let k = 0; k < goalsPerTheme; k++) {
-          const g = allGoals[(offset + k) % allGoals.length];
-          if (g && !themeGoalMap.has(g.goal_id.toString())) {
-            themeGoalMap.set(g.goal_id.toString(), formatGoal(g));
-          }
-        }
+        allocatedGoals = savedRecords
+          .map((rec) => (rec.goal ? formatGoal(rec.goal) : null))
+          .filter(Boolean);
       }
-
-      const allocatedGoals = Array.from(themeGoalMap.values());
 
       // Domain breakdown for this theme
       const domainCounts = {
