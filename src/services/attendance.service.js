@@ -84,11 +84,34 @@ class AttendanceService {
       }
     }
 
-    // 2. Fetch enrolled students from database
+    // 2. Resolve target date (e.g. today or requested date)
+    const targetDateStr = date || new Date().toISOString().slice(0, 10);
+    const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+    const targetDateStart = new Date(`${targetDateStr}T00:00:00.000Z`);
+    const targetDateEnd = new Date(`${targetDateStr}T23:59:59.999Z`);
+
+    // 2.1 Fetch enrolled students active on targetDate (exclude students transferred out prior to this date)
     const enrollments = await prisma.studentEnrollment.findMany({
       where: {
         class_id: targetClass.class_id,
         student: { deleted_at: null },
+        AND: [
+          {
+            OR: [
+              { enrolled_at: null },
+              { enrolled_at: { lte: targetDateEnd } },
+            ],
+          },
+          {
+            OR: [
+              { left_at: null },
+              { left_at: { gt: targetDateStart } },
+            ],
+          },
+          {
+            status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
+          },
+        ],
       },
       include: {
         student: true,
@@ -147,11 +170,7 @@ class AttendanceService {
       });
     }
 
-    // 4. Resolve target date (e.g. today or requested date)
-    const targetDateStr = date || new Date().toISOString().slice(0, 10);
-    const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
-
-    // 5. Fetch real attendance records for this class & date
+    // 4. Fetch real attendance records for this class & date
     const studentIds = enrollments.map((e) => e.student_id);
     const attendanceRecords = await prisma.attendance.findMany({
       where: {
@@ -477,7 +496,7 @@ class AttendanceService {
         id: targetClass.public_id || targetClass.class_id.toString(),
         name: targetClass.name,
         academicYear: targetClass.school_year?.name || 'Năm học 2026–2027',
-        studentCount: enrollments.length,
+        studentCount: students.length,
         weekLabel: week || 'Tuần 12/10 – 16/10/2026',
         dateRange: '12/10/2026 – 16/10/2026',
         selectedDate: targetDateStr,
@@ -489,9 +508,9 @@ class AttendanceService {
       subTheme: activeSubTheme,
       selectedSubTheme: activeSubTheme,
       stats: {
-        totalStudents: enrollments.length,
+        totalStudents: students.length,
         presentCount,
-        absentCount,
+        absentCount: Math.max(0, students.length - presentCount),
         dismissedCount: dismissedPresentCount,
         healthCount: healthRecords.length,
         isRecorded: isDateRecorded,
@@ -676,12 +695,31 @@ class AttendanceService {
 
     const targetDateStr = date || new Date().toISOString().slice(0, 10);
     const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+    const targetDateStart = new Date(`${targetDateStr}T00:00:00.000Z`);
+    const targetDateEnd = new Date(`${targetDateStr}T23:59:59.999Z`);
 
-    // 2. Fetch enrolled students with their parents and active pickup authorizations
+    // 2. Fetch enrolled students with their parents and active pickup authorizations (active on targetDate)
     const enrollments = await prisma.studentEnrollment.findMany({
       where: {
         class_id: targetClass.class_id,
         student: { deleted_at: null },
+        AND: [
+          {
+            OR: [
+              { enrolled_at: null },
+              { enrolled_at: { lte: targetDateEnd } },
+            ],
+          },
+          {
+            OR: [
+              { left_at: null },
+              { left_at: { gt: targetDateStart } },
+            ],
+          },
+          {
+            status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
+          },
+        ],
       },
       include: {
         student: {
@@ -1044,16 +1082,30 @@ class AttendanceService {
       targetClassId = defaultCls.class_id;
     }
 
-    const filterDate = date ? new Date(date) : new Date();
+    const filterDateStr = date || new Date().toISOString().slice(0, 10);
+    const filterDateStart = new Date(`${filterDateStr}T00:00:00.000Z`);
+    const filterDateEnd = new Date(`${filterDateStr}T23:59:59.999Z`);
     const enrollments = await prisma.studentEnrollment.findMany({
       where: {
         class_id: targetClassId,
-        status: { notIn: ['TRANSFERRED_CLASS', 'TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
-        OR: [
-          { left_at: null },
-          { left_at: { gt: filterDate } },
-        ],
         student: { deleted_at: null },
+        AND: [
+          {
+            OR: [
+              { enrolled_at: null },
+              { enrolled_at: { lte: filterDateEnd } },
+            ],
+          },
+          {
+            OR: [
+              { left_at: null },
+              { left_at: { gt: filterDateStart } },
+            ],
+          },
+          {
+            status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
+          },
+        ],
       },
       select: { student_id: true },
     });

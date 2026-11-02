@@ -276,7 +276,7 @@ class CurriculumService {
       throw new NotFound('Không tìm thấy năm học.');
     }
 
-    if (status === 'PUBLISHED') {
+    if (String(status).toUpperCase() === 'PUBLISHED') {
       const dbThemes = await prisma.curriculumTheme.findMany({
         where: {
           school_year_id: schoolYearId,
@@ -296,18 +296,20 @@ class CurriculumService {
         throw new BadRequest('Kế hoạch chủ đề chưa có chủ đề nào để công bố.');
       }
 
-      // 1. Phải đủ chủ đề cho cả năm học
+      // 1. Phải đủ chủ đề cho cả năm học (cho phép dung sai 7 ngày do lễ khai giảng hoặc bế giảng)
       const syStart = schoolYear.start_date.toISOString().slice(0, 10);
       const syEnd = schoolYear.end_date.toISOString().slice(0, 10);
       const firstThemeStart = dbThemes[0].start_date.toISOString().slice(0, 10);
       const lastThemeEnd = dbThemes[dbThemes.length - 1].end_date.toISOString().slice(0, 10);
 
-      if (firstThemeStart > syStart) {
+      const startDiffDays = Math.round((new Date(firstThemeStart) - new Date(syStart)) / (1000 * 60 * 60 * 24));
+      if (startDiffDays > 7 || startDiffDays < -7) {
         throw new BadRequest(
           `Kế hoạch chủ đề chưa bao quát trọn năm học: Chủ đề đầu tiên bắt đầu ngày ${firstThemeStart}, trong khi năm học bắt đầu ngày ${syStart}.`,
         );
       }
-      if (lastThemeEnd < syEnd) {
+      const endDiffDays = Math.round((new Date(syEnd) - new Date(lastThemeEnd)) / (1000 * 60 * 60 * 24));
+      if (endDiffDays > 7 || endDiffDays < -7) {
         throw new BadRequest(
           `Kế hoạch chủ đề chưa bao quát trọn năm học: Chủ đề cuối cùng kết thúc ngày ${lastThemeEnd}, trong khi năm học kết thúc ngày ${syEnd}.`,
         );
