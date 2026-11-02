@@ -292,7 +292,11 @@ class AttendanceService {
             },
           },
         },
-        sub_theme: true,
+        sub_theme: {
+          include: {
+            theme: true,
+          },
+        },
       },
       orderBy: [
         { scheduled_date: 'asc' },
@@ -332,7 +336,10 @@ class AttendanceService {
       return {
         id: rec.id.toString(),
         activityId: rec.activity_id.toString(),
-        subThemeId: rec.sub_theme_id.toString(),
+        subThemeId: rec.sub_theme_id ? rec.sub_theme_id.toString() : '',
+        subThemeName: rec.sub_theme?.name || '',
+        themeId: rec.sub_theme?.theme_id ? rec.sub_theme.theme_id.toString() : (rec.sub_theme?.theme?.public_id || ''),
+        themeName: rec.sub_theme?.theme?.name || '',
         day: dayKey,
         dayKey,
         routineSlot: rec.routine_slot,
@@ -377,6 +384,94 @@ class AttendanceService {
 
     const slots = dbSlots;
 
+    // 7. Resolve active Theme & SubTheme for the requested week
+    let activeTheme = null;
+    let activeSubTheme = null;
+
+    try {
+      // 7.1 Priority 1: Check if any scheduled activity in this week has sub_theme & theme
+      const recordWithTheme = scheduledRecords.find((r) => r.sub_theme?.theme);
+      if (recordWithTheme?.sub_theme) {
+        const st = recordWithTheme.sub_theme;
+        const th = st.theme;
+        activeTheme = {
+          id: th.public_id || th.theme_id?.toString(),
+          name: th.name,
+          startDate: th.start_date ? th.start_date.toISOString().slice(0, 10) : null,
+          endDate: th.end_date ? th.end_date.toISOString().slice(0, 10) : null,
+        };
+        activeSubTheme = {
+          id: st.public_id || st.sub_theme_id?.toString(),
+          name: st.name,
+          startDate: st.start_date ? st.start_date.toISOString().slice(0, 10) : null,
+          endDate: st.end_date ? st.end_date.toISOString().slice(0, 10) : null,
+        };
+      }
+
+      // 7.2 Priority 2: Query curriculum themes & subThemes for this class's age_group and school_year
+      if (!activeTheme || !activeSubTheme) {
+        const themes = await prisma.curriculumTheme.findMany({
+          where: {
+            school_year_id: targetClass.school_year_id,
+            age_group: targetClass.age_group,
+            deleted_at: null,
+          },
+          include: {
+            sub_themes: {
+              where: { deleted_at: null },
+              orderBy: { start_date: 'asc' },
+            },
+          },
+          orderBy: { start_date: 'asc' },
+        });
+
+        if (themes.length > 0) {
+          let foundTheme = null;
+          let foundSubTheme = null;
+
+          if (effectiveStartDate && effectiveEndDate) {
+            for (const th of themes) {
+              for (const st of th.sub_themes || []) {
+                const stStart = st.start_date.toISOString().slice(0, 10);
+                const stEnd = st.end_date.toISOString().slice(0, 10);
+                if (stStart <= effectiveEndDate && stEnd >= effectiveStartDate) {
+                  foundTheme = th;
+                  foundSubTheme = st;
+                  break;
+                }
+              }
+              if (foundTheme) break;
+            }
+          }
+
+          if (!foundTheme) {
+            foundTheme = themes[0];
+            foundSubTheme = themes[0].sub_themes?.[0] || null;
+          }
+
+          if (!activeTheme && foundTheme) {
+            activeTheme = {
+              id: foundTheme.public_id || foundTheme.theme_id?.toString(),
+              name: foundTheme.name,
+              startDate: foundTheme.start_date ? foundTheme.start_date.toISOString().slice(0, 10) : null,
+              endDate: foundTheme.end_date ? foundTheme.end_date.toISOString().slice(0, 10) : null,
+            };
+          }
+
+          if (!activeSubTheme && foundSubTheme) {
+            activeSubTheme = {
+              id: foundSubTheme.public_id || foundSubTheme.sub_theme_id?.toString(),
+              name: foundSubTheme.name,
+              startDate: foundSubTheme.start_date ? foundSubTheme.start_date.toISOString().slice(0, 10) : null,
+              endDate: foundSubTheme.end_date ? foundSubTheme.end_date.toISOString().slice(0, 10) : null,
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to resolve theme and sub-theme for timetable overview:', err);
+    }
+
     return {
       classInfo: {
         id: targetClass.public_id || targetClass.class_id.toString(),
@@ -386,7 +481,13 @@ class AttendanceService {
         weekLabel: week || 'Tuần 12/10 – 16/10/2026',
         dateRange: '12/10/2026 – 16/10/2026',
         selectedDate: targetDateStr,
+        themeName: activeTheme?.name || null,
+        subThemeName: activeSubTheme?.name || null,
       },
+      theme: activeTheme,
+      selectedTheme: activeTheme,
+      subTheme: activeSubTheme,
+      selectedSubTheme: activeSubTheme,
       stats: {
         totalStudents: enrollments.length,
         presentCount,
@@ -943,9 +1044,15 @@ class AttendanceService {
       targetClassId = defaultCls.class_id;
     }
 
+    const targetDate = date ? new Date(date) : new Date();
     const enrollments = await prisma.studentEnrollment.findMany({
       where: {
         class_id: targetClassId,
+        status: { notIn: ['TRANSFERRED_CLASS', 'TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
+        OR: [
+          { left_at: null },
+          { left_at: { gt: targetDate } },
+        ],
         student: { deleted_at: null },
       },
       select: { student_id: true },

@@ -1,4 +1,5 @@
 import planningService from '../services/planning.service.js';
+import { Forbidden } from '../utils/http-error.js';
 
 class PlanningController {
   // Tab 1: Educational Activities by Theme
@@ -18,6 +19,10 @@ class PlanningController {
 
   async saveEducationalActivity(req, res, next) {
     try {
+      const userRole = String(req.user?.role || '').toUpperCase();
+      if (userRole.includes('BGH') || userRole === 'ADMIN') {
+        throw new Forbidden('Chỉ giáo viên phụ trách lớp mới được tạo hoặc chỉnh sửa hoạt động giáo dục.');
+      }
       const { classId } = req.params;
       const data = await planningService.saveEducationalActivity({
         classId,
@@ -32,6 +37,10 @@ class PlanningController {
 
   async deleteEducationalActivity(req, res, next) {
     try {
+      const userRole = String(req.user?.role || '').toUpperCase();
+      if (userRole.includes('BGH') || userRole === 'ADMIN') {
+        throw new Forbidden('Chỉ giáo viên phụ trách lớp mới được xóa hoạt động giáo dục.');
+      }
       const { classId, activityId } = req.params;
       const data = await planningService.deleteEducationalActivity({
         classId,

@@ -1,7 +1,7 @@
 import prisma from '../config/prisma.js';
 import { BadRequest, NotFound } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
-import { cleanGoalTitle } from '../utils/goal-sanitizer.js';
+import { cleanGoalTitle, normalizeGoalCode } from '../utils/goal-sanitizer.js';
 
 // Pedagogical Age Group configurations
 const AGE_GROUPS = [
@@ -870,16 +870,20 @@ class CurriculumService {
 
     let gId = null;
     const isUuid = typeof goalId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(goalId);
-    if (goalId && !isNaN(Number(goalId))) {
+    if (goalId && !isNaN(Number(goalId)) && !isUuid) {
       gId = BigInt(goalId);
     }
 
+    const normCode = normalizeGoalCode(goalId);
     const dbGoal = await prisma.educationalGoal.findFirst({
       where: {
         OR: [
-          gId ? { goal_id: gId } : undefined,
           isUuid ? { public_id: goalId } : undefined,
+          gId ? { goal_id: gId } : undefined,
           { goal_code: goalId },
+          normCode ? { goal_code: normCode } : undefined,
+          normCode ? { goal_code: normCode.replace(/^MT0?/, 'PT ') } : undefined,
+          normCode ? { goal_code: normCode.replace(/^MT0?/, 'PT') } : undefined,
         ].filter(Boolean),
         ...(schoolYearId ? { school_year_id: schoolYearId } : {}),
         age_group: ageGroupInfo.dbKey,
