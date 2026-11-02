@@ -282,6 +282,17 @@ export class TeacherService {
           schoolYear: tc.class.school_year?.name,
           assignedAt: tc.assigned_at,
         })),
+      assignedClasses: teacher.teacher_classes
+        .filter((tc) => tc.left_at === null)
+        .map((tc) => ({
+          allocationId: tc.id.toString(),
+          classId: tc.class.public_id || tc.class.class_id.toString(),
+          className: tc.class.name,
+          roomNumber: tc.class.room_number,
+          ageGroup: tc.class.age_group,
+          schoolYear: tc.class.school_year?.name,
+          assignedAt: tc.assigned_at,
+        })),
       assignmentHistory: teacher.teacher_classes.map((tc) => ({
         allocationId: tc.id.toString(),
         classId: tc.class.public_id || tc.class.class_id.toString(),

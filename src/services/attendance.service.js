@@ -205,7 +205,32 @@ class AttendanceService {
     );
 
     // 6. Map students with live attendance & health records
+    const targetDateMidnight = new Date(
+      Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate())
+    );
+
     const students = enrollments.map((enr) => {
+      // Check transfer & enrollment cutoffs against targetDate
+      if (enr.left_at) {
+        const leftAtMidnight = new Date(
+          Date.UTC(enr.left_at.getUTCFullYear(), enr.left_at.getUTCMonth(), enr.left_at.getUTCDate())
+        );
+        // Từ ngày chuyển có hiệu lực: không hiển thị học sinh trong lớp cũ
+        if (targetDateMidnight >= leftAtMidnight) {
+          return null;
+        }
+      }
+
+      if (enr.enrolled_at) {
+        const enrolledAtMidnight = new Date(
+          Date.UTC(enr.enrolled_at.getUTCFullYear(), enr.enrolled_at.getUTCMonth(), enr.enrolled_at.getUTCDate())
+        );
+        // Trước ngày nhập học: chưa vào lớp này
+        if (targetDateMidnight < enrolledAtMidnight) {
+          return null;
+        }
+      }
+
       const st = enr.student;
       const att = attendanceMap.get(st.student_id.toString());
       const h = healthMap.get(st.student_id.toString());
@@ -224,7 +249,8 @@ class AttendanceService {
         reason,
         note: reason,
         notes: reason,
-        isTransferred: Boolean(enr.left_at || enr.status === 'TRANSFERRED_CLASS' || st.status === 'TRANSFERRED'),
+        // Trước ngày chuyển có hiệu lực: giữ nguyên trạng thái học sinh bình thường, không gắn mác "Đã chuyển lớp"
+        isTransferred: false,
         leftAt: enr.left_at,
         checkInTime: att?.check_in_time || null,
         checkOutTime: att?.check_out_time || null,
@@ -234,7 +260,7 @@ class AttendanceService {
         bmi: h ? Number(h.bmi) : '',
         healthNote: h?.notes || '',
       };
-    });
+    }).filter(Boolean);
 
     const presentCount = students.filter((s) => s.status === 'PRESENT').length;
     const absentCount = students.filter((s) => s.status === 'ABSENT').length;

@@ -676,6 +676,24 @@ export class ClassService {
   }
 
   /**
+   * Helper: Normalize age group strings with diacritics / symbols to standard keys:
+   * 'NHATRE', 'MAM', 'CHOI', 'LA'
+   */
+  _normalizeAgeGroupKey(ageGroup) {
+    if (!ageGroup) return '';
+    const clean = String(ageGroup)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z]/g, '');
+    if (clean.includes('NHATRE')) return 'NHATRE';
+    if (clean.includes('MAM')) return 'MAM';
+    if (clean.includes('CHOI')) return 'CHOI';
+    if (clean.includes('LA')) return 'LA';
+    return clean;
+  }
+
+  /**
    * Check if student's age is eligible for the class age group
    */
   _isAgeEligible(dob, classAgeGroup, refDate) {
@@ -683,8 +701,8 @@ export class ClassService {
     const months = this._calculateAgeInMonths(dob, refDate);
     if (months === null) return false;
 
-    const norm = String(classAgeGroup).toUpperCase().replace(/-/g, '_');
-    if (norm === 'NHA_TRE' || norm === 'NHATRE') {
+    const norm = this._normalizeAgeGroupKey(classAgeGroup);
+    if (norm === 'NHATRE') {
       return months >= 24 && months < 36;
     }
     if (norm === 'MAM') {
@@ -696,7 +714,7 @@ export class ClassService {
     if (norm === 'LA') {
       return months >= 60 && months < 72;
     }
-    return true;
+    return false;
   }
 
   /**

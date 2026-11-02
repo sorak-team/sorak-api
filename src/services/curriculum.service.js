@@ -272,6 +272,99 @@ class CurriculumService {
     const schoolYear = await this.resolveSchoolYear(year);
     const schoolYearId = schoolYear?.school_year_id;
 
+    if (!schoolYear) {
+      throw new NotFound('Không tìm thấy năm học.');
+    }
+
+    if (status === 'PUBLISHED') {
+      const dbThemes = await prisma.curriculumTheme.findMany({
+        where: {
+          school_year_id: schoolYearId,
+          age_group: ageGroupInfo.dbKey,
+          deleted_at: null,
+        },
+        include: {
+          sub_themes: {
+            where: { deleted_at: null },
+            orderBy: { start_date: 'asc' },
+          },
+        },
+        orderBy: { start_date: 'asc' },
+      });
+
+      if (!dbThemes || dbThemes.length === 0) {
+        throw new BadRequest('Kế hoạch chủ đề chưa có chủ đề nào để công bố.');
+      }
+
+      // 1. Phải đủ chủ đề cho cả năm học
+      const syStart = schoolYear.start_date.toISOString().slice(0, 10);
+      const syEnd = schoolYear.end_date.toISOString().slice(0, 10);
+      const firstThemeStart = dbThemes[0].start_date.toISOString().slice(0, 10);
+      const lastThemeEnd = dbThemes[dbThemes.length - 1].end_date.toISOString().slice(0, 10);
+
+      if (firstThemeStart > syStart) {
+        throw new BadRequest(
+          `Kế hoạch chủ đề chưa bao quát trọn năm học: Chủ đề đầu tiên bắt đầu ngày ${firstThemeStart}, trong khi năm học bắt đầu ngày ${syStart}.`,
+        );
+      }
+      if (lastThemeEnd < syEnd) {
+        throw new BadRequest(
+          `Kế hoạch chủ đề chưa bao quát trọn năm học: Chủ đề cuối cùng kết thúc ngày ${lastThemeEnd}, trong khi năm học kết thúc ngày ${syEnd}.`,
+        );
+      }
+
+      // Kiểm tra tính liên tục giữa các chủ đề (không có tuần bị bỏ trống)
+      for (let i = 1; i < dbThemes.length; i++) {
+        const prevTheme = dbThemes[i - 1];
+        const currTheme = dbThemes[i];
+        const prevEnd = new Date(prevTheme.end_date);
+        const currStart = new Date(currTheme.start_date);
+        const diffDays = Math.round((currStart - prevEnd) / (1000 * 60 * 60 * 24));
+        if (diffDays > 3) {
+          throw new BadRequest(
+            `Kế hoạch chủ đề bị ngắt quãng giữa chủ đề "${prevTheme.name}" (kết thúc ${prevTheme.end_date.toISOString().slice(0, 10)}) và "${currTheme.name}" (bắt đầu ${currTheme.start_date.toISOString().slice(0, 10)}).`,
+          );
+        }
+      }
+
+      // 2. Phải đủ chủ đề nhánh cho các chủ đề
+      for (const t of dbThemes) {
+        const subs = t.sub_themes || [];
+        if (subs.length === 0) {
+          throw new BadRequest(
+            `Chủ đề "${t.name}" chưa có chủ đề nhánh nào. Mọi chủ đề phải có đủ chủ đề nhánh trước khi công bố.`,
+          );
+        }
+
+        const tStart = t.start_date.toISOString().slice(0, 10);
+        const tEnd = t.end_date.toISOString().slice(0, 10);
+        const firstSubStart = subs[0].start_date.toISOString().slice(0, 10);
+        const lastSubEnd = subs[subs.length - 1].end_date.toISOString().slice(0, 10);
+
+        if (firstSubStart !== tStart) {
+          throw new BadRequest(
+            `Chủ đề "${t.name}": Chủ đề nhánh đầu tiên ("${subs[0].name}") phải bắt đầu đúng ngày bắt đầu của chủ đề (${tStart}).`,
+          );
+        }
+        if (lastSubEnd !== tEnd) {
+          throw new BadRequest(
+            `Chủ đề "${t.name}": Chủ đề nhánh cuối cùng ("${subs[subs.length - 1].name}") phải kết thúc đúng ngày kết thúc của chủ đề (${tEnd}).`,
+          );
+        }
+
+        for (let k = 1; k < subs.length; k++) {
+          const prevSubEnd = new Date(subs[k - 1].end_date);
+          const currSubStart = new Date(subs[k].start_date);
+          const diffDays = Math.round((currSubStart - prevSubEnd) / (1000 * 60 * 60 * 24));
+          if (diffDays > 3) {
+            throw new BadRequest(
+              `Chủ đề "${t.name}": Chủ đề nhánh bị ngắt quãng giữa "${subs[k - 1].name}" và "${subs[k].name}".`,
+            );
+          }
+        }
+      }
+    }
+
     await prisma.curriculumTheme.updateMany({
       where: {
         ...(schoolYearId ? { school_year_id: schoolYearId } : {}),
