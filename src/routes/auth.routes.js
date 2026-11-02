@@ -29,12 +29,13 @@ import {
   revokeSession,
   revokeOtherSessions,
   revokeAllSessions,
+  mobileChallenge,
 } from '../controllers/auth.controller.js';
 
 const router = Router();
 
 // Public Authentication Endpoints
-
+router.get('/mobile-challenge', asyncHandler(mobileChallenge));
 router.post('/login', validate(loginSchema), asyncHandler(login));
 router.post('/verify-2fa', validate(verify2FASchema), asyncHandler(verify2FA));
 router.post('/forgot-password', validate(forgotPasswordSchema), asyncHandler(forgotPassword));

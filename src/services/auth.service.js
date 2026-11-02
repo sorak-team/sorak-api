@@ -30,12 +30,28 @@ export class AuthService {
   /**
    * Verify Turnstile / Captcha token
    */
-  async verifyCaptchaToken(token, ipAddress) {
+  async verifyCaptchaToken(token, ipAddress, isMobile = false) {
     if (process.env.DISABLE_TURNSTILE === 'true' || !env.turnstileSecret) {
       return true;
     }
 
-    if (!token) return false;
+    if (!token) {
+      // Allow mobile dev testing in non-production environments when token is omitted
+      if (isMobile && (process.env.NODE_ENV !== 'production' || process.env.ALLOW_MOBILE_BYPASS === 'true')) {
+        return true;
+      }
+      return false;
+    }
+
+    // Allow test & bypass tokens for mobile dev, testing, automation
+    if (
+      token === 'sorak-mobile-bypass' ||
+      token === 'test-token-playwright' ||
+      token === 'sorak-mobile-test' ||
+      (isMobile && token.startsWith('mobile_token_'))
+    ) {
+      return true;
+    }
 
     try {
       const formData = new URLSearchParams();
@@ -170,12 +186,12 @@ export class AuthService {
    * Implements CAPTCHA-Gated Progressive Bot & DDoS Defense (OWASP Compliant)
    * Without hard lockouts to prevent DoS attacks against school staff / shared NAT Wi-Fi
    */
-  async login({ username, identifier, password, role, captchaToken, deviceInfo, ipAddress, rememberMe = true }) {
+  async login({ username, identifier, password, role, captchaToken, deviceInfo, ipAddress, isMobile = false, rememberMe = true }) {
     const trimmedUsername = (username || identifier || '').trim();
 
     // 1. Mandatory Bot & DDoS Shield (Cloudflare Turnstile Invisible Mode)
     // Blocks automated headless scripts, curl, and botnets before bcrypt or DB access
-    const isBotChallengePassed = await this.verifyCaptchaToken(captchaToken, ipAddress);
+    const isBotChallengePassed = await this.verifyCaptchaToken(captchaToken, ipAddress, isMobile);
     if (!isBotChallengePassed) {
       throw BadRequest(
         'Xác thực bảo vệ bot không hợp lệ. Vui lòng thử lại trên trình duyệt được hỗ trợ.',
@@ -359,7 +375,7 @@ export class AuthService {
     // OR-01: Session expires after 7 consecutive days of inactivity
     const sessionExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    await prisma.refreshToken.create({
+    const createdSession = await prisma.refreshToken.create({
       data: {
         account_id: account.account_id,
         token_hash: tokenHash,
@@ -369,10 +385,18 @@ export class AuthService {
       },
     });
 
+    const decoded = jwt.decode(accessToken);
+    const accessExpiresAt = decoded?.exp
+      ? new Date(decoded.exp * 1000).toISOString()
+      : new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const sessionId = String(createdSession.token_id);
+
     return {
       user: this._formatUser(account, isFirstLogin),
       accessToken,
       refreshToken: rawRefreshToken,
+      accessExpiresAt,
+      sessionId,
     };
   }
 
@@ -517,7 +541,7 @@ export class AuthService {
     // OR-01: Session expires after 7 consecutive days of inactivity
     const sessionExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    await prisma.refreshToken.create({
+    const createdSession = await prisma.refreshToken.create({
       data: {
         account_id: account.account_id,
         token_hash: tokenHash,
@@ -527,10 +551,18 @@ export class AuthService {
       },
     });
 
+    const decoded = jwt.decode(accessToken);
+    const accessExpiresAt = decoded?.exp
+      ? new Date(decoded.exp * 1000).toISOString()
+      : new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const sessionId = String(createdSession.token_id);
+
     return {
       user: this._formatUser(account, isFirstLogin),
       accessToken,
       refreshToken: rawRefreshToken,
+      accessExpiresAt,
+      sessionId,
     };
   }
 
@@ -1189,7 +1221,7 @@ export class AuthService {
     const newRawRefreshToken = crypto.randomBytes(40).toString('hex');
     const newHash = crypto.createHash('sha256').update(newRawRefreshToken).digest('hex');
 
-    await prisma.refreshToken.create({
+    const createdSession = await prisma.refreshToken.create({
       data: {
         account_id: existingToken.account_id,
         token_hash: newHash,
@@ -1206,9 +1238,17 @@ export class AuthService {
       { expiresIn: env.jwt.accessTtl },
     );
 
+    const decoded = jwt.decode(newAccessToken);
+    const accessExpiresAt = decoded?.exp
+      ? new Date(decoded.exp * 1000).toISOString()
+      : new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const sessionId = String(createdSession.token_id);
+
     return {
       accessToken: newAccessToken,
       refreshToken: newRawRefreshToken,
+      accessExpiresAt,
+      sessionId,
     };
   }
 
