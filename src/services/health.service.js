@@ -54,7 +54,7 @@ class HealthService {
   /**
    * Get health overview & timetable for class querying live PostgreSQL
    */
-  async getHealthOverview({ classId, week = '12/10 - 18/10/2026' }) {
+  async getHealthOverview({ classId, week = '12/10 - 18/10/2026', date }) {
     // 1. Resolve target class
     let targetClass = null;
     if (classId) {
