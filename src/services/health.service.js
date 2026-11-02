@@ -73,11 +73,32 @@ class HealthService {
       }
     }
 
-    // 2. Fetch enrolled students
+    const targetDateStr = date || new Date().toISOString().slice(0, 10);
+    const targetDateStart = new Date(`${targetDateStr}T00:00:00.000Z`);
+    const targetDateEnd = new Date(`${targetDateStr}T23:59:59.999Z`);
+
+    // 2. Fetch enrolled students active on targetDate
     const enrollments = await prisma.studentEnrollment.findMany({
       where: {
         class_id: targetClass.class_id,
         student: { deleted_at: null },
+        AND: [
+          {
+            OR: [
+              { enrolled_at: null },
+              { enrolled_at: { lte: targetDateEnd } },
+            ],
+          },
+          {
+            OR: [
+              { left_at: null },
+              { left_at: { gt: targetDateStart } },
+            ],
+          },
+          {
+            status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
+          },
+        ],
       },
       include: {
         student: true,
