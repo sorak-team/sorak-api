@@ -1,29 +1,55 @@
 import Joi from 'joi';
 
 export const createActivitySchema = Joi.object({
+  id: Joi.alternatives().try(Joi.number().integer(), Joi.string()).allow(null).optional(),
   contentId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).required().messages({
     'any.required': 'Nội dung giáo dục (contentId) là bắt buộc',
   }),
+  themeId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).allow(null, '').optional(),
+  theme_id: Joi.alternatives().try(Joi.number().integer(), Joi.string()).allow(null, '').optional(),
+  themeCode: Joi.string().trim().allow(null, '').optional(),
   subThemeId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).allow(null).optional(),
-  title: Joi.string().trim().min(2).max(255).required().messages({
+  title: Joi.string().trim().min(2).max(500).required().messages({
     'string.empty': 'Tiêu đề hoạt động không được để trống',
     'string.min': 'Tiêu đề hoạt động phải có ít nhất 2 ký tự',
     'any.required': 'Tiêu đề hoạt động là bắt buộc',
   }),
+  routineSlot: Joi.string().trim().allow('', null).optional(),
+  routine_slot: Joi.string().trim().allow('', null).optional(),
+  objective: Joi.string().trim().allow('', null).optional(),
   purpose: Joi.string().trim().allow('', null).optional(),
   preparation: Joi.string().trim().allow('', null).optional(),
+  procedure: Joi.string().trim().allow('', null).optional(),
   steps: Joi.string().trim().allow('', null).optional(),
+  evaluationCriteria: Joi.string().trim().allow('', null).optional(),
+  evaluation_criteria: Joi.string().trim().allow('', null).optional(),
+  evaluation: Joi.string().trim().allow('', null).optional(),
   assessmentCriteria: Joi.string().trim().allow('', null).optional(),
-});
+  creatorName: Joi.string().trim().allow('', null).optional(),
+  updaterName: Joi.string().trim().allow('', null).optional(),
+}).unknown(true);
 
 export const updateActivitySchema = Joi.object({
+  id: Joi.alternatives().try(Joi.number().integer(), Joi.string()).allow(null).optional(),
   contentId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).optional(),
+  themeId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).allow(null, '').optional(),
+  theme_id: Joi.alternatives().try(Joi.number().integer(), Joi.string()).allow(null, '').optional(),
+  themeCode: Joi.string().trim().allow(null, '').optional(),
   subThemeId: Joi.alternatives().try(Joi.number().integer(), Joi.string()).allow(null).optional(),
-  title: Joi.string().trim().min(2).max(255).optional().messages({
+  title: Joi.string().trim().min(2).max(500).optional().messages({
     'string.min': 'Tiêu đề hoạt động phải có ít nhất 2 ký tự',
   }),
+  routineSlot: Joi.string().trim().allow('', null).optional(),
+  routine_slot: Joi.string().trim().allow('', null).optional(),
+  objective: Joi.string().trim().allow('', null).optional(),
   purpose: Joi.string().trim().allow('', null).optional(),
   preparation: Joi.string().trim().allow('', null).optional(),
+  procedure: Joi.string().trim().allow('', null).optional(),
   steps: Joi.string().trim().allow('', null).optional(),
+  evaluationCriteria: Joi.string().trim().allow('', null).optional(),
+  evaluation_criteria: Joi.string().trim().allow('', null).optional(),
+  evaluation: Joi.string().trim().allow('', null).optional(),
   assessmentCriteria: Joi.string().trim().allow('', null).optional(),
-});
+  creatorName: Joi.string().trim().allow('', null).optional(),
+  updaterName: Joi.string().trim().allow('', null).optional(),
+}).unknown(true);

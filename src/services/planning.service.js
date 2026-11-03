@@ -115,7 +115,19 @@ class PlanningService {
     if (!rawId) return null;
     try {
       if (typeof rawId === 'bigint') return rawId;
-      if (typeof rawId === 'number') return BigInt(rawId);
+      if (typeof rawId === 'number') {
+        const acc = await prisma.account.findUnique({
+          where: { account_id: BigInt(rawId) },
+          select: { account_id: true },
+        });
+        if (acc) return acc.account_id;
+        const teacher = await prisma.teacher.findUnique({
+          where: { teacher_id: BigInt(rawId) },
+          select: { account_id: true },
+        });
+        if (teacher?.account_id) return teacher.account_id;
+        return BigInt(rawId);
+      }
       const str = String(rawId).trim();
       if (/^\d+$/.test(str)) {
         const acc = await prisma.account.findUnique({
@@ -123,6 +135,11 @@ class PlanningService {
           select: { account_id: true },
         });
         if (acc) return acc.account_id;
+        const teacher = await prisma.teacher.findUnique({
+          where: { teacher_id: BigInt(str) },
+          select: { account_id: true },
+        });
+        if (teacher?.account_id) return teacher.account_id;
       }
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)) {
         const acc = await prisma.account.findFirst({
@@ -143,7 +160,7 @@ class PlanningService {
       });
       if (accByUsername) return accByUsername.account_id;
     } catch (err) {
-      logger.warn('Could not resolve staff account ID:', err);
+      logger.warn('[planningService.resolveStaffAccountId] Failed to resolve staff account ID:', err.message);
     }
     return null;
   }
@@ -270,6 +287,13 @@ class PlanningService {
               activities: {
                 where: { deleted_at: null },
                 include: {
+                  theme: {
+                    select: {
+                      theme_id: true,
+                      public_id: true,
+                      name: true,
+                    },
+                  },
                   creator: {
                     select: {
                       public_id: true,
@@ -308,9 +332,15 @@ class PlanningService {
         });
         const scheduledActIds = new Set(classScheduledActs.map((s) => s.activity_id.toString()));
 
+        const classAllocations = await prisma.classThemeGoal.findMany({
+          where: { class_id: targetClass.class_id },
+          include: { theme: true },
+        });
+
         goalsWithActivities = dbGoals.map((g) => {
           const contentsWithActs = g.contents.map((cnt) => {
             const classActivities = cnt.activities.filter((act) => {
+              if (allowedAccountIds.size === 0) return true;
               if (scheduledActIds.has(act.activity_id.toString())) return true;
               if (act.created_by && allowedAccountIds.has(act.created_by.toString())) return true;
               return false;
@@ -325,6 +355,10 @@ class PlanningService {
               return {
                 id: actId,
                 contentId: cnt.public_id || cnt.content_id.toString(),
+                themeId: act.theme?.public_id || (act.theme_id ? act.theme_id.toString() : null),
+                theme_id: act.theme?.public_id || (act.theme_id ? act.theme_id.toString() : null),
+                themeName: act.theme?.name || null,
+                _theme_id: act.theme_id ? act.theme_id.toString() : null,
                 goalCode: g.goal_code,
                 domain: g.domain,
                 routineSlot: act.routine_slot,
@@ -358,6 +392,17 @@ class PlanningService {
             };
           });
 
+          const goalAllocs = classAllocations.filter((a) => a.goal_id === g.goal_id);
+          const allocatedThemes = goalAllocs.map((a) => ({
+            id: a.theme.public_id || a.theme.theme_id.toString(),
+            themeId: a.theme.public_id || a.theme.theme_id.toString(),
+            _theme_id: a.theme.theme_id.toString(),
+            name: a.theme.name,
+            themeName: a.theme.name,
+            startDate: a.theme.start_date.toISOString().slice(0, 10),
+            endDate: a.theme.end_date.toISOString().slice(0, 10),
+          }));
+
           return {
             id: g.public_id || g.goal_id.toString(),
             goalCode: g.goal_code,
@@ -366,6 +411,7 @@ class PlanningService {
             domainCode: '',
             domainLabel: g.domain,
             title: cleanGoalTitle(g.goal_code, g.title, ageGroup),
+            allocatedThemes,
             contents: contentsWithActs,
           };
         });
@@ -444,28 +490,51 @@ class PlanningService {
 
       if (orConditions.length > 0) {
         existingActivity = await prisma.educationalActivity.findFirst({
-          where: { OR: orConditions },
+          where: { OR: orConditions, deleted_at: null },
         });
       }
     }
 
     const cleanTitle = activity.title.trim().slice(0, 500);
 
+    let targetThemeId = null;
+    const rawThemeId = activity.themeId || activity.theme_id || null;
+    if (rawThemeId) {
+      const strTheme = String(rawThemeId).trim();
+      const isNum = typeof rawThemeId === 'number' || /^\d+$/.test(strTheme);
+      const isUuidFormat = isUuid(strTheme);
+      const themeWhere = [];
+      if (isNum) themeWhere.push({ theme_id: BigInt(strTheme) });
+      if (isUuidFormat) themeWhere.push({ public_id: strTheme });
+      if (themeWhere.length > 0) {
+        const th = await prisma.curriculumTheme.findFirst({
+          where: { OR: themeWhere, deleted_at: null },
+          select: { theme_id: true },
+        });
+        if (th) targetThemeId = th.theme_id;
+      }
+    }
+
     if (existingActivity) {
+      const targetRoutineSlot = activity.routineSlot || activity.routine_slot || existingActivity.routine_slot || 'DIRECTED_STUDY';
       const updated = await prisma.educationalActivity.update({
         where: { activity_id: existingActivity.activity_id },
         data: {
           content_id: targetContentId,
-          routine_slot: activity.routineSlot || 'DIRECTED_STUDY',
+          routine_slot: targetRoutineSlot,
           title: cleanTitle,
-          objective: activity.objective || '',
+          objective: activity.objective || activity.purpose || '',
           preparation: activity.preparation || '',
-          procedure: activity.procedure || '',
-          evaluation_criteria: activity.evaluationCriteria || activity.evaluation_criteria || activity.evaluation || '',
+          procedure: activity.procedure || activity.steps || '',
+          evaluation_criteria: activity.evaluationCriteria || activity.evaluation_criteria || activity.evaluation || activity.assessmentCriteria || '',
+          ...(targetThemeId !== null ? { theme_id: targetThemeId } : {}),
           ...(staffAccountId ? { updated_by: staffAccountId } : {}),
           updated_at: new Date(),
         },
         include: {
+          theme: {
+            select: { theme_id: true, public_id: true, name: true },
+          },
           creator: {
             select: { username: true, teacher: { select: { full_name: true } } },
           },
@@ -478,24 +547,40 @@ class PlanningService {
       return {
         ...activity,
         id: updated.public_id || updated.activity_id.toString(),
+        contentId: activity.contentId,
+        themeId: updated.theme?.public_id || (updated.theme_id ? updated.theme_id.toString() : null),
+        theme_id: updated.theme?.public_id || (updated.theme_id ? updated.theme_id.toString() : null),
+        themeName: updated.theme?.name || activity.themeName || null,
+        routineSlot: updated.routine_slot,
+        routine_slot: updated.routine_slot,
+        title: updated.title,
+        objective: updated.objective || '',
+        preparation: updated.preparation || '',
+        procedure: updated.procedure || '',
+        evaluationCriteria: updated.evaluation_criteria || '',
         creatorName: updated.creator?.teacher?.full_name || updated.creator?.username || activity.creatorName || null,
         updaterName: updated.updater?.teacher?.full_name || updated.updater?.username || activity.updaterName || null,
         updatedAt: updated.updated_at.toISOString(),
       };
     }
 
+    const targetRoutineSlot = activity.routineSlot || activity.routine_slot || 'DIRECTED_STUDY';
     const created = await prisma.educationalActivity.create({
       data: {
         content_id: targetContentId,
-        routine_slot: activity.routineSlot || 'DIRECTED_STUDY',
+        routine_slot: targetRoutineSlot,
         title: cleanTitle,
-        objective: activity.objective || '',
+        objective: activity.objective || activity.purpose || '',
         preparation: activity.preparation || '',
-        procedure: activity.procedure || '',
-        evaluation_criteria: activity.evaluationCriteria || activity.evaluation_criteria || activity.evaluation || '',
+        procedure: activity.procedure || activity.steps || '',
+        evaluation_criteria: activity.evaluationCriteria || activity.evaluation_criteria || activity.evaluation || activity.assessmentCriteria || '',
+        ...(targetThemeId ? { theme_id: targetThemeId } : {}),
         ...(staffAccountId ? { created_by: staffAccountId } : {}),
       },
       include: {
+        theme: {
+          select: { theme_id: true, public_id: true, name: true },
+        },
         creator: {
           select: { username: true, teacher: { select: { full_name: true } } },
         },
@@ -505,6 +590,17 @@ class PlanningService {
     return {
       ...activity,
       id: created.public_id || created.activity_id.toString(),
+      contentId: activity.contentId,
+      themeId: created.theme?.public_id || (created.theme_id ? created.theme_id.toString() : null),
+      theme_id: created.theme?.public_id || (created.theme_id ? created.theme_id.toString() : null),
+      themeName: created.theme?.name || activity.themeName || null,
+      routineSlot: created.routine_slot,
+      routine_slot: created.routine_slot,
+      title: created.title,
+      objective: created.objective || '',
+      preparation: created.preparation || '',
+      procedure: created.procedure || '',
+      evaluationCriteria: created.evaluation_criteria || '',
       creatorName: created.creator?.teacher?.full_name || created.creator?.username || activity.creatorName || null,
       updaterName: null,
       createdAt: created.created_at.toISOString(),
@@ -528,7 +624,7 @@ class PlanningService {
 
     const existing = orConditions.length > 0
       ? await prisma.educationalActivity.findFirst({
-          where: { OR: orConditions },
+          where: { OR: orConditions, deleted_at: null },
         })
       : null;
 
@@ -537,8 +633,13 @@ class PlanningService {
     }
 
     // Check if this activity is used in any weekly timetable/plan (sub_theme_activities)
+    const targetClass = classId ? await this.resolveClass(classId).catch(() => null) : null;
+    const scheduledWhere = { activity_id: existing.activity_id };
+    if (targetClass?.class_id) {
+      scheduledWhere.class_id = targetClass.class_id;
+    }
     const scheduledCount = await prisma.subThemeActivity.count({
-      where: { activity_id: existing.activity_id },
+      where: scheduledWhere,
     });
 
     if (scheduledCount > 0) {
@@ -547,8 +648,12 @@ class PlanningService {
       );
     }
 
-    await prisma.educationalActivity.delete({
+    // Soft delete: update deleted_at
+    await prisma.educationalActivity.update({
       where: { activity_id: existing.activity_id },
+      data: {
+        deleted_at: new Date(),
+      },
     });
 
     return { success: true, activityId };
@@ -849,6 +954,13 @@ class PlanningService {
               activities: {
                 where: { deleted_at: null },
                 include: {
+                  theme: {
+                    select: {
+                      theme_id: true,
+                      public_id: true,
+                      name: true,
+                    },
+                  },
                   creator: {
                     select: {
                       username: true,
@@ -888,6 +1000,7 @@ class PlanningService {
         goalsWithActivities = dbGoals.map((g) => {
           const contentsWithActs = g.contents.map((cnt) => {
             const classActivities = cnt.activities.filter((act) => {
+              if (allowedAccountIds.size === 0) return true;
               if (scheduledActIds.has(act.activity_id.toString())) return true;
               if (act.created_by && allowedAccountIds.has(act.created_by.toString())) return true;
               return false;
@@ -899,6 +1012,10 @@ class PlanningService {
               const actPayload = {
                 id: actId,
                 contentId: cnt.public_id || cnt.content_id.toString(),
+                themeId: act.theme?.public_id || (act.theme_id ? act.theme_id.toString() : null),
+                theme_id: act.theme?.public_id || (act.theme_id ? act.theme_id.toString() : null),
+                themeName: act.theme?.name || null,
+                _theme_id: act.theme_id ? act.theme_id.toString() : null,
                 goalCode: g.goal_code,
                 goalTitle: g.title,
                 domain: g.domain,
@@ -906,6 +1023,7 @@ class PlanningService {
                 domainLabel: g.domain,
                 contentTitle: cnt.title,
                 routineSlot: act.routine_slot,
+                routine_slot: act.routine_slot,
                 title: act.title,
                 objective: act.objective || '',
                 preparation: act.preparation || '',
@@ -1007,6 +1125,7 @@ class PlanningService {
         });
         return {
           themeId: th.id,
+          _theme_id: (th._theme_id || th.id)?.toString(),
           themeName: th.name,
           startDate: sStr,
           endDate: eStr,
@@ -1061,7 +1180,7 @@ class PlanningService {
     }
 
     const activity = await prisma.educationalActivity.findFirst({
-      where: { OR: orConditions },
+      where: { OR: orConditions, deleted_at: null },
       include: {
         content: { include: { goal: true } },
         creator: { select: { username: true, teacher: { select: { full_name: true } } } },
@@ -1400,7 +1519,7 @@ class PlanningService {
 
         const act = orConditions.length > 0
           ? await prisma.educationalActivity.findFirst({
-              where: { OR: orConditions },
+              where: { OR: orConditions, deleted_at: null },
             })
           : null;
         if (act) {

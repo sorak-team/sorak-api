@@ -694,6 +694,7 @@ model CurriculumTheme {
   school_year    SchoolYear                @relation(fields: [school_year_id], references: [school_year_id], onDelete: Restrict)
   sub_themes     SubTheme[]
   class_goals    ClassThemeGoal[]
+  activities     EducationalActivity[]
 
   @@index([school_year_id, age_group, start_date, end_date], map: "idx_themes_dates")
   @@index([status], map: "idx_themes_status")
@@ -768,6 +769,7 @@ model EducationalActivity {
   activity_id          BigInt                @id @default(autoincrement())
   public_id            String                @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   content_id           BigInt
+  theme_id             BigInt?
   created_by           BigInt                @default(1)
   updated_by           BigInt?
   routine_slot         DailyRoutineSlotEnum
@@ -782,6 +784,7 @@ model EducationalActivity {
 
   // Relations
   content              EducationalContent    @relation(fields: [content_id], references: [content_id], onDelete: Cascade)
+  theme                CurriculumTheme?      @relation(fields: [theme_id], references: [theme_id], onDelete: SetNull)
   creator              Account               @relation("EducationalActivityCreatedBy", fields: [created_by], references: [account_id], onDelete: Restrict)
   updater              Account?              @relation("EducationalActivityUpdatedBy", fields: [updated_by], references: [account_id], onDelete: SetNull)
   sub_theme_activities SubThemeActivity[]
@@ -789,6 +792,7 @@ model EducationalActivity {
 
   @@index([routine_slot], map: "idx_activities_slot")
   @@index([content_id], map: "idx_activities_content")
+  @@index([theme_id], map: "idx_activities_theme")
   @@index([created_by], map: "idx_activities_creator")
   @@map("educational_activities")
 }
