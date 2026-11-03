@@ -6,13 +6,17 @@ info:
     Tài liệu API đầy đủ và toàn diện của **Hệ thống Quản lý Trường Mầm non Sorak
     (Capstone SEP490)**.
 
-    Bao gồm toàn bộ **153 endpoints** thuộc 14 phân hệ nghiệp vụ và **45 Schemas
+    Bao gồm toàn bộ **153 endpoints** thuộc 14 phân hệ nghiệp vụ và **49 Schemas
     chi tiết** (Thực thể Prisma 3NF, Request DTOs và Response Wrappers).
 servers:
+  - url: https://testmamnonhontre.sorak.io.vn/api
+    description: 🧪 Server Test / Staging (Dành cho Tester & Mobile Dev)
+  - url: https://test2mamnonhontre.sorak.io.vn/api
+    description: 🧪 Server Test 2 (Môi trường Staging Test 2)
+  - url: https://mamnonhontre.sorak.io.vn/api
+    description: 🚀 Server Production (Hệ thống chính thức)
   - url: /api
     description: Current Server (Tự động thích ứng domain hiện tại)
-  - url: https://mamnonhontre.sorak.io.vn/api
-    description: Production Server (HTTPS Domain chính thức)
   - url: http://103.69.191.210:8084/api
     description: VPS Staging Port 8084 (HTTP Trực tiếp)
   - url: http://localhost:3000/api
@@ -1376,6 +1380,19 @@ paths:
       summary: Trang HTML xác thực Cloudflare Turnstile cho Mobile WebView
       description: Endpoint API nghiệp vụ cho chức năng **Trang HTML xác thực
         Cloudflare Turnstile cho Mobile WebView** thuộc phân hệ **Auth**.
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       responses:
         "200":
           description: Trang HTML giao diện Cloudflare Turnstile cho Mobile WebView
@@ -1390,6 +1407,19 @@ paths:
       summary: Đăng nhập vào hệ thống
       description: Endpoint API nghiệp vụ cho chức năng **Đăng nhập vào hệ thống**
         thuộc phân hệ **Auth**.
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       requestBody:
         required: true
         content:
@@ -1402,13 +1432,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
+                $ref: "#/components/schemas/LoginResponse"
         "400":
           description: Dữ liệu không hợp lệ (Validation Error)
           content:
@@ -1424,6 +1448,19 @@ paths:
         thuộc phân hệ **Auth**.
       security:
         - bearerAuth: []
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       requestBody:
         required: true
         content:
@@ -1468,6 +1505,19 @@ paths:
       summary: Yêu cầu đặt lại mật khẩu qua Email
       description: Endpoint API nghiệp vụ cho chức năng **Yêu cầu đặt lại mật khẩu qua
         Email** thuộc phân hệ **Auth**.
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       requestBody:
         required: true
         content:
@@ -1500,6 +1550,19 @@ paths:
       summary: Xác thực mã OTP khôi phục mật khẩu
       description: Endpoint API nghiệp vụ cho chức năng **Xác thực mã OTP khôi phục
         mật khẩu** thuộc phân hệ **Auth**.
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       requestBody:
         required: true
         content:
@@ -1532,6 +1595,19 @@ paths:
       summary: Đặt mật khẩu mới sau khi xác thực OTP
       description: Endpoint API nghiệp vụ cho chức năng **Đặt mật khẩu mới sau khi xác
         thực OTP** thuộc phân hệ **Auth**.
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       requestBody:
         required: true
         content:
@@ -1564,13 +1640,25 @@ paths:
       summary: Làm mới Access Token
       description: Endpoint API nghiệp vụ cho chức năng **Làm mới Access Token** thuộc
         phân hệ **Auth**.
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
-              type: object
-              description: Dữ liệu payload gửi lên server
+              $ref: "#/components/schemas/RefreshTokenRequest"
       responses:
         "200":
           description: Thao tác thành công
@@ -1599,6 +1687,19 @@ paths:
         thuộc phân hệ **Auth**.
       security:
         - bearerAuth: []
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       requestBody:
         required: false
         content:
@@ -1646,19 +1747,26 @@ paths:
         tại** thuộc phân hệ **Auth**.
       security:
         - bearerAuth: []
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       responses:
         "200":
           description: Thao tác thành công
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
+                $ref: "#/components/schemas/UserProfileResponse"
         "400":
           description: Dữ liệu không hợp lệ (Validation Error)
           content:
@@ -1686,6 +1794,19 @@ paths:
         đang hoạt động** thuộc phân hệ **Auth**.
       security:
         - bearerAuth: []
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       responses:
         "200":
           description: Thao tác thành công
@@ -1725,6 +1846,19 @@ paths:
         thiết bị** thuộc phân hệ **Auth**.
       security:
         - bearerAuth: []
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       responses:
         "200":
           description: Thao tác thành công
@@ -1765,6 +1899,19 @@ paths:
         thiết bị khác** thuộc phân hệ **Auth**.
       security:
         - bearerAuth: []
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       responses:
         "200":
           description: Thao tác thành công
@@ -1805,6 +1952,19 @@ paths:
         thuộc phân hệ **Auth**.
       security:
         - bearerAuth: []
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       requestBody:
         required: true
         content:
@@ -1851,6 +2011,19 @@ paths:
         2FA (QR Code)** thuộc phân hệ **Auth**.
       security:
         - bearerAuth: []
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       requestBody:
         required: false
         content:
@@ -1898,6 +2071,19 @@ paths:
         thuộc phân hệ **Auth**.
       security:
         - bearerAuth: []
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       requestBody:
         required: false
         content:
@@ -1945,6 +2131,19 @@ paths:
         phân hệ **Auth**.
       security:
         - bearerAuth: []
+      parameters:
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       requestBody:
         required: false
         content:
@@ -1999,6 +2198,18 @@ paths:
           schema:
             type: string
           description: Mã định danh sessionId
+        - name: X-Client-Platform
+          in: header
+          required: false
+          schema:
+            type: string
+            enum:
+              - android
+              - ios
+              - web
+            default: android
+          description: Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận
+            token/session và bypass CAPTCHA cho mobile)
       responses:
         "200":
           description: Thao tác thành công
@@ -7534,22 +7745,95 @@ components:
     LoginRequest:
       type: object
       required:
-        - username
         - password
       properties:
         username:
           type: string
-          example: BGH001
-          description: Tên đăng nhập hoặc Email
+          example: CB20001
+          description: Tên đăng nhập hoặc mã tài khoản
         password:
           type: string
           format: password
           example: Sorak@2026
-          description: Mật khẩu tài khoản
-        turnstileToken:
+          description: Mật khẩu
+        role:
+          type: string
+          enum:
+            - TEACHER_GV
+            - PARENT_PH
+            - PRINCIPAL_BGH
+            - ADMIN_BGH
+          example: TEACHER_GV
+          description: Vai trò người dùng đăng nhập
+        captchaToken:
           type: string
           example: sorak-mobile-bypass
-          description: Token xác thực Cloudflare Turnstile
+          description: Mã xác thực bảo vệ bot Cloudflare Turnstile (Dùng
+            "sorak-mobile-bypass" cho Mobile App)
+        rememberMe:
+          type: boolean
+          default: true
+    RefreshTokenRequest:
+      type: object
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+          description: Refresh token để cấp mới access token
+    LoginResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            accessToken:
+              type: string
+              example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+            refreshToken:
+              type: string
+              example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+            accessExpiresAt:
+              type: string
+              example: 2026-11-03T10:15:00Z
+            sessionId:
+              type: string
+              example: ses_123456789
+            user:
+              $ref: "#/components/schemas/UserProfile"
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          example: CB20001
+        username:
+          type: string
+          example: CB20001
+        fullName:
+          type: string
+          example: Nguyễn Thị Thơ
+        role:
+          type: string
+          example: TEACHER_GV
+        email:
+          type: string
+          example: tho.nguyen@mamnonhontre.sorak.io.vn
+        phone:
+          type: string
+          example: "0901234567"
+    UserProfileResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/UserProfile"
     Verify2FARequest:
       type: object
       required:
@@ -7736,10 +8020,14 @@ components:
     CreateStudentRequest:
       type: object
       required:
+        - studentCode
         - fullName
         - dateOfBirth
         - gender
       properties:
+        studentCode:
+          type: string
+          example: SORAK-2026-001
         fullName:
           type: string
           example: Trần Gia Bảo
@@ -7753,12 +8041,15 @@ components:
             - MALE
             - FEMALE
           example: MALE
-        ethnicity:
+        ethnic:
           type: string
           default: Kinh
+        nationality:
+          type: string
+          default: Việt Nam
         address:
           type: string
-          example: Hòn Tre, Kiên Giang
+          example: Xã Hòn Tre, Kiên Hải, Kiên Giang
         classId:
           type: string
           example: cls_choi_01
@@ -7874,11 +8165,11 @@ components:
         ageGroup:
           type: string
           enum:
-            - NURSERY_NHA_TRE
-            - JUNIOR_MAM
-            - MIDDLE_CHOI
-            - SENIOR_LA
-          example: MIDDLE_CHOI
+            - NHA_TRE
+            - MAM
+            - CHOI
+            - LA
+          example: CHOI
         roomNumber:
           type: string
           example: Phòng 201
@@ -7896,7 +8187,6 @@ components:
       required:
         - name
         - ageGroup
-        - schoolYearId
       properties:
         name:
           type: string
@@ -7904,29 +8194,36 @@ components:
         ageGroup:
           type: string
           enum:
-            - NURSERY_NHA_TRE
-            - JUNIOR_MAM
-            - MIDDLE_CHOI
-            - SENIOR_LA
-          example: SENIOR_LA
+            - NHA_TRE
+            - MAM
+            - CHOI
+            - LA
+          example: LA
         schoolYearId:
           type: string
           example: sy_2026_2027
         roomNumber:
           type: string
           example: Phòng 302
-        maxCapacity:
-          type: integer
-          default: 30
+        description:
+          type: string
+          example: Lớp học khối Lá năm học 2026-2027
     UpdateClassRequest:
       type: object
       properties:
         name:
           type: string
+        ageGroup:
+          type: string
+          enum:
+            - NHA_TRE
+            - MAM
+            - CHOI
+            - LA
         roomNumber:
           type: string
-        maxCapacity:
-          type: integer
+        description:
+          type: string
     AssignTeacherClassRequest:
       type: object
       required:
@@ -8008,22 +8305,35 @@ components:
     CreateTeacherRequest:
       type: object
       required:
-        - teacherCode
         - fullName
-        - phone
+        - dateOfBirth
+        - gender
+        - citizenId
+        - startDate
       properties:
-        teacherCode:
+        employeeCode:
           type: string
           example: GV-005
         fullName:
           type: string
           example: Trần Thị Mai
+        dateOfBirth:
+          type: string
+          format: date
+          example: 1995-08-20
         gender:
           type: string
           enum:
             - MALE
             - FEMALE
           default: FEMALE
+        citizenId:
+          type: string
+          example: "091234567890"
+        startDate:
+          type: string
+          format: date
+          example: 2026-09-01
         phone:
           type: string
           example: "0918765432"
@@ -8031,9 +8341,16 @@ components:
           type: string
           format: email
           example: mai.tran@mamnonhontre.sorak.io.vn
-        qualification:
+        position:
           type: string
-          example: Cử nhân Giáo dục Mầm non
+          example: Giáo viên mầm non
+        workStatus:
+          type: string
+          enum:
+            - WORKING
+            - LEAVE_OF_ABSENCE
+            - RESIGNED
+          default: WORKING
     UpdateTeacherRequest:
       type: object
       properties:
@@ -8081,19 +8398,31 @@ components:
       required:
         - name
         - startDate
+        - semester1EndDate
         - endDate
       properties:
         name:
           type: string
-          example: Năm học 2027 - 2028
+          example: Năm học 2026 - 2027
         startDate:
           type: string
           format: date
-          example: 2027-09-01
+          example: 2026-09-01
+        semester1EndDate:
+          type: string
+          format: date
+          example: 2027-01-15
         endDate:
           type: string
           format: date
-          example: 2028-05-31
+          example: 2027-05-31
+        status:
+          type: string
+          enum:
+            - UPCOMING
+            - ACTIVE
+            - COMPLETED
+          default: UPCOMING
     UpdateSchoolYearRequest:
       type: object
       properties:
@@ -8102,17 +8431,26 @@ components:
         startDate:
           type: string
           format: date
+        semester1EndDate:
+          type: string
+          format: date
         endDate:
           type: string
           format: date
+        status:
+          type: string
+          enum:
+            - UPCOMING
+            - ACTIVE
+            - COMPLETED
     CreateHolidayRequest:
       type: object
       required:
-        - holidayName
+        - name
         - startDate
         - endDate
       properties:
-        holidayName:
+        name:
           type: string
           example: Nghỉ Tết Nguyên Đán
         startDate:

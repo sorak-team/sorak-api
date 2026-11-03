@@ -78,23 +78,14 @@ class HealthService {
     const targetDateEnd = new Date(`${targetDateStr}T23:59:59.999Z`);
 
     // 2. Fetch enrolled students active on targetDate
-    const enrollments = await prisma.studentEnrollment.findMany({
+    const rawEnrollments = await prisma.studentEnrollment.findMany({
       where: {
         class_id: targetClass.class_id,
         student: { deleted_at: null },
-        AND: [
-          {
-            enrolled_at: { lte: targetDateEnd },
-          },
-          {
-            OR: [
-              { left_at: null },
-              { left_at: { gt: targetDateStart } },
-            ],
-          },
-          {
-            status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
-          },
+        status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
+        OR: [
+          { left_at: null },
+          { left_at: { gt: targetDateStart } },
         ],
       },
       include: {
@@ -102,6 +93,43 @@ class HealthService {
       },
       orderBy: { student: { student_code: 'asc' } },
     });
+
+    const existingAtts = await prisma.attendance.findMany({
+      where: {
+        class_id: targetClass.class_id,
+        date: { gte: targetDateStart, lte: targetDateEnd },
+        deleted_at: null,
+      },
+      select: { student_id: true },
+    });
+    const existingAttSet = new Set(existingAtts.map((a) => a.student_id.toString()));
+
+    const enrollments = [];
+    for (const enr of rawEnrollments) {
+      const sId = enr.student_id.toString();
+      if (existingAttSet.has(sId)) {
+        enrollments.push(enr);
+        continue;
+      }
+      if (enr.enrolled_at && new Date(enr.enrolled_at) <= targetDateEnd) {
+        enrollments.push(enr);
+        continue;
+      }
+      const inOtherClass = await prisma.studentEnrollment.findFirst({
+        where: {
+          student_id: enr.student_id,
+          class_id: { not: targetClass.class_id },
+          enrolled_at: { lte: targetDateEnd },
+          OR: [
+            { left_at: null },
+            { left_at: { gt: targetDateStart } },
+          ],
+        },
+      });
+      if (!inOtherClass) {
+        enrollments.push(enr);
+      }
+    }
 
     // 3. Fetch latest health assessments for enrolled students
     const studentIds = enrollments.map((e) => e.student_id);
