@@ -14,6 +14,7 @@ import { requestId } from './middlewares/request-id.js';
 import { responseWrapper } from './middlewares/response-wrapper.js';
 import { errorHandler, notFoundHandler } from './middlewares/error-handler.js';
 import apiRouter from './routes/index.js';
+import { setupSwagger } from './config/swagger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -65,6 +66,9 @@ export function createApp() {
   app.get('/health', (req, res) => {
     res.json({ success: true, data: { status: 'ok', uptime: process.uptime() } });
   });
+
+  // Swagger Documentation UI
+  setupSwagger(app);
 
   app.use('/api', apiRouter);
 

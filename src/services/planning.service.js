@@ -115,32 +115,7 @@ class PlanningService {
     if (!rawId) return null;
     try {
       if (typeof rawId === 'bigint') return rawId;
-      if (typeof rawId === 'number') {
-        const acc = await prisma.account.findUnique({
-          where: { account_id: BigInt(rawId) },
-          select: { account_id: true },
-        });
-        if (acc) return acc.account_id;
-        const teacher = await prisma.teacher.findUnique({
-          where: { teacher_id: BigInt(rawId) },
-          select: { account_id: true },
-        });
-        if (teacher?.account_id) return teacher.account_id;
-        return BigInt(rawId);
-      }
       const str = String(rawId).trim();
-      if (/^\d+$/.test(str)) {
-        const acc = await prisma.account.findUnique({
-          where: { account_id: BigInt(str) },
-          select: { account_id: true },
-        });
-        if (acc) return acc.account_id;
-        const teacher = await prisma.teacher.findUnique({
-          where: { teacher_id: BigInt(str) },
-          select: { account_id: true },
-        });
-        if (teacher?.account_id) return teacher.account_id;
-      }
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)) {
         const acc = await prisma.account.findFirst({
           where: { public_id: str },
@@ -153,6 +128,21 @@ class PlanningService {
           select: { account_id: true },
         });
         if (teacher?.account_id) return teacher.account_id;
+      }
+      if (/^\d+$/.test(str)) {
+        const numId = BigInt(str);
+        // Prioritize teacher with this teacher_id first to resolve to their account_id
+        const teacher = await prisma.teacher.findUnique({
+          where: { teacher_id: numId },
+          select: { account_id: true },
+        });
+        if (teacher?.account_id) return teacher.account_id;
+
+        const acc = await prisma.account.findUnique({
+          where: { account_id: numId },
+          select: { account_id: true },
+        });
+        if (acc) return acc.account_id;
       }
       const accByUsername = await prisma.account.findFirst({
         where: { username: str },
@@ -515,8 +505,27 @@ class PlanningService {
       }
     }
 
+    const VALID_SLOTS = [
+      'ARRIVAL_PLAY',
+      'MORNING_EXERCISE',
+      'DIRECTED_STUDY',
+      'CORNER_PLAY',
+      'OUTDOOR_PLAY',
+      'HYGIENE_MEAL_SLEEP',
+      'AFTERNOON_ACTIVITY',
+      'RETURN_CHILD',
+    ];
+    const normalizeSlot = (slot) => {
+      if (!slot) return 'DIRECTED_STUDY';
+      const s = String(slot).trim().toUpperCase();
+      if (s === 'OUTDOOR_ACTIVITY' || s === 'OUTDOOR') return 'OUTDOOR_PLAY';
+      return VALID_SLOTS.includes(s) ? s : 'DIRECTED_STUDY';
+    };
+
     if (existingActivity) {
-      const targetRoutineSlot = activity.routineSlot || activity.routine_slot || existingActivity.routine_slot || 'DIRECTED_STUDY';
+      const targetRoutineSlot = normalizeSlot(
+        activity.routineSlot || activity.routine_slot || existingActivity.routine_slot || 'DIRECTED_STUDY'
+      );
       const updated = await prisma.educationalActivity.update({
         where: { activity_id: existingActivity.activity_id },
         data: {
@@ -564,7 +573,7 @@ class PlanningService {
       };
     }
 
-    const targetRoutineSlot = activity.routineSlot || activity.routine_slot || 'DIRECTED_STUDY';
+    const targetRoutineSlot = normalizeSlot(activity.routineSlot || activity.routine_slot || 'DIRECTED_STUDY');
     const created = await prisma.educationalActivity.create({
       data: {
         content_id: targetContentId,
@@ -632,21 +641,15 @@ class PlanningService {
       throw new NotFound('Không tìm thấy hoạt động giáo dục.');
     }
 
-    // Check if this activity is used in any weekly timetable/plan (sub_theme_activities)
+    // Automatically remove slots in weekly timetable for this class so delete succeeds cleanly
     const targetClass = classId ? await this.resolveClass(classId).catch(() => null) : null;
     const scheduledWhere = { activity_id: existing.activity_id };
     if (targetClass?.class_id) {
       scheduledWhere.class_id = targetClass.class_id;
     }
-    const scheduledCount = await prisma.subThemeActivity.count({
+    await prisma.subThemeActivity.deleteMany({
       where: scheduledWhere,
     });
-
-    if (scheduledCount > 0) {
-      throw new BadRequest(
-        'Không thể xóa hoạt động giáo dục đã được sử dụng trong kế hoạch tuần của lớp.'
-      );
-    }
 
     // Soft delete: update deleted_at
     await prisma.educationalActivity.update({

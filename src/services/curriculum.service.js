@@ -485,6 +485,20 @@ class CurriculumService {
         );
       }
 
+      // Quy tắc thời lượng: Tối thiểu 2 tuần (14 ngày), tối đa 6 tuần (42 ngày)
+      const diffMs = new Date(t.endDate) - new Date(t.startDate);
+      const diffDays = Math.round(diffMs / 86400000) + 1;
+      if (diffDays < 14) {
+        throw new BadRequest(
+          `Chủ đề "${tName}": Thời lượng chủ đề tối thiểu là 2 tuần (14 ngày). Hiện tại là ${diffDays} ngày.`,
+        );
+      }
+      if (diffDays > 42) {
+        throw new BadRequest(
+          `Chủ đề "${tName}": Thời lượng chủ đề tối đa là 6 tuần (42 ngày). Hiện tại là ${diffDays} ngày.`,
+        );
+      }
+
       // Quy tắc 2: Không đè lên chủ đề trước
       if (i > 0) {
         const prevT = targetThemes[i - 1];
