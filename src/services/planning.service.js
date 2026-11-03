@@ -131,18 +131,19 @@ class PlanningService {
       }
       if (/^\d+$/.test(str)) {
         const numId = BigInt(str);
-        // Prioritize teacher with this teacher_id first to resolve to their account_id
-        const teacher = await prisma.teacher.findUnique({
-          where: { teacher_id: numId },
-          select: { account_id: true },
-        });
-        if (teacher?.account_id) return teacher.account_id;
-
+        // Prioritize account_id lookup first
         const acc = await prisma.account.findUnique({
           where: { account_id: numId },
           select: { account_id: true },
         });
         if (acc) return acc.account_id;
+
+        // Fallback to teacher_id lookup to find account_id
+        const teacher = await prisma.teacher.findUnique({
+          where: { teacher_id: numId },
+          select: { account_id: true },
+        });
+        if (teacher?.account_id) return teacher.account_id;
       }
       const accByUsername = await prisma.account.findFirst({
         where: { username: str },
@@ -567,8 +568,8 @@ class PlanningService {
         preparation: updated.preparation || '',
         procedure: updated.procedure || '',
         evaluationCriteria: updated.evaluation_criteria || '',
-        creatorName: updated.creator?.teacher?.full_name || updated.creator?.username || activity.creatorName || null,
-        updaterName: updated.updater?.teacher?.full_name || updated.updater?.username || activity.updaterName || null,
+        creatorName: updated.creator?.teacher?.full_name || updated.creator?.username || null,
+        updaterName: updated.updater?.teacher?.full_name || updated.updater?.username || null,
         updatedAt: updated.updated_at.toISOString(),
       };
     }
@@ -641,14 +642,9 @@ class PlanningService {
       throw new NotFound('Không tìm thấy hoạt động giáo dục.');
     }
 
-    // Automatically remove slots in weekly timetable for this class so delete succeeds cleanly
-    const targetClass = classId ? await this.resolveClass(classId).catch(() => null) : null;
-    const scheduledWhere = { activity_id: existing.activity_id };
-    if (targetClass?.class_id) {
-      scheduledWhere.class_id = targetClass.class_id;
-    }
+    // Automatically remove slots in weekly timetable so delete succeeds cleanly and no orphaned slots remain
     await prisma.subThemeActivity.deleteMany({
-      where: scheduledWhere,
+      where: { activity_id: existing.activity_id },
     });
 
     // Soft delete: update deleted_at

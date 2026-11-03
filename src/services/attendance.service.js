@@ -91,23 +91,14 @@ class AttendanceService {
     const targetDateEnd = new Date(`${targetDateStr}T23:59:59.999Z`);
 
     // 2.1 Fetch enrolled students active on targetDate (exclude students transferred out prior to this date)
-    const enrollments = await prisma.studentEnrollment.findMany({
+    const rawEnrollments = await prisma.studentEnrollment.findMany({
       where: {
         class_id: targetClass.class_id,
         student: { deleted_at: null },
-        AND: [
-          {
-            enrolled_at: { lte: targetDateEnd },
-          },
-          {
-            OR: [
-              { left_at: null },
-              { left_at: { gt: targetDateStart } },
-            ],
-          },
-          {
-            status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
-          },
+        status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
+        OR: [
+          { left_at: null },
+          { left_at: { gt: targetDateStart } },
         ],
       },
       include: {
@@ -115,6 +106,44 @@ class AttendanceService {
       },
       orderBy: { student: { student_code: 'asc' } },
     });
+
+    // Query students who already have attendance records in this class on this date
+    const existingAtts = await prisma.attendance.findMany({
+      where: {
+        class_id: targetClass.class_id,
+        date: { gte: targetDateStart, lte: targetDateEnd },
+        deleted_at: null,
+      },
+      select: { student_id: true },
+    });
+    const existingAttSet = new Set(existingAtts.map((a) => a.student_id.toString()));
+
+    const enrollments = [];
+    for (const enr of rawEnrollments) {
+      const sId = enr.student_id.toString();
+      if (existingAttSet.has(sId)) {
+        enrollments.push(enr);
+        continue;
+      }
+      if (enr.enrolled_at && new Date(enr.enrolled_at) <= targetDateEnd) {
+        enrollments.push(enr);
+        continue;
+      }
+      const inOtherClass = await prisma.studentEnrollment.findFirst({
+        where: {
+          student_id: enr.student_id,
+          class_id: { not: targetClass.class_id },
+          enrolled_at: { lte: targetDateEnd },
+          OR: [
+            { left_at: null },
+            { left_at: { gt: targetDateStart } },
+          ],
+        },
+      });
+      if (!inOtherClass) {
+        enrollments.push(enr);
+      }
+    }
 
     // 3. Query all dates in DB that actually have attendance records for this class
     const distinctAttendanceDates = await prisma.attendance.findMany({
@@ -696,23 +725,14 @@ class AttendanceService {
     const targetDateEnd = new Date(`${targetDateStr}T23:59:59.999Z`);
 
     // 2. Fetch enrolled students with their parents and active pickup authorizations (active on targetDate)
-    const enrollments = await prisma.studentEnrollment.findMany({
+    const rawEnrollments = await prisma.studentEnrollment.findMany({
       where: {
         class_id: targetClass.class_id,
         student: { deleted_at: null },
-        AND: [
-          {
-            enrolled_at: { lte: targetDateEnd },
-          },
-          {
-            OR: [
-              { left_at: null },
-              { left_at: { gt: targetDateStart } },
-            ],
-          },
-          {
-            status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
-          },
+        status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
+        OR: [
+          { left_at: null },
+          { left_at: { gt: targetDateStart } },
         ],
       },
       include: {
@@ -736,6 +756,43 @@ class AttendanceService {
       },
       orderBy: { student: { student_code: 'asc' } },
     });
+
+    const existingAtts = await prisma.attendance.findMany({
+      where: {
+        class_id: targetClass.class_id,
+        date: { gte: targetDateStart, lte: targetDateEnd },
+        deleted_at: null,
+      },
+      select: { student_id: true },
+    });
+    const existingAttSet = new Set(existingAtts.map((a) => a.student_id.toString()));
+
+    const enrollments = [];
+    for (const enr of rawEnrollments) {
+      const sId = enr.student_id.toString();
+      if (existingAttSet.has(sId)) {
+        enrollments.push(enr);
+        continue;
+      }
+      if (enr.enrolled_at && new Date(enr.enrolled_at) <= targetDateEnd) {
+        enrollments.push(enr);
+        continue;
+      }
+      const inOtherClass = await prisma.studentEnrollment.findFirst({
+        where: {
+          student_id: enr.student_id,
+          class_id: { not: targetClass.class_id },
+          enrolled_at: { lte: targetDateEnd },
+          OR: [
+            { left_at: null },
+            { left_at: { gt: targetDateStart } },
+          ],
+        },
+      });
+      if (!inOtherClass) {
+        enrollments.push(enr);
+      }
+    }
 
     const studentIds = enrollments.map((e) => e.student_id);
 
@@ -965,22 +1022,28 @@ class AttendanceService {
    * Cancel child dismissal (reset to In-Class state)
    */
   async cancelDismissal({ classId, date, studentId }) {
-    const cId = BigInt(classId || 5);
+    const targetClass = await this._resolveClass(classId);
+    if (!targetClass) {
+      throw new NotFound('Lớp học không tồn tại hoặc mã định danh không hợp lệ');
+    }
+    const cId = targetClass.class_id;
     const targetDateStr = date || new Date().toISOString().slice(0, 10);
     const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
-    let sId;
-    try {
-      if (typeof studentId === 'string' && studentId.includes('-')) {
-        const std = await prisma.student.findFirst({
-          where: { public_id: studentId },
-          select: { student_id: true },
-        });
-        sId = std ? std.student_id : BigInt(studentId);
-      } else {
-        sId = BigInt(studentId);
-      }
-    } catch {
-      sId = BigInt(studentId);
+
+    let sId = null;
+    const strStudentId = String(studentId || '').trim();
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(strStudentId)) {
+      const std = await prisma.student.findFirst({
+        where: { public_id: strStudentId },
+        select: { student_id: true },
+      });
+      if (std) sId = std.student_id;
+    } else if (/^\d+$/.test(strStudentId)) {
+      sId = BigInt(strStudentId);
+    }
+
+    if (!sId) {
+      throw new NotFound('Học sinh không tồn tại hoặc mã định danh không hợp lệ');
     }
 
     const attendance = await prisma.attendance.findFirst({
@@ -1023,7 +1086,11 @@ class AttendanceService {
    * Clear all child dismissals for a class and date
    */
   async clearAllDismissals({ classId, date }) {
-    const cId = BigInt(classId || 5);
+    const targetClass = await this._resolveClass(classId);
+    if (!targetClass) {
+      throw new NotFound('Lớp học không tồn tại hoặc mã định danh không hợp lệ');
+    }
+    const cId = targetClass.class_id;
     const targetDateStr = date || new Date().toISOString().slice(0, 10);
     const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
 
@@ -1079,27 +1146,55 @@ class AttendanceService {
     const filterDateStr = date || new Date().toISOString().slice(0, 10);
     const filterDateStart = new Date(`${filterDateStr}T00:00:00.000Z`);
     const filterDateEnd = new Date(`${filterDateStr}T23:59:59.999Z`);
-    const enrollments = await prisma.studentEnrollment.findMany({
+    const rawEnrollments = await prisma.studentEnrollment.findMany({
       where: {
         class_id: targetClassId,
         student: { deleted_at: null },
-        AND: [
-          {
-            enrolled_at: { lte: filterDateEnd },
-          },
-          {
-            OR: [
-              { left_at: null },
-              { left_at: { gt: filterDateStart } },
-            ],
-          },
-          {
-            status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
-          },
+        status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
+        OR: [
+          { left_at: null },
+          { left_at: { gt: filterDateStart } },
         ],
+      },
+      select: { student_id: true, enrolled_at: true },
+    });
+
+    const existingAtts = await prisma.attendance.findMany({
+      where: {
+        class_id: targetClassId,
+        date: { gte: filterDateStart, lte: filterDateEnd },
+        deleted_at: null,
       },
       select: { student_id: true },
     });
+    const existingAttSet = new Set(existingAtts.map((a) => a.student_id.toString()));
+
+    const enrollments = [];
+    for (const enr of rawEnrollments) {
+      const sId = enr.student_id.toString();
+      if (existingAttSet.has(sId)) {
+        enrollments.push(enr);
+        continue;
+      }
+      if (enr.enrolled_at && new Date(enr.enrolled_at) <= filterDateEnd) {
+        enrollments.push(enr);
+        continue;
+      }
+      const inOtherClass = await prisma.studentEnrollment.findFirst({
+        where: {
+          student_id: enr.student_id,
+          class_id: { not: targetClassId },
+          enrolled_at: { lte: filterDateEnd },
+          OR: [
+            { left_at: null },
+            { left_at: { gt: filterDateStart } },
+          ],
+        },
+      });
+      if (!inOtherClass) {
+        enrollments.push(enr);
+      }
+    }
     const studentIds = enrollments.map((e) => e.student_id);
 
     const whereClause = {

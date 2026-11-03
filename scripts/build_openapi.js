@@ -248,6 +248,7 @@ function getRequestSchemaRef(fullPath, method) {
   const m = method.toUpperCase();
 
   if (p === '/auth/login') return '#/components/schemas/LoginRequest';
+  if (p === '/auth/refresh') return '#/components/schemas/RefreshTokenRequest';
   if (p === '/auth/verify-2fa') return '#/components/schemas/Verify2FARequest';
   if (p === '/auth/forgot-password') return '#/components/schemas/ForgotPasswordRequest';
   if (p === '/auth/verify-otp') return '#/components/schemas/VerifyOtpRequest';
@@ -363,6 +364,21 @@ for (const r of routes) {
     });
   }
 
+  // Add X-Client-Platform header for auth endpoints
+  if (r.fullPath.startsWith('/auth/')) {
+    parameters.push({
+      name: 'X-Client-Platform',
+      in: 'header',
+      required: false,
+      schema: {
+        type: 'string',
+        enum: ['android', 'ios', 'web'],
+        default: 'android',
+      },
+      description: 'Nền tảng ứng dụng gọi API (Truyền "android" hoặc "ios" để nhận token/session và bypass CAPTCHA cho mobile)',
+    });
+  }
+
   const isPublic = (r.fullPath === '/auth/login' || r.fullPath === '/auth/mobile-challenge' || r.fullPath === '/auth/forgot-password' || r.fullPath === '/auth/verify-otp' || r.fullPath === '/auth/reset-password' || r.fullPath === '/auth/refresh');
 
   const op = {
@@ -431,18 +447,26 @@ for (const r of routes) {
       },
     };
   } else {
+    let successSchema = {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: { type: 'object' },
+      },
+    };
+
+    if (r.fullPath === '/auth/login') {
+      successSchema = { $ref: '#/components/schemas/LoginResponse' };
+    } else if (r.fullPath === '/auth/me') {
+      successSchema = { $ref: '#/components/schemas/UserProfileResponse' };
+    }
+
     op.responses = {
       '200': {
         description: 'Thao tác thành công',
         content: {
           'application/json': {
-            schema: {
-              type: 'object',
-              properties: {
-                success: { type: 'boolean', example: true },
-                data: { type: 'object' },
-              },
-            },
+            schema: successSchema,
           },
         },
       },
@@ -512,11 +536,67 @@ const componentsSchemas = {
   // 1. Auth Schemas
   LoginRequest: {
     type: 'object',
-    required: ['username', 'password'],
+    required: ['password'],
     properties: {
-      username: { type: 'string', example: 'BGH001', description: 'Tên đăng nhập hoặc Email' },
-      password: { type: 'string', format: 'password', example: 'Sorak@2026', description: 'Mật khẩu tài khoản' },
-      turnstileToken: { type: 'string', example: 'sorak-mobile-bypass', description: 'Token xác thực Cloudflare Turnstile' },
+      username: { type: 'string', example: 'CB20001', description: 'Tên đăng nhập hoặc mã tài khoản' },
+      password: { type: 'string', format: 'password', example: 'Sorak@2026', description: 'Mật khẩu' },
+      role: {
+        type: 'string',
+        enum: ['TEACHER_GV', 'PARENT_PH', 'PRINCIPAL_BGH', 'ADMIN_BGH'],
+        example: 'TEACHER_GV',
+        description: 'Vai trò người dùng đăng nhập',
+      },
+      captchaToken: {
+        type: 'string',
+        example: 'sorak-mobile-bypass',
+        description: 'Mã xác thực bảo vệ bot Cloudflare Turnstile (Dùng "sorak-mobile-bypass" cho Mobile App)',
+      },
+      rememberMe: { type: 'boolean', default: true },
+    },
+  },
+  RefreshTokenRequest: {
+    type: 'object',
+    required: ['refreshToken'],
+    properties: {
+      refreshToken: {
+        type: 'string',
+        example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+        description: 'Refresh token để cấp mới access token',
+      },
+    },
+  },
+  LoginResponse: {
+    type: 'object',
+    properties: {
+      success: { type: 'boolean', example: true },
+      data: {
+        type: 'object',
+        properties: {
+          accessToken: { type: 'string', example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' },
+          refreshToken: { type: 'string', example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' },
+          accessExpiresAt: { type: 'string', example: '2026-11-03T10:15:00Z' },
+          sessionId: { type: 'string', example: 'ses_123456789' },
+          user: { $ref: '#/components/schemas/UserProfile' },
+        },
+      },
+    },
+  },
+  UserProfile: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', example: 'CB20001' },
+      username: { type: 'string', example: 'CB20001' },
+      fullName: { type: 'string', example: 'Nguyễn Thị Thơ' },
+      role: { type: 'string', example: 'TEACHER_GV' },
+      email: { type: 'string', example: 'tho.nguyen@mamnonhontre.sorak.io.vn' },
+      phone: { type: 'string', example: '0901234567' },
+    },
+  },
+  UserProfileResponse: {
+    type: 'object',
+    properties: {
+      success: { type: 'boolean', example: true },
+      data: { $ref: '#/components/schemas/UserProfile' },
     },
   },
   Verify2FARequest: {
@@ -617,13 +697,15 @@ const componentsSchemas = {
   },
   CreateStudentRequest: {
     type: 'object',
-    required: ['fullName', 'dateOfBirth', 'gender'],
+    required: ['studentCode', 'fullName', 'dateOfBirth', 'gender'],
     properties: {
+      studentCode: { type: 'string', example: 'SORAK-2026-001' },
       fullName: { type: 'string', example: 'Trần Gia Bảo' },
       dateOfBirth: { type: 'string', format: 'date', example: '2021-05-15' },
       gender: { type: 'string', enum: ['MALE', 'FEMALE'], example: 'MALE' },
-      ethnicity: { type: 'string', default: 'Kinh' },
-      address: { type: 'string', example: 'Hòn Tre, Kiên Giang' },
+      ethnic: { type: 'string', default: 'Kinh' },
+      nationality: { type: 'string', default: 'Việt Nam' },
+      address: { type: 'string', example: 'Xã Hòn Tre, Kiên Hải, Kiên Giang' },
       classId: { type: 'string', example: 'cls_choi_01' },
     },
   },
@@ -693,7 +775,7 @@ const componentsSchemas = {
     properties: {
       id: { type: 'string', example: 'cls_choi_01' },
       name: { type: 'string', example: 'Lớp Chồi 1' },
-      ageGroup: { type: 'string', enum: ['NURSERY_NHA_TRE', 'JUNIOR_MAM', 'MIDDLE_CHOI', 'SENIOR_LA'], example: 'MIDDLE_CHOI' },
+      ageGroup: { type: 'string', enum: ['NHA_TRE', 'MAM', 'CHOI', 'LA'], example: 'CHOI' },
       roomNumber: { type: 'string', example: 'Phòng 201' },
       maxCapacity: { type: 'integer', example: 30 },
       currentStudents: { type: 'integer', example: 25 },
@@ -702,21 +784,22 @@ const componentsSchemas = {
   },
   CreateClassRequest: {
     type: 'object',
-    required: ['name', 'ageGroup', 'schoolYearId'],
+    required: ['name', 'ageGroup'],
     properties: {
       name: { type: 'string', example: 'Lớp Lá 2' },
-      ageGroup: { type: 'string', enum: ['NURSERY_NHA_TRE', 'JUNIOR_MAM', 'MIDDLE_CHOI', 'SENIOR_LA'], example: 'SENIOR_LA' },
+      ageGroup: { type: 'string', enum: ['NHA_TRE', 'MAM', 'CHOI', 'LA'], example: 'LA' },
       schoolYearId: { type: 'string', example: 'sy_2026_2027' },
       roomNumber: { type: 'string', example: 'Phòng 302' },
-      maxCapacity: { type: 'integer', default: 30 },
+      description: { type: 'string', example: 'Lớp học khối Lá năm học 2026-2027' },
     },
   },
   UpdateClassRequest: {
     type: 'object',
     properties: {
       name: { type: 'string' },
+      ageGroup: { type: 'string', enum: ['NHA_TRE', 'MAM', 'CHOI', 'LA'] },
       roomNumber: { type: 'string' },
-      maxCapacity: { type: 'integer' },
+      description: { type: 'string' },
     },
   },
   AssignTeacherClassRequest: {
@@ -764,14 +847,18 @@ const componentsSchemas = {
   },
   CreateTeacherRequest: {
     type: 'object',
-    required: ['teacherCode', 'fullName', 'phone'],
+    required: ['fullName', 'dateOfBirth', 'gender', 'citizenId', 'startDate'],
     properties: {
-      teacherCode: { type: 'string', example: 'GV-005' },
+      employeeCode: { type: 'string', example: 'GV-005' },
       fullName: { type: 'string', example: 'Trần Thị Mai' },
+      dateOfBirth: { type: 'string', format: 'date', example: '1995-08-20' },
       gender: { type: 'string', enum: ['MALE', 'FEMALE'], default: 'FEMALE' },
+      citizenId: { type: 'string', example: '091234567890' },
+      startDate: { type: 'string', format: 'date', example: '2026-09-01' },
       phone: { type: 'string', example: '0918765432' },
       email: { type: 'string', format: 'email', example: 'mai.tran@mamnonhontre.sorak.io.vn' },
-      qualification: { type: 'string', example: 'Cử nhân Giáo dục Mầm non' },
+      position: { type: 'string', example: 'Giáo viên mầm non' },
+      workStatus: { type: 'string', enum: ['WORKING', 'LEAVE_OF_ABSENCE', 'RESIGNED'], default: 'WORKING' },
     },
   },
   UpdateTeacherRequest: {
@@ -798,11 +885,13 @@ const componentsSchemas = {
   },
   CreateSchoolYearRequest: {
     type: 'object',
-    required: ['name', 'startDate', 'endDate'],
+    required: ['name', 'startDate', 'semester1EndDate', 'endDate'],
     properties: {
-      name: { type: 'string', example: 'Năm học 2027 - 2028' },
-      startDate: { type: 'string', format: 'date', example: '2027-09-01' },
-      endDate: { type: 'string', format: 'date', example: '2028-05-31' },
+      name: { type: 'string', example: 'Năm học 2026 - 2027' },
+      startDate: { type: 'string', format: 'date', example: '2026-09-01' },
+      semester1EndDate: { type: 'string', format: 'date', example: '2027-01-15' },
+      endDate: { type: 'string', format: 'date', example: '2027-05-31' },
+      status: { type: 'string', enum: ['UPCOMING', 'ACTIVE', 'COMPLETED'], default: 'UPCOMING' },
     },
   },
   UpdateSchoolYearRequest: {
@@ -810,14 +899,16 @@ const componentsSchemas = {
     properties: {
       name: { type: 'string' },
       startDate: { type: 'string', format: 'date' },
+      semester1EndDate: { type: 'string', format: 'date' },
       endDate: { type: 'string', format: 'date' },
+      status: { type: 'string', enum: ['UPCOMING', 'ACTIVE', 'COMPLETED'] },
     },
   },
   CreateHolidayRequest: {
     type: 'object',
-    required: ['holidayName', 'startDate', 'endDate'],
+    required: ['name', 'startDate', 'endDate'],
     properties: {
-      holidayName: { type: 'string', example: 'Nghỉ Tết Nguyên Đán' },
+      name: { type: 'string', example: 'Nghỉ Tết Nguyên Đán' },
       startDate: { type: 'string', format: 'date', example: '2027-02-05' },
       endDate: { type: 'string', format: 'date', example: '2027-02-15' },
       isRecurring: { type: 'boolean', default: false },
@@ -1023,8 +1114,10 @@ const openapiSpec = {
     description: `Tài liệu API đầy đủ và toàn diện của **Hệ thống Quản lý Trường Mầm non Sorak (Capstone SEP490)**.\nBao gồm toàn bộ **${routes.length} endpoints** thuộc 14 phân hệ nghiệp vụ và **${Object.keys(componentsSchemas).length} Schemas chi tiết** (Thực thể Prisma 3NF, Request DTOs và Response Wrappers).`,
   },
   servers: [
+    { url: 'https://testmamnonhontre.sorak.io.vn/api', description: '🧪 Server Test / Staging (Dành cho Tester & Mobile Dev)' },
+    { url: 'https://test2mamnonhontre.sorak.io.vn/api', description: '🧪 Server Test 2 (Môi trường Staging Test 2)' },
+    { url: 'https://mamnonhontre.sorak.io.vn/api', description: '🚀 Server Production (Hệ thống chính thức)' },
     { url: '/api', description: 'Current Server (Tự động thích ứng domain hiện tại)' },
-    { url: 'https://mamnonhontre.sorak.io.vn/api', description: 'Production Server (HTTPS Domain chính thức)' },
     { url: 'http://103.69.191.210:8084/api', description: 'VPS Staging Port 8084 (HTTP Trực tiếp)' },
     { url: 'http://localhost:3000/api', description: 'Local Development Server' },
   ],
