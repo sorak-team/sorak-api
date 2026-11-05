@@ -39,6 +39,9 @@ import {
   getTransferById,
   createGlobalTransferRequest,
   getClassExportData,
+  exportClassesExcel,
+  exportClassRosterExcel,
+  exportClassRosterPrintHtml,
   getDailyReport,
   saveStudentDailyReport,
   batchSaveDailyReport,
@@ -50,6 +53,9 @@ const router = Router();
 
 // Read operations: Available to all authenticated users
 router.get('/', authMiddleware, validate(queryClassSchema, 'query'), asyncHandler(listClasses));
+
+// Export all classes to Excel
+router.get('/export/excel', authMiddleware, asyncHandler(exportClassesExcel));
 
 // Global transfer requests for BGH / Admin
 router.get(
@@ -254,6 +260,8 @@ router.patch(
 
 // Class Export Roster endpoint
 router.get('/:id/export-data', authMiddleware, asyncHandler(getClassExportData));
+router.get('/:id/export/roster', authMiddleware, asyncHandler(exportClassRosterExcel));
+router.get('/:id/export/roster/print', authMiddleware, asyncHandler(exportClassRosterPrintHtml));
 
 export default router;
 
