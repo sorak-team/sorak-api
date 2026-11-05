@@ -1,5 +1,5 @@
 import { schoolYearService } from '../services/school-year.service.js';
-
+import { calendarImportService } from '../services/calendar-import.service.js';
 
 export const listSchoolYears = async (req, res) => {
   const result = await schoolYearService.listSchoolYears(req.query);
@@ -94,3 +94,59 @@ export const deleteHoliday = async (req, res) => {
   res.success(result);
 };
 
+/**
+ * Tải file Excel mẫu Lịch năm học & Ngày nghỉ
+ */
+export const getCalendarTemplate = async (req, res) => {
+  const buffer = await calendarImportService.getImportTemplate();
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader(
+    'Content-Disposition',
+    'attachment; filename="Mau_Lich_Nam_Hoc_Sorak.xlsx"',
+  );
+  res.send(buffer);
+};
+
+/**
+ * Xem trước dữ liệu và kiểm tra lỗi từ file Excel lịch năm học
+ */
+export const previewCalendarImport = async (req, res) => {
+  const { id } = req.params;
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: 'Vui lòng chọn file Excel để tải lên.' });
+  }
+  const result = await calendarImportService.previewImport(req.file.buffer, id);
+  res.success(result, 'Kiểm tra tệp lịch năm học thành công');
+};
+
+/**
+ * Thực thi nhập lịch năm học từ Excel
+ */
+export const importCalendarExcel = async (req, res) => {
+  const { id } = req.params;
+  const { holidays } = req.body;
+  const actorId = req.user?.accountId || req.user?.sub;
+  const result = await calendarImportService.importCalendar(holidays, id, actorId);
+  res.success(result, `Nhập thành công ${result.successCount}/${result.total} ngày lễ/sự kiện.`);
+};
+
+/**
+ * Xuất lịch hoạt động & ngày nghỉ năm học ra file Excel
+ */
+export const exportCalendarExcel = async (req, res) => {
+  const { id } = req.params;
+  const buffer = await calendarImportService.exportCalendarExcel(id);
+  const filename = `Lich_Nam_Hoc_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${filename}"`,
+  );
+  res.send(buffer);
+};
