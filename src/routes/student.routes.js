@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { asyncHandler } from '../utils/async-handler.js';
 import { validate } from '../middlewares/validate.js';
 import { authMiddleware } from '../middlewares/auth.js';
@@ -23,16 +24,55 @@ import {
   addParent,
   updateParent,
   deleteParent,
+  getImportTemplate,
+  previewImport,
+  importStudents,
+  exportStudentsExcel,
 } from '../controllers/student.controller.js';
 
 const router = Router();
+const uploadExcel = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+});
+
+// ==========================================
+// IMPORT & EXPORT (Place before /:id)
+// ==========================================
+
+// Tải file mẫu nhập học sinh
+router.get('/import/template', authMiddleware, requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'), asyncHandler(getImportTemplate));
+
+// Xem trước dữ liệu và kiểm tra lỗi từ file Excel
+router.post(
+  '/import/preview',
+  authMiddleware,
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
+  uploadExcel.single('file'),
+  asyncHandler(previewImport),
+);
+
+// Thực thi nhập học sinh
+router.post(
+  '/import',
+  authMiddleware,
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
+  asyncHandler(importStudents),
+);
+
+// Xuất danh sách học sinh ra file Excel
+router.get('/export/excel', authMiddleware, asyncHandler(exportStudentsExcel));
+
+// ==========================================
+// CRUD OPERATIONS
+// ==========================================
 
 // Read operations: Available to authenticated school staff
 router.get('/', authMiddleware, validate(queryStudentSchema, 'query'), asyncHandler(listStudents));
 
 router.get('/:id', authMiddleware, asyncHandler(getStudentById));
 
-// Write operations: Strictly restricted to PRINCIPAL_BGH / TEACHER_GV
+// Write operations: Strictly restricted to PRINCIPAL_BGH / ADMIN_BGH
 router.post(
   '/',
   authMiddleware,
