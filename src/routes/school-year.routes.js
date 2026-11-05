@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { asyncHandler } from '../utils/async-handler.js';
 import { validate } from '../middlewares/validate.js';
 import { authMiddleware } from '../middlewares/auth.js';
@@ -26,9 +27,27 @@ import {
   importHolidays,
   updateHoliday,
   deleteHoliday,
+  getCalendarTemplate,
+  previewCalendarImport,
+  importCalendarExcel,
+  exportCalendarExcel,
 } from '../controllers/school-year.controller.js';
 
 const router = Router();
+const uploadExcel = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+});
+
+// ==========================================
+// CALENDAR IMPORT EXCEL (Place before /:id)
+// ==========================================
+router.get(
+  '/calendar/template',
+  authMiddleware,
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
+  asyncHandler(getCalendarTemplate),
+);
 
 // Transition & Readiness endpoints
 router.get('/:id/transition-readiness', authMiddleware, asyncHandler(getTransitionReadiness));
@@ -60,6 +79,27 @@ router.post(
   requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
   asyncHandler(importHolidays),
 );
+
+// Calendar Import & Export Excel endpoints
+router.get(
+  '/:id/calendar/export/excel',
+  authMiddleware,
+  asyncHandler(exportCalendarExcel),
+);
+router.post(
+  '/:id/calendar/preview',
+  authMiddleware,
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
+  uploadExcel.single('file'),
+  asyncHandler(previewCalendarImport),
+);
+router.post(
+  '/:id/calendar/import',
+  authMiddleware,
+  requireRoles('PRINCIPAL_BGH', 'ADMIN_BGH'),
+  asyncHandler(importCalendarExcel),
+);
+
 router.patch(
   '/:id/holidays/:holidayId',
   authMiddleware,
