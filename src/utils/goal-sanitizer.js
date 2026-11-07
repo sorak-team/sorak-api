@@ -46,7 +46,7 @@ export function normalizeGoalCode(code) {
   if (digitsMatch) {
     const num = parseInt(digitsMatch[0], 10);
     if (!isNaN(num)) {
-      return num < 10 ? `MT0${num}` : `MT${num}`;
+      return num < 10 ? `MT 0${num}` : `MT ${num}`;
     }
   }
   return raw.replace(/[^A-Z0-9]/g, '');
@@ -114,20 +114,21 @@ export function cleanGoalTitle(goalCode, title, ageGroup) {
   }
 
   const norm = normalizeGoalCode(goalCode);
+  const compactNorm = norm.replace(/\s+/g, '');
   const ag = String(ageGroup || '').toUpperCase();
 
   // If title has corrupted question marks or is missing, look up standard goal text
   if (!result || result.includes('?')) {
     if (ag.includes('MAM')) {
-      if (MAM_STANDARD_GOALS[norm]) return MAM_STANDARD_GOALS[norm];
+      if (MAM_STANDARD_GOALS[norm] || MAM_STANDARD_GOALS[compactNorm]) return MAM_STANDARD_GOALS[norm] || MAM_STANDARD_GOALS[compactNorm];
     } else if (ag.includes('CHOI')) {
-      if (CHOI_STANDARD_GOALS[norm]) return CHOI_STANDARD_GOALS[norm];
+      if (CHOI_STANDARD_GOALS[norm] || CHOI_STANDARD_GOALS[compactNorm]) return CHOI_STANDARD_GOALS[norm] || CHOI_STANDARD_GOALS[compactNorm];
     } else if (ag.includes('LA')) {
-      if (LA_STANDARD_GOALS[norm]) return LA_STANDARD_GOALS[norm];
+      if (LA_STANDARD_GOALS[norm] || LA_STANDARD_GOALS[compactNorm]) return LA_STANDARD_GOALS[norm] || LA_STANDARD_GOALS[compactNorm];
     }
 
-    if (NHA_TRE_STANDARD_GOALS[norm]) {
-      return NHA_TRE_STANDARD_GOALS[norm];
+    if (NHA_TRE_STANDARD_GOALS[norm] || NHA_TRE_STANDARD_GOALS[compactNorm]) {
+      return NHA_TRE_STANDARD_GOALS[norm] || NHA_TRE_STANDARD_GOALS[compactNorm];
     }
   }
 
