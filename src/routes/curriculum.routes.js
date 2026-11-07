@@ -15,9 +15,14 @@ import {
   updateGoal,
   deleteGoal,
   queryAiAssistant,
+  exportEducationalFrameworkExcel,
 } from '../controllers/curriculum.controller.js';
 
 const router = Router();
+
+// Framework & Goals Export
+router.get('/framework/export/excel', authMiddleware, asyncHandler(exportEducationalFrameworkExcel));
+router.get('/goals/export/excel', authMiddleware, asyncHandler(exportEducationalFrameworkExcel));
 
 // Themes endpoints
 
