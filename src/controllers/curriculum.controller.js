@@ -74,3 +74,18 @@ export const queryAiAssistant = async (req, res) => {
   const result = await curriculumService.queryAiAssistant(req.body);
   res.success(result);
 };
+
+export const exportEducationalFrameworkExcel = async (req, res) => {
+  const { year, schoolYearId } = req.query;
+  const buffer = await curriculumService.exportEducationalFrameworkExcel({ year, schoolYearId });
+  const filename = `Khung_Chuong_Trinh_GDMN_${year ? `${year}_` : ''}${new Date().toISOString().slice(0, 10)}.xlsx`;
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${filename}"`,
+  );
+  res.send(buffer);
+};
