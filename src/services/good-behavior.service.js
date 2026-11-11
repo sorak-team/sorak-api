@@ -58,6 +58,17 @@ class GoodBehaviorService {
       }
     }
 
+    // Parse week date range if provided to filter active enrollments for this week
+    let weekEnd = null;
+    const dateMatch = String(week).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/g);
+    if (dateMatch && dateMatch.length >= 2) {
+      const [d, m, y] = dateMatch[1].split('/');
+      weekEnd = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d), 23, 59, 59, 999));
+    } else if (dateMatch && dateMatch.length === 1) {
+      const [d, m, y] = dateMatch[0].split('/');
+      weekEnd = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d), 23, 59, 59, 999));
+    }
+
     // 2. Fetch enrolled students
     const enrollments = await prisma.studentEnrollment.findMany({
       where: {
@@ -68,6 +79,20 @@ class GoodBehaviorService {
         student: true,
       },
       orderBy: { student: { student_code: 'asc' } },
+    });
+
+    const activeEnrollments = enrollments.filter((enr) => {
+      if (weekEnd) {
+        if (enr.enrolled_at) {
+          const enrDate = new Date(enr.enrolled_at);
+          if (enrDate > weekEnd) return false;
+        }
+        if (enr.left_at) {
+          const leftDate = new Date(enr.left_at);
+          if (leftDate < weekEnd) return false;
+        }
+      }
+      return true;
     });
 
     // 3. Fetch monthly assessments for Month 10 / 2026
@@ -84,7 +109,7 @@ class GoodBehaviorService {
       monthlyMap.set(m.student_id.toString(), m);
     });
 
-    const students = enrollments.map((enr) => {
+    const students = activeEnrollments.map((enr) => {
       const st = enr.student;
       const m = monthlyMap.get(st.student_id.toString());
       const roses = m ? (m.roses_count ?? 0) : 0;
