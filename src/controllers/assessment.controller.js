@@ -108,6 +108,41 @@ class AssessmentController {
       next(err);
     }
   }
+
+  async publishMonthlyAssessments(req, res, next) {
+    try {
+      const { classId } = req.params;
+      const { month, year, isPublished } = req.body;
+      const publishedBy = req.user?.sub || req.user?.accountId || req.user?.id;
+      const data = await assessmentService.publishMonthlyAssessments({
+        classId,
+        month,
+        year,
+        isPublished: isPublished !== false,
+        publishedBy,
+      });
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async publishSemesterAssessments(req, res, next) {
+    try {
+      const { classId } = req.params;
+      const { semester, isPublished } = req.body;
+      const publishedBy = req.user?.sub || req.user?.accountId || req.user?.id;
+      const data = await assessmentService.publishSemesterAssessments({
+        classId,
+        semester,
+        isPublished: isPublished !== false,
+        publishedBy,
+      });
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 export const assessmentController = new AssessmentController();

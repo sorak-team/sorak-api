@@ -1,6 +1,8 @@
 import prisma from '../config/prisma.js';
 import { NotFound } from '../utils/http-error.js';
+import { notificationService } from './notification.service.js';
 import { TIMETABLE_DAYS } from './mock-data.js';
+import { getClassificationFromZScores } from '../utils/who-calculator.js';
 
 /**
  * Safely parse date from various formats (YYYY-MM-DD, DD/MM, DD/MM/YYYY, or Date object)
@@ -85,6 +87,66 @@ class AssessmentService {
   }
 
   /**
+   * Helper to resolve evaluator account_id (BigInt)
+   * Handles numeric string/number, UUID public_id, or fallback to class teacher / default (40n)
+   */
+  async resolveEvaluatorAccountId(evaluatedBy, classId = null) {
+    let evalAccountId = null;
+    if (evaluatedBy) {
+      const strEval = String(evaluatedBy).trim();
+      if (/^\d+$/.test(strEval)) {
+        const acc = await prisma.account.findUnique({
+          where: { account_id: BigInt(strEval) },
+          select: { account_id: true },
+        });
+        if (acc) evalAccountId = acc.account_id;
+      } else if (isUuid(strEval)) {
+        const acc = await prisma.account.findUnique({
+          where: { public_id: strEval },
+          select: { account_id: true },
+        });
+        if (acc) {
+          evalAccountId = acc.account_id;
+        }
+      }
+    }
+    if (!evalAccountId && classId) {
+      try {
+        const parsedClass = /^\d+$/.test(String(classId))
+          ? { class_id: BigInt(classId) }
+          : isUuid(String(classId))
+          ? { public_id: String(classId) }
+          : null;
+        if (parsedClass) {
+          const teacherAlloc = await prisma.teacherClass.findFirst({
+            where: {
+              class: parsedClass,
+              left_at: null,
+            },
+            include: {
+              teacher: { select: { account_id: true } },
+            },
+          });
+          if (teacherAlloc?.teacher?.account_id) {
+            evalAccountId = teacherAlloc.teacher.account_id;
+          }
+        }
+      } catch (err) {
+        // ignore fallback errors
+      }
+    }
+    if (!evalAccountId) {
+      const firstAcc = await prisma.account.findFirst({
+        where: { is_active: true },
+        orderBy: { account_id: 'asc' },
+        select: { account_id: true },
+      });
+      evalAccountId = firstAcc ? firstAcc.account_id : 1n;
+    }
+    return evalAccountId;
+  }
+
+  /**
    * Helper to resolve enrolled students
    */
   async getEnrolledStudents(classId, targetDate = null) {
@@ -123,6 +185,8 @@ class AssessmentService {
       name: e.student.full_name,
       gender: e.student.gender,
       isTransferred: false,
+      enrolledAt: e.enrolled_at ? new Date(e.enrolled_at).toISOString().slice(0, 10) : null,
+      leftAt: e.left_at ? new Date(e.left_at).toISOString().slice(0, 10) : null,
     }));
   }
 
@@ -330,14 +394,28 @@ class AssessmentService {
             deleted_at: null,
           },
         });
-        if (act) targetActivityId = act.activity_id;
+        if (act) {
+          targetActivityId = act.activity_id;
+        } else if (isNum) {
+          // If not found in educationalActivity, activityId might be a slot ID in subThemeActivity
+          try {
+            const subSlot = await prisma.subThemeActivity.findUnique({
+              where: { id: BigInt(strId) },
+            });
+            if (subSlot && subSlot.activity_id) {
+              targetActivityId = subSlot.activity_id;
+            }
+          } catch {}
+        }
       }
-    } else if (slotId && !isNaN(Number(slotId))) {
+    }
+
+    if (!targetActivityId && slotId && !isNaN(Number(slotId))) {
       try {
         const subSlot = await prisma.subThemeActivity.findUnique({
           where: { id: BigInt(slotId) },
         });
-        if (subSlot) {
+        if (subSlot && subSlot.activity_id) {
           targetActivityId = subSlot.activity_id;
         }
       } catch {}
@@ -345,9 +423,21 @@ class AssessmentService {
 
     if (!targetActivityId) {
       const firstActivity = await prisma.educationalActivity.findFirst({
-        where: { routine_slot: 'DIRECTED_STUDY', deleted_at: null },
+        where: { deleted_at: null },
+        orderBy: { activity_id: 'asc' },
       });
-      targetActivityId = firstActivity ? firstActivity.activity_id : 629n;
+      if (firstActivity) {
+        targetActivityId = firstActivity.activity_id;
+      } else {
+        const created = await prisma.educationalActivity.create({
+          data: {
+            title: 'Hoạt động học tập và sinh hoạt hàng ngày',
+            activity_type: 'ROUTINE',
+            routine_slot: 'DIRECTED_STUDY',
+          },
+        });
+        targetActivityId = created.activity_id;
+      }
     }
 
     if (Array.isArray(records) && records.length > 0) {
@@ -378,50 +468,31 @@ class AssessmentService {
         if (st.student_code) studentIdMap.set(st.student_code, st.student_id);
       });
 
-      let evalAccountId = 40n;
-      if (evaluatedBy) {
-        const strEval = String(evaluatedBy).trim();
-        if (/^\d+$/.test(strEval)) {
-          evalAccountId = BigInt(strEval);
-        } else if (isUuid(strEval)) {
-          const acc = await prisma.account.findUnique({
-            where: { public_id: strEval },
-            select: { account_id: true },
-          });
-          if (acc) evalAccountId = acc.account_id;
-        }
-      }
-      if (evalAccountId === 40n && classId) {
-        const parsedClass = /^\d+$/.test(String(classId))
-          ? { class_id: BigInt(classId) }
-          : isUuid(String(classId))
-          ? { public_id: String(classId) }
-          : null;
-        if (parsedClass) {
-          const teacherAlloc = await prisma.teacherClass.findFirst({
-            where: {
-              class: parsedClass,
-              left_at: null,
-            },
-            include: {
-              teacher: { select: { account_id: true } },
-            },
-          });
-          if (teacherAlloc?.teacher?.account_id) {
-            evalAccountId = teacherAlloc.teacher.account_id;
-          }
-        }
-      }
+      const evalAccountId = await this.resolveEvaluatorAccountId(evaluatedBy, classId);
 
       for (const rec of records) {
         const rawId = String(rec.studentId || rec.id).trim();
         const sId = studentIdMap.get(rawId) || (/^\d+$/.test(rawId) ? BigInt(rawId) : null);
         if (!sId) continue;
 
-        const status = ['ACHIEVED', 'NOT_ACHIEVED', 'OUTSTANDING'].includes(rec.status)
+        let status = ['ACHIEVED', 'NOT_ACHIEVED', 'OUTSTANDING'].includes(rec.status)
           ? rec.status
           : (rec.status === 'N' ? 'NOT_ACHIEVED' : 'ACHIEVED');
-        const note = rec.note || (status === 'ACHIEVED' ? 'Con đạt yêu cầu' : (status === 'OUTSTANDING' ? 'Con xuất sắc' : 'Cần cô hỗ trợ thêm'));
+
+        // Nghiệp vụ: Bé nghỉ học không cho phép đánh giá đạt hoặc vượt trội
+        const att = await prisma.attendance.findFirst({
+          where: {
+            student_id: sId,
+            date: today,
+            status: { in: ['ABSENT', 'EXCUSED_ABSENCE', 'UNEXCUSED_ABSENCE'] },
+            deleted_at: null,
+          },
+        });
+        if (att && (status === 'ACHIEVED' || status === 'OUTSTANDING')) {
+          status = 'NOT_ACHIEVED';
+        }
+
+        const note = rec.note || (att ? 'Nghỉ học' : (status === 'ACHIEVED' ? 'Con đạt yêu cầu' : (status === 'OUTSTANDING' ? 'Con xuất sắc' : 'Cần cô hỗ trợ thêm')));
 
         await prisma.dailyAssessment.upsert({
           where: {
@@ -596,7 +667,6 @@ class AssessmentService {
    */
   async getMonthlyAssessments({ classId, month, year }) {
     const targetClass = await this.resolveClass(classId);
-    const students = await this.getEnrolledStudents(targetClass.class_id);
 
     // Find the latest month that has assessment records for this class
     const latestRecord = await prisma.monthlyAssessment.findFirst({
@@ -614,14 +684,84 @@ class AssessmentService {
     const numMonth = month ? Number(month) : (latestRecord ? latestRecord.month : prevMonth);
     const numYear = year ? Number(year) : (latestRecord ? latestRecord.year : prevYear);
 
-    // End of queried month (e.g. for Month 9: 30/09/2026 23:59:59)
-    const monthEnd = new Date(numYear, numMonth, 0, 23, 59, 59, 999);
+    // Ngày bắt đầu năm học 2026-2027 (Mặc định Thứ Hai 07/09/2026)
+    const syStartDate = targetClass.school_year?.start_date
+      ? new Date(targetClass.school_year.start_date)
+      : new Date(2026, 8, 7);
+
+    // Xây dựng danh sách 9 tháng học kỳ (mỗi tháng gồm đúng 4 tuần trọn vẹn = 28 ngày)
+    const ACADEMIC_MONTHS = [
+      { month: 9, year: 2026, label: 'Tháng 9/2026' },
+      { month: 10, year: 2026, label: 'Tháng 10/2026' },
+      { month: 11, year: 2026, label: 'Tháng 11/2026' },
+      { month: 12, year: 2026, label: 'Tháng 12/2026' },
+      { month: 1, year: 2027, label: 'Tháng 1/2027' },
+      { month: 2, year: 2027, label: 'Tháng 2/2027' },
+      { month: 3, year: 2027, label: 'Tháng 3/2027' },
+      { month: 4, year: 2027, label: 'Tháng 4/2027' },
+      { month: 5, year: 2027, label: 'Tháng 5/2027' },
+    ];
+
+    const academicMonthsMap = {};
+    let cursorStart = new Date(syStartDate);
+    cursorStart.setHours(0, 0, 0, 0);
+
+    ACADEMIC_MONTHS.forEach((mObj) => {
+      const key = `${mObj.year}-${mObj.month}`;
+      const weeks = {};
+      const weeksList = [];
+      const mStart = new Date(cursorStart);
+
+      for (let w = 1; w <= 4; w++) {
+        const wStart = new Date(cursorStart);
+        wStart.setHours(0, 0, 0, 0);
+
+        const wEnd = new Date(cursorStart);
+        wEnd.setDate(wStart.getDate() + 6);
+        wEnd.setHours(23, 59, 59, 999);
+
+        const sDay = String(wStart.getDate()).padStart(2, '0');
+        const sMonth = String(wStart.getMonth() + 1).padStart(2, '0');
+        const sYear = wStart.getFullYear();
+        const eDay = String(wEnd.getDate()).padStart(2, '0');
+        const eMonth = String(wEnd.getMonth() + 1).padStart(2, '0');
+        const eYear = wEnd.getFullYear();
+
+        const weekInfo = {
+          week: w,
+          start: wStart,
+          end: wEnd,
+          startDateStr: `${sDay}/${sMonth}/${sYear}`,
+          endDateStr: `${eDay}/${eMonth}/${eYear}`,
+          shortLabel: `${sDay}/${sMonth} – ${eDay}/${eMonth}`,
+          rangeText: `Từ ngày ${sDay}/${sMonth}/${sYear} đến ngày ${eDay}/${eMonth}/${eYear}`,
+        };
+
+        weeks[w] = weekInfo;
+        weeksList.push(weekInfo);
+        cursorStart.setDate(cursorStart.getDate() + 7);
+      }
+
+      const mEnd = new Date(weeks[4].end);
+      academicMonthsMap[key] = {
+        month: mObj.month,
+        year: mObj.year,
+        label: mObj.label,
+        start: mStart,
+        end: mEnd,
+        weeks,
+        weeksList,
+      };
+    });
+
+    const activeAcademicMonth = academicMonthsMap[`${numYear}-${numMonth}`] || academicMonthsMap['2026-9'];
+    const monthStart = activeAcademicMonth.start;
+    const monthEnd = activeAcademicMonth.end;
     const isEnded = monthEnd < now;
+    const totalWeeks = 4;
+    const weekRanges = activeAcademicMonth.weeks;
 
-    // School Year 2026-2027: Sept started on 07/09 and has 4 weeks
-    const isSept = numMonth === 9;
-    const totalWeeks = isSept ? 4 : 5;
-
+    const students = await this.getEnrolledStudents(targetClass.class_id, monthEnd);
     const studentDbIds = students.map((s) => s._student_id);
     const dbAssessments = await prisma.monthlyAssessment.findMany({
       where: {
@@ -636,13 +776,10 @@ class AssessmentService {
       assessmentMap.set(item.student_id.toString(), item);
     });
 
-    const startOfMonth = new Date(numYear, numMonth - 1, 1, 0, 0, 0, 0);
-    const endOfMonth = new Date(numYear, numMonth, 0, 23, 59, 59, 999);
-
     const attendances = await prisma.attendance.findMany({
       where: {
         student_id: { in: studentDbIds },
-        date: { gte: startOfMonth, lte: endOfMonth },
+        date: { gte: monthStart, lte: monthEnd },
         deleted_at: null,
       },
       select: { student_id: true, date: true, status: true },
@@ -651,9 +788,62 @@ class AssessmentService {
     const dailyAssessments = await prisma.dailyAssessment.findMany({
       where: {
         student_id: { in: studentDbIds },
-        assessment_date: { gte: startOfMonth, lte: endOfMonth },
+        assessment_date: { gte: monthStart, lte: monthEnd },
       },
-      select: { student_id: true, assessment_date: true, status: true },
+      include: {
+        activity: {
+          include: {
+            content: {
+              select: { goal_id: true },
+            },
+          },
+        },
+      },
+    });
+
+    // Helper: phân loại ngày học vào tuần 1..4 của tháng học kỳ
+    const getWeekOfMonth = (date) => {
+      if (!date) return 0;
+      const d = new Date(date);
+      for (let w = 1; w <= 4; w++) {
+        if (d >= weekRanges[w].start && d <= weekRanges[w].end) {
+          return w;
+        }
+      }
+      return 0;
+    };
+
+    // Query planned activities in this month for this class to get real distinct goals per week
+    const plannedActivities = await prisma.subThemeActivity.findMany({
+      where: {
+        class_id: targetClass.class_id,
+        scheduled_date: { gte: monthStart, lte: monthEnd },
+      },
+      include: {
+        activity: {
+          include: {
+            content: {
+              select: { goal_id: true },
+            },
+          },
+        },
+      },
+    });
+
+    const weekDistinctGoals = { 1: new Set(), 2: new Set(), 3: new Set(), 4: new Set() };
+    plannedActivities.forEach((pa) => {
+      const w = getWeekOfMonth(pa.scheduled_date);
+      const gid = pa.activity?.content?.goal_id;
+      if (w >= 1 && w <= 4 && gid) {
+        weekDistinctGoals[w].add(gid.toString());
+      }
+    });
+    dailyAssessments.forEach((da) => {
+      const w = getWeekOfMonth(da.assessment_date);
+      const gid = da.goal_id ? da.goal_id.toString() : da.activity?.content?.goal_id?.toString();
+      if (w >= 1 && w <= 4 && gid) {
+        weekDistinctGoals[w].add(gid);
+      }
     });
 
     // Fetch real health assessments from PostgreSQL for all enrolled students
@@ -665,105 +855,101 @@ class AssessmentService {
       orderBy: { assessment_date: 'asc' },
     });
 
-    // Helper to partition dates by week of the month (1..4 or 5)
-    // For School Year 2026-2027:
-    // - Sept 2026: Official school started on Monday 07/09/2026 (4 weeks total)
-    //   Week 1: 07/09 - 13/09 (5 days: 07..11)
-    //   Week 2: 14/09 - 20/09 (5 days: 14..18)
-    //   Week 3: 21/09 - 27/09 (5 days: 21..25)
-    //   Week 4: 28/09 - 30/09 (3 days: 28..30)
-    const getWeekOfMonth = (date) => {
-      const d = new Date(date);
-      const day = d.getDate();
-      const m = d.getMonth() + 1;
-      const y = d.getFullYear();
-
-      if (m === 9 && y === 2026) {
-        if (day < 7) return 0;
-        if (day <= 13) return 1;
-        if (day <= 20) return 2;
-        if (day <= 27) return 3;
-        return 4;
+    // Fetch curriculum sub-themes for this class's school year and age group
+    let subThemes = [];
+    try {
+      subThemes = await prisma.subTheme.findMany({
+        where: {
+          theme: {
+            school_year_id: targetClass.school_year_id || undefined,
+            age_group: targetClass.age_group || undefined,
+          },
+        },
+        include: { theme: true },
+        orderBy: { start_date: 'asc' },
+      });
+      if (subThemes.length === 0) {
+        subThemes = await prisma.subTheme.findMany({
+          include: { theme: true },
+          orderBy: { start_date: 'asc' },
+        });
       }
-
-      // General: Monday-based week index in month
-      const firstDay = new Date(y, m - 1, 1);
-      const firstDayOfWeek = (firstDay.getDay() + 6) % 7; // 0 for Mon, 6 for Sun
-      const offset = day + firstDayOfWeek - 1;
-      const weekNum = Math.floor(offset / 7) + 1;
-      return Math.min(Math.max(1, weekNum), 5);
-    };
-
-    const getMonthWeekRanges = (m, y) => {
-      const isSept26 = m === 9 && y === 2026;
-      if (isSept26) {
-        return {
-          1: { start: new Date(Date.UTC(2026, 8, 7)), end: new Date(Date.UTC(2026, 8, 13, 23, 59, 59, 999)) },
-          2: { start: new Date(Date.UTC(2026, 8, 14)), end: new Date(Date.UTC(2026, 8, 20, 23, 59, 59, 999)) },
-          3: { start: new Date(Date.UTC(2026, 8, 21)), end: new Date(Date.UTC(2026, 8, 27, 23, 59, 59, 999)) },
-          4: { start: new Date(Date.UTC(2026, 8, 28)), end: new Date(Date.UTC(2026, 8, 30, 23, 59, 59, 999)) },
-        };
-      }
-      const lastDayOfMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
-      const ranges = {};
-      let currentStartDay = 1;
-      let weekIdx = 1;
-      while (currentStartDay <= lastDayOfMonth && weekIdx <= 5) {
-        const curStartDate = new Date(Date.UTC(y, m - 1, currentStartDay));
-        const dayOfWeek = curStartDate.getUTCDay();
-        const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
-        const endDay = Math.min(lastDayOfMonth, currentStartDay + daysUntilSunday);
-        ranges[weekIdx] = {
-          start: new Date(Date.UTC(y, m - 1, currentStartDay)),
-          end: new Date(Date.UTC(y, m - 1, endDay, 23, 59, 59, 999)),
-        };
-        currentStartDay = endDay + 1;
-        weekIdx++;
-      }
-      return ranges;
-    };
-
-    const weekRanges = getMonthWeekRanges(numMonth, numYear);
+    } catch (err) {
+      console.warn('Could not query subThemes for assessment:', err?.message);
+    }
 
     const resolveHealthAssessmentStatus = (h) => {
-      if (!h) return { status: 'Chưa đánh giá', dateStr: '' };
+      if (!h) return { status: 'Chưa đánh giá', dateStr: '', heightStatus: 'Chưa đánh giá', weightStatus: 'Chưa đánh giá', height: null, weight: null };
       const d = new Date(h.assessment_date);
       const pad = (n) => String(n).padStart(2, '0');
-      const dStr = `${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)}`;
-      const notes = (h.notes || '').toLowerCase();
+      const dStr = `${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)}/${d.getUTCFullYear()}`;
+      const evalResult = getClassificationFromZScores({
+        heightZ: h.height_for_age_zscore,
+        weightZ: h.weight_for_age_zscore,
+        bmiZ: h.bmi_for_age_zscore,
+        bmiVal: h.bmi,
+      });
+
+      let heightStatus = 'Đạt chuẩn';
+      const hz = h.height_for_age_zscore != null ? Number(h.height_for_age_zscore) : null;
+      if (hz != null && !isNaN(hz)) {
+        if (hz < -3) heightStatus = 'Thấp còi độ 2 (nặng)';
+        else if (hz < -2) heightStatus = 'Thấp còi độ 1';
+        else if (hz > 2) heightStatus = 'Cao hơn tuổi';
+      }
+
+      let weightStatus = 'Đạt chuẩn';
       const bz = h.bmi_for_age_zscore != null ? Number(h.bmi_for_age_zscore) : null;
       const wz = h.weight_for_age_zscore != null ? Number(h.weight_for_age_zscore) : null;
-      const hz = h.height_for_age_zscore != null ? Number(h.height_for_age_zscore) : null;
+      if (bz != null && !isNaN(bz)) {
+        if (bz > 3) weightStatus = 'Béo phì';
+        else if (bz > 2) weightStatus = 'Thừa cân';
+        else if (bz > 1.5 && (wz == null || wz > 1.5)) weightStatus = 'Nguy cơ thừa cân';
+        else if (bz < -3) weightStatus = 'Gầy còm nặng';
+        else if (bz < -2) weightStatus = 'Gầy còm';
+      }
+      if (weightStatus === 'Đạt chuẩn' && wz != null && !isNaN(wz)) {
+        if (wz < -3) weightStatus = 'Suy dinh dưỡng nặng';
+        else if (wz < -2) weightStatus = 'Suy dinh dưỡng nhẹ cân';
+        else if (wz > 2) weightStatus = 'Cân nặng cao hơn tuổi';
+      }
 
-      let st = 'Bình thường';
-      if (bz != null && bz > 2) st = 'Thừa cân';
-      else if (bz != null && bz > 1.5 && wz != null && wz > 1.5) st = 'Nguy cơ thừa cân';
-      else if (bz != null && bz < -2) st = 'Theo dõi nhẹ cân';
-      else if (wz != null && wz < -2) st = 'Theo dõi nhẹ cân';
-      else if (hz != null && hz < -2) st = 'Theo dõi thấp còi';
-      else if (notes.includes('nhẹ cân') || notes.includes('suy dinh dưỡng')) st = 'Theo dõi nhẹ cân';
-      else if (notes.includes('thừa cân') || notes.includes('béo phì')) st = 'Thừa cân';
-
-      return { status: st, dateStr: dStr };
+      return {
+        status: evalResult.label,
+        heightStatus,
+        weightStatus,
+        height: h.height ? Number(h.height) : null,
+        weight: h.weight ? Number(h.weight) : null,
+        dateStr: dStr,
+      };
     };
 
     const hasRealActivityData = attendances.length > 0 || dailyAssessments.length > 0;
 
-    const buildWeeklyStat = (present, totalAtt = 5, achieved = 0, totalGoals = 4, healthInfo = {}) => {
-      const p = Number(present ?? 0);
+    const buildWeeklyStat = (present, totalAtt = 5, achieved = 0, totalGoals = 0, healthInfo = {}) => {
       const tA = Number(totalAtt || 5);
-      const a = Number(achieved ?? 0);
-      const tG = Number(totalGoals || 4);
+      const p = Math.min(Number(present ?? 0), tA);
+      const tG = Number(totalGoals || 0);
+      const a = Math.min(Number(achieved ?? 0), tG > 0 ? tG : Number(achieved ?? 0));
       return {
         attendancePresent: p,
         attendanceTotal: tA,
-        attendanceRate: Math.round((p / tA) * 100),
-        goalsAchieved: Math.min(a, tG),
+        attendanceRate: Math.min(100, Math.round((p / tA) * 100)),
+        goalsAchieved: a,
         goalsTotal: tG,
-        goalsRate: Math.round((Math.min(a, tG) / tG) * 100),
+        goalsRate: tG > 0 ? Math.min(100, Math.round((a / tG) * 100)) : 0,
+        hasPlanThisWeek: tG > 0,
         healthStatus: healthInfo.healthStatus || 'Bình thường',
+        heightStatus: healthInfo.heightStatus || 'Đạt chuẩn',
+        weightStatus: healthInfo.weightStatus || 'Đạt chuẩn',
+        height: healthInfo.height ?? null,
+        weight: healthInfo.weight ?? null,
+        heightZ: healthInfo.heightZ ?? null,
+        weightZ: healthInfo.weightZ ?? null,
+        bmiZ: healthInfo.bmiZ ?? null,
         healthSourceLabel: healthInfo.healthSourceLabel || '',
         healthExamDate: healthInfo.healthExamDate || null,
+        examDateVN: healthInfo.examDateVN || null,
         hasHealthCheckThisWeek: Boolean(healthInfo.hasHealthCheckThisWeek),
       };
     };
@@ -780,7 +966,7 @@ class AssessmentService {
       const resolveWeekHealth = (w) => {
         const range = weekRanges[w];
         if (!range) {
-          return { healthStatus: 'Bình thường', healthSourceLabel: '' };
+          return { healthStatus: 'Bình thường', heightStatus: 'Đạt chuẩn', weightStatus: 'Đạt chuẩn', healthSourceLabel: '' };
         }
         const inWeek = sHealth.filter((h) => {
           const dt = new Date(h.assessment_date);
@@ -792,7 +978,15 @@ class AssessmentService {
           const res = resolveHealthAssessmentStatus(latest);
           return {
             healthStatus: res.status,
+            heightStatus: res.heightStatus,
+            weightStatus: res.weightStatus,
+            height: res.height,
+            weight: res.weight,
+            heightZ: latest.height_for_age_zscore ? Number(latest.height_for_age_zscore) : null,
+            weightZ: latest.weight_for_age_zscore ? Number(latest.weight_for_age_zscore) : null,
+            bmiZ: latest.bmi_for_age_zscore ? Number(latest.bmi_for_age_zscore) : null,
             healthExamDate: latest.assessment_date ? new Date(latest.assessment_date).toISOString().slice(0, 10) : null,
+            examDateVN: res.dateStr,
             hasHealthCheckThisWeek: true,
             healthSourceLabel: `Đo ngày ${res.dateStr} - Tuần ${w}`,
           };
@@ -805,26 +999,31 @@ class AssessmentService {
           const res = resolveHealthAssessmentStatus(latestPrev);
           return {
             healthStatus: res.status,
+            heightStatus: res.heightStatus,
+            weightStatus: res.weightStatus,
+            height: res.height,
+            weight: res.weight,
+            heightZ: latestPrev.height_for_age_zscore ? Number(latestPrev.height_for_age_zscore) : null,
+            weightZ: latestPrev.weight_for_age_zscore ? Number(latestPrev.weight_for_age_zscore) : null,
+            bmiZ: latestPrev.bmi_for_age_zscore ? Number(latestPrev.bmi_for_age_zscore) : null,
             healthExamDate: latestPrev.assessment_date ? new Date(latestPrev.assessment_date).toISOString().slice(0, 10) : null,
+            examDateVN: res.dateStr,
             hasHealthCheckThisWeek: false,
             healthSourceLabel: `Tuần ${w} không đo - Kế thừa lần đo gần nhất ngày ${res.dateStr}`,
           };
         }
 
-        // Nếu trước đó chưa có đợt đo, lấy đợt đo gần nhất sau đó
-        if (sHealth.length > 0) {
-          const res = resolveHealthAssessmentStatus(sHealth[0]);
-          return {
-            healthStatus: res.status,
-            healthExamDate: sHealth[0].assessment_date ? new Date(sHealth[0].assessment_date).toISOString().slice(0, 10) : null,
-            hasHealthCheckThisWeek: false,
-            healthSourceLabel: `Kế thừa đợt đo gần nhất ngày ${res.dateStr}`,
-          };
-        }
-
         return {
           healthStatus: 'Chưa đánh giá',
+          heightStatus: 'Chưa đánh giá',
+          weightStatus: 'Chưa đánh giá',
+          height: null,
+          weight: null,
+          heightZ: null,
+          weightZ: null,
+          bmiZ: null,
           healthExamDate: null,
+          examDateVN: null,
           hasHealthCheckThisWeek: false,
           healthSourceLabel: 'Chưa có đợt đo',
         };
@@ -840,95 +1039,109 @@ class AssessmentService {
         }
       });
 
-      const weekGoalCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      const weekAchievedGoalSets = { 1: new Set(), 2: new Set(), 3: new Set(), 4: new Set() };
       sAss.forEach((a) => {
         if (a.status === 'ACHIEVED' || a.status === 'OUTSTANDING') {
           const w = getWeekOfMonth(a.assessment_date);
-          if (w >= 1 && w <= 5) {
-            weekGoalCounts[w] = (weekGoalCounts[w] || 0) + 1;
+          const gid = a.goal_id ? a.goal_id.toString() : a.activity?.content?.goal_id?.toString();
+          if (w >= 1 && w <= 4 && gid) {
+            weekAchievedGoalSets[w].add(gid);
           }
         }
       });
 
-      const w4AttTotal = isSept ? 3 : 5;
+      const getWeekGoalsAchieved = (w) => weekAchievedGoalSets[w]?.size || 0;
+      const getWeekGoalsTotal = (w) => {
+        const planned = weekDistinctGoals[w]?.size || 0;
+        if (planned > 0) return planned;
+        return weekAchievedGoalSets[w]?.size || 0;
+      };
+
       const w1Health = resolveWeekHealth(1);
       const w2Health = resolveWeekHealth(2);
       const w3Health = resolveWeekHealth(3);
       const w4Health = resolveWeekHealth(4);
-      const w5Health = resolveWeekHealth(5);
+
+      const isEnrolledInWeek = (w) => {
+        const wR = weekRanges[w];
+        if (!wR) return false;
+        if (s.enrolledAt) {
+          const enrD = new Date(s.enrolledAt);
+          if (enrD > wR.end) return false;
+        }
+        if (s.leftAt) {
+          const leftD = new Date(s.leftAt);
+          if (leftD < wR.start) return false;
+        }
+        return true;
+      };
+
+      const getWeekStat = (w, healthObj, fallbackPresent = 0, fallbackAchieved = 0) => {
+        if (!isEnrolledInWeek(w)) {
+          return buildWeeklyStat(0, 0, 0, 0, {
+            healthStatus: 'Chưa vào lớp',
+            heightStatus: 'Chưa vào lớp',
+            weightStatus: 'Chưa vào lớp',
+            healthSourceLabel: 'Chưa vào lớp',
+          });
+        }
+        return buildWeeklyStat(
+          weekAttCounts[w] || fallbackPresent,
+          5,
+          getWeekGoalsAchieved(w) || fallbackAchieved,
+          getWeekGoalsTotal(w) || (fallbackAchieved ? 4 : 0),
+          healthObj
+        );
+      };
 
       if (existing) {
-        const count = existing.roses_count;
+        const w1R = isEnrolledInWeek(1) && Boolean(existing.week_1_rose);
+        const w2R = isEnrolledInWeek(2) && Boolean(existing.week_2_rose);
+        const w3R = isEnrolledInWeek(3) && Boolean(existing.week_3_rose);
+        const w4R = isEnrolledInWeek(4) && Boolean(existing.week_4_rose);
+        const count = (w1R ? 1 : 0) + (w2R ? 1 : 0) + (w3R ? 1 : 0) + (w4R ? 1 : 0);
+
         return {
           id: s.id,
           code: s.code,
           name: s.name,
           gender: s.gender,
-          week1Rose: Boolean(existing.week_1_rose),
-          week2Rose: Boolean(existing.week_2_rose),
-          week3Rose: Boolean(existing.week_3_rose),
-          week4Rose: Boolean(existing.week_4_rose),
-          week5Rose: isSept ? false : Boolean(existing.week_5_rose),
+          enrolledAt: s.enrolledAt,
+          leftAt: s.leftAt,
+          week1Rose: w1R,
+          week2Rose: w2R,
+          week3Rose: w3R,
+          week4Rose: w4R,
+          week5Rose: false,
           rosesCount: count,
           isLotus: count >= 4,
           teacherNotes: existing.teacher_notes || '',
+          isPublished: Boolean(existing.is_published),
           parentFeedback: existing.parent_feedback || null,
           feedbackAt: existing.feedback_at ? existing.feedback_at.toISOString() : null,
           feedbackBy: existing.feedback_by ? 'Phụ huynh' : null,
           weeklyStats: {
-            week1: buildWeeklyStat(
-              weekAttCounts[1] || (existing.week_1_rose ? 5 : 4),
-              5,
-              weekGoalCounts[1] || (existing.week_1_rose ? 4 : 3),
-              4,
-              w1Health
-            ),
-            week2: buildWeeklyStat(
-              weekAttCounts[2] || (existing.week_2_rose ? 5 : 4),
-              5,
-              weekGoalCounts[2] || (existing.week_2_rose ? 4 : 3),
-              4,
-              w2Health
-            ),
-            week3: buildWeeklyStat(
-              weekAttCounts[3] || (existing.week_3_rose ? 5 : 4),
-              5,
-              weekGoalCounts[3] || (existing.week_3_rose ? 4 : 3),
-              4,
-              w3Health
-            ),
-            week4: buildWeeklyStat(
-              weekAttCounts[4] || (existing.week_4_rose ? w4AttTotal : Math.max(1, w4AttTotal - 1)),
-              w4AttTotal,
-              weekGoalCounts[4] || (existing.week_4_rose ? 4 : 3),
-              4,
-              w4Health
-            ),
-            ...(!isSept ? {
-              week5: buildWeeklyStat(
-                weekAttCounts[5] || (existing.week_5_rose ? 5 : 4),
-                5,
-                weekGoalCounts[5] || (existing.week_5_rose ? 4 : 3),
-                4,
-                w5Health
-              ),
-            } : {}),
+            week1: getWeekStat(1, w1Health, existing.week_1_rose ? 5 : 4, existing.week_1_rose ? 4 : 3),
+            week2: getWeekStat(2, w2Health, existing.week_2_rose ? 5 : 4, existing.week_2_rose ? 4 : 3),
+            week3: getWeekStat(3, w3Health, existing.week_3_rose ? 5 : 4, existing.week_3_rose ? 4 : 3),
+            week4: getWeekStat(4, w4Health, existing.week_4_rose ? 5 : 4, existing.week_4_rose ? 4 : 3),
           },
         };
       }
 
       if (!isEnded) {
-        // Month has NOT ended yet (e.g. Month 10 or future): not yet evaluated
+        // Month has NOT ended yet (e.g. Month 11 or future): not yet evaluated
         return {
           id: s.id,
           code: s.code,
           name: s.name,
           gender: s.gender,
+          enrolledAt: s.enrolledAt,
+          leftAt: s.leftAt,
           week1Rose: false,
           week2Rose: false,
           week3Rose: false,
           week4Rose: false,
-          week5Rose: false,
           rosesCount: 0,
           isLotus: false,
           teacherNotes: '',
@@ -936,11 +1149,10 @@ class AssessmentService {
           feedbackAt: null,
           feedbackBy: null,
           weeklyStats: {
-            week1: buildWeeklyStat(weekAttCounts[1], 5, weekGoalCounts[1], 4, w1Health),
-            week2: buildWeeklyStat(weekAttCounts[2], 5, weekGoalCounts[2], 4, w2Health),
-            week3: buildWeeklyStat(weekAttCounts[3], 5, weekGoalCounts[3], 4, w3Health),
-            week4: buildWeeklyStat(weekAttCounts[4], w4AttTotal, weekGoalCounts[4], 4, w4Health),
-            ...(!isSept ? { week5: buildWeeklyStat(weekAttCounts[5], 5, weekGoalCounts[5], 4, w5Health) } : {}),
+            week1: getWeekStat(1, w1Health),
+            week2: getWeekStat(2, w2Health),
+            week3: getWeekStat(3, w3Health),
+            week4: getWeekStat(4, w4Health),
           },
         };
       }
@@ -953,11 +1165,12 @@ class AssessmentService {
           code: s.code,
           name: s.name,
           gender: s.gender,
+          enrolledAt: s.enrolledAt,
+          leftAt: s.leftAt,
           week1Rose: false,
           week2Rose: false,
           week3Rose: false,
           week4Rose: false,
-          week5Rose: false,
           rosesCount: 0,
           isLotus: false,
           teacherNotes: '',
@@ -965,32 +1178,38 @@ class AssessmentService {
           feedbackAt: null,
           feedbackBy: null,
           weeklyStats: {
-            week1: buildWeeklyStat(0, 5, 0, 4, w1Health),
-            week2: buildWeeklyStat(0, 5, 0, 4, w2Health),
-            week3: buildWeeklyStat(0, 5, 0, 4, w3Health),
-            week4: buildWeeklyStat(0, w4AttTotal, 0, 4, w4Health),
-            ...(!isSept ? { week5: buildWeeklyStat(0, 5, 0, 4, w5Health) } : {}),
+            week1: getWeekStat(1, w1Health),
+            week2: getWeekStat(2, w2Health),
+            week3: getWeekStat(3, w3Health),
+            week4: getWeekStat(4, w4Health),
           },
         };
       }
 
-      const w1 = weekAttCounts[1] >= 4 && weekGoalCounts[1] >= 3;
-      const w2 = weekAttCounts[2] >= 4 && weekGoalCounts[2] >= 3;
-      const w3 = weekAttCounts[3] >= 4 && weekGoalCounts[3] >= 3;
-      const w4 = isSept ? (weekAttCounts[4] >= 2 && weekGoalCounts[4] >= 2) : (weekAttCounts[4] >= 4 && weekGoalCounts[4] >= 3);
-      const w5 = isSept ? false : (weekAttCounts[5] >= 4 && weekGoalCounts[5] >= 3);
-      const count = (w1 ? 1 : 0) + (w2 ? 1 : 0) + (w3 ? 1 : 0) + (w4 ? 1 : 0) + (w5 ? 1 : 0);
+      const isWeekGoalPassed = (w) => {
+        if (!isEnrolledInWeek(w)) return false;
+        const tot = getWeekGoalsTotal(w);
+        const ach = getWeekGoalsAchieved(w);
+        if (tot === 0) return true;
+        return ach >= Math.ceil(tot * 0.7);
+      };
+      const w1 = isEnrolledInWeek(1) && weekAttCounts[1] >= 4 && isWeekGoalPassed(1);
+      const w2 = isEnrolledInWeek(2) && weekAttCounts[2] >= 4 && isWeekGoalPassed(2);
+      const w3 = isEnrolledInWeek(3) && weekAttCounts[3] >= 4 && isWeekGoalPassed(3);
+      const w4 = isEnrolledInWeek(4) && weekAttCounts[4] >= 4 && isWeekGoalPassed(4);
+      const count = (w1 ? 1 : 0) + (w2 ? 1 : 0) + (w3 ? 1 : 0) + (w4 ? 1 : 0);
 
       return {
         id: s.id,
         code: s.code,
         name: s.name,
         gender: s.gender,
+        enrolledAt: s.enrolledAt,
+        leftAt: s.leftAt,
         week1Rose: w1,
         week2Rose: w2,
         week3Rose: w3,
         week4Rose: w4,
-        week5Rose: w5,
         rosesCount: count,
         isLotus: count >= 4,
         teacherNotes: '',
@@ -998,11 +1217,10 @@ class AssessmentService {
         feedbackAt: null,
         feedbackBy: null,
         weeklyStats: {
-          week1: buildWeeklyStat(weekAttCounts[1], 5, weekGoalCounts[1], 4, w1Health),
-          week2: buildWeeklyStat(weekAttCounts[2], 5, weekGoalCounts[2], 4, w2Health),
-          week3: buildWeeklyStat(weekAttCounts[3], 5, weekGoalCounts[3], 4, w3Health),
-          week4: buildWeeklyStat(weekAttCounts[4], w4AttTotal, weekGoalCounts[4], 4, w4Health),
-          ...(!isSept ? { week5: buildWeeklyStat(weekAttCounts[5], 5, weekGoalCounts[5], 4, w5Health) } : {}),
+          week1: getWeekStat(1, w1Health),
+          week2: getWeekStat(2, w2Health),
+          week3: getWeekStat(3, w3Health),
+          week4: getWeekStat(4, w4Health),
         },
       };
     });
@@ -1010,6 +1228,45 @@ class AssessmentService {
     const lotusCount = studentList.filter((s) => s.isLotus).length;
     const completedCount = studentList.filter((s) => s.teacherNotes?.trim().length > 0).length;
     const parentFeedbackCount = studentList.filter((s) => Boolean(s.parentFeedback)).length;
+
+    const weekRangesFormatted = activeAcademicMonth.weeksList.map((r) => {
+      // 1. Check if planned activities in this week have an assigned sub-theme
+      const plannedInWeek = plannedActivities.find((pa) => {
+        if (!pa.scheduled_date || !pa.sub_theme) return false;
+        const d = new Date(pa.scheduled_date);
+        return d >= r.start && d <= r.end;
+      });
+
+      // 2. Check overlap by midpoint of the week to avoid boundary-day collisions
+      const rMid = new Date((r.start.getTime() + r.end.getTime()) / 2);
+      let matchedSubTheme = plannedInWeek?.sub_theme || subThemes.find((st) => {
+        const stStart = new Date(st.start_date);
+        const stEnd = new Date(st.end_date);
+        stEnd.setHours(23, 59, 59, 999);
+        return stStart <= rMid && stEnd >= rMid;
+      });
+
+      if (!matchedSubTheme) {
+        matchedSubTheme = subThemes.find((st) => {
+          const stStart = new Date(st.start_date);
+          const stEnd = new Date(st.end_date);
+          stEnd.setHours(23, 59, 59, 999);
+          return stStart < r.end && stEnd > r.start;
+        });
+      }
+
+      return {
+        week: r.week,
+        startDateStr: r.startDateStr,
+        endDateStr: r.endDateStr,
+        shortLabel: r.shortLabel,
+        rangeText: r.rangeText,
+        themeName: matchedSubTheme?.theme?.name || null,
+        subThemeName: matchedSubTheme?.name || null,
+      };
+    });
+
+    const isClassPublished = dbAssessments.length > 0 && dbAssessments.some((d) => d.is_published);
 
     return {
       classInfo: {
@@ -1020,8 +1277,10 @@ class AssessmentService {
         year: numYear,
         monthLabel: `Tháng ${numMonth}/${numYear}`,
         isEnded,
+        isPublished: isClassPublished,
         totalWeeks,
         latestEvaluatedMonth: latestRecord ? { month: latestRecord.month, year: latestRecord.year } : null,
+        weekRanges: weekRangesFormatted,
       },
       stats: {
         totalStudents: studentList.length,
@@ -1041,6 +1300,7 @@ class AssessmentService {
     const numYear = Number(year) || 2026;
     const targetClass = await this.resolveClass(classId);
     const cId = targetClass.class_id;
+    const evalAccountId = await this.resolveEvaluatorAccountId(evaluatedBy, classId);
 
     let savedCount = 0;
     if (Array.isArray(records) && records.length > 0) {
@@ -1072,8 +1332,7 @@ class AssessmentService {
         const rosesCount = (rec.week1Rose ? 1 : 0) +
           (rec.week2Rose ? 1 : 0) +
           (rec.week3Rose ? 1 : 0) +
-          (rec.week4Rose ? 1 : 0) +
-          (rec.week5Rose ? 1 : 0);
+          (rec.week4Rose ? 1 : 0);
 
         await prisma.monthlyAssessment.upsert({
           where: {
@@ -1092,6 +1351,7 @@ class AssessmentService {
             week_5_rose: Boolean(rec.week5Rose),
             roses_count: rosesCount,
             teacher_notes: rec.teacherNotes || '',
+            evaluated_by: evalAccountId,
             updated_at: new Date(),
           },
           create: {
@@ -1106,11 +1366,40 @@ class AssessmentService {
             week_5_rose: Boolean(rec.week5Rose),
             roses_count: rosesCount,
             teacher_notes: rec.teacherNotes || '',
-            evaluated_by: BigInt(evaluatedBy || 40),
+            evaluated_by: evalAccountId,
           },
         });
         savedCount++;
       }
+
+      // Notification 17: Add Teacher Monthly Comment / công bố sổ tháng (Nhận xét tháng của trẻ đã sẵn sàng cho PH -> PH của trẻ)
+      (async () => {
+        try {
+          for (const rec of records) {
+            const rawId = String(rec.studentId || rec.id).trim();
+            const sId = studentIdMap.get(rawId) || (/^\d+$/.test(rawId) ? BigInt(rawId) : null);
+            if (!sId) continue;
+            const targetStudent = matchedStudents.find((s) => s.student_id === sId);
+            if (targetStudent?.account_id && (rec.teacherNotes || rec.week1Rose !== undefined)) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: [targetStudent.account_id],
+                creatorAccountId: evalAccountId,
+                type: 'MONTHLY_ROSE_REPORT',
+                title: `Sổ bé ngoan tháng ${numMonth}/${numYear}`,
+                body: `Nhận xét và kết quả rèn luyện tháng ${numMonth}/${numYear} của bé ${targetStudent.full_name} đã sẵn sàng trên ứng dụng.`,
+                data: {
+                  type: 'MONTHLY_COMMENT_PUBLISHED',
+                  studentId: sId.toString(),
+                  month: numMonth,
+                  year: numYear,
+                },
+              });
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to emit notification for monthly assessment saving:', e.message);
+        }
+      })();
     }
 
     return {
@@ -1278,6 +1567,69 @@ class AssessmentService {
       studentDailyAssessmentsMap.get(sid).push(da);
     });
 
+    // Query planned activities in semester to collect all distinct planned goals per domain
+    const semesterSubThemeActivities = await prisma.subThemeActivity.findMany({
+      where: {
+        class_id: targetClass.class_id,
+        scheduled_date: {
+          gte: semStart,
+          lte: effectiveEnd,
+        },
+      },
+      include: {
+        activity: {
+          include: {
+            content: {
+              include: {
+                goal: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const semesterClassGoals = new Map();
+    const domainTargetGoals = {
+      PHYSICAL: new Set(),
+      COGNITIVE: new Set(),
+      LANGUAGE: new Set(),
+      SOCIO_EMOTIONAL: new Set(),
+      AESTHETIC: new Set(),
+    };
+
+    semesterSubThemeActivities.forEach((sa) => {
+      const goal = sa.activity?.content?.goal;
+      if (goal) {
+        const gid = goal.goal_id ? goal.goal_id.toString() : null;
+        const dom = goal.domain || 'PHYSICAL';
+        if (gid && domainTargetGoals[dom]) {
+          domainTargetGoals[dom].add(gid);
+          semesterClassGoals.set(gid, {
+            goalId: gid,
+            domain: dom,
+            title: goal.title || goal.goal_code,
+          });
+        }
+      }
+    });
+
+    dailyAssessmentRecords.forEach((da) => {
+      const goal = da.goal || da.activity?.content?.goal;
+      if (goal) {
+        const gid = goal.goal_id ? goal.goal_id.toString() : da.goal_id?.toString();
+        const dom = goal.domain || 'PHYSICAL';
+        if (gid && domainTargetGoals[dom]) {
+          domainTargetGoals[dom].add(gid);
+          semesterClassGoals.set(gid, {
+            goalId: gid,
+            domain: dom,
+            title: goal.title || goal.goal_code,
+          });
+        }
+      }
+    });
+
     const dbAssessments = await prisma.semesterAssessment.findMany({
       where: {
         class_id: targetClass.class_id,
@@ -1319,6 +1671,10 @@ class AssessmentService {
           overallGoalsRate: null,
           health: {
             status: '--',
+            heightStatus: '--',
+            weightStatus: '--',
+            height: null,
+            weight: null,
             examLabel: '--',
             examDate: '--',
           },
@@ -1328,9 +1684,11 @@ class AssessmentService {
         };
       }
 
-      // Real health assessment resolution from PostgreSQL
+      // Real health assessment resolution from PostgreSQL using WHO Z-Scores
       const healthRec = healthMap.get(s._student_id.toString());
       let healthStatus = 'Bình thường';
+      let heightStatus = 'Đạt chuẩn';
+      let weightStatus = 'Đạt chuẩn';
       let examDateFormatted = '--';
       let examLabel = '--';
       if (healthRec) {
@@ -1341,17 +1699,39 @@ class AssessmentService {
           const examYear = hd.getFullYear();
           examLabel = `${examMonth}/${examYear}`;
         }
-        const notes = (healthRec.notes || '').toLowerCase();
-        const bmi = Number(healthRec.bmi) || 0;
-        if (notes.includes('nhẹ cân') || notes.includes('suy dinh dưỡng') || (bmi > 0 && bmi < 13.5)) {
-          healthStatus = 'Theo dõi nhẹ cân';
-        } else if (notes.includes('thừa cân') || notes.includes('béo phì') || (bmi > 0 && bmi > 18)) {
-          healthStatus = 'Theo dõi thừa cân/béo phì';
-        } else {
-          healthStatus = 'Bình thường';
+        const evalResult = getClassificationFromZScores({
+          heightZ: healthRec.height_for_age_zscore,
+          weightZ: healthRec.weight_for_age_zscore,
+          bmiZ: healthRec.bmi_for_age_zscore,
+          bmiVal: healthRec.bmi,
+        });
+        healthStatus = evalResult.label;
+
+        const hz = healthRec.height_for_age_zscore != null ? Number(healthRec.height_for_age_zscore) : null;
+        if (hz != null && !isNaN(hz)) {
+          if (hz < -3) heightStatus = 'Thấp còi độ 2 (nặng)';
+          else if (hz < -2) heightStatus = 'Thấp còi độ 1';
+          else if (hz > 2) heightStatus = 'Cao hơn tuổi';
+        }
+
+        const bz = healthRec.bmi_for_age_zscore != null ? Number(healthRec.bmi_for_age_zscore) : null;
+        const wz = healthRec.weight_for_age_zscore != null ? Number(healthRec.weight_for_age_zscore) : null;
+        if (bz != null && !isNaN(bz)) {
+          if (bz > 3) weightStatus = 'Béo phì';
+          else if (bz > 2) weightStatus = 'Thừa cân';
+          else if (bz > 1.5 && (wz == null || wz > 1.5)) weightStatus = 'Nguy cơ thừa cân';
+          else if (bz < -3) weightStatus = 'Gầy còm nặng';
+          else if (bz < -2) weightStatus = 'Gầy còm';
+        }
+        if (weightStatus === 'Đạt chuẩn' && wz != null && !isNaN(wz)) {
+          if (wz < -3) weightStatus = 'Suy dinh dưỡng nặng';
+          else if (wz < -2) weightStatus = 'Suy dinh dưỡng nhẹ cân';
+          else if (wz > 2) weightStatus = 'Cân nặng cao hơn tuổi';
         }
       } else {
         healthStatus = 'Chưa đánh giá';
+        heightStatus = 'Chưa đánh giá';
+        weightStatus = 'Chưa đánh giá';
         examDateFormatted = '--';
         examLabel = '--';
       }
@@ -1371,7 +1751,7 @@ class AssessmentService {
         attendanceRate = null;
       }
 
-      // 5 Developmental domains calculations based on real DailyAssessment
+      // 5 Developmental domains calculations based on DISTINCT Educational Goals
       const studentDAs = studentDailyAssessmentsMap.get(s._student_id.toString()) || [];
       const evaluatedDAs = studentDAs.filter(
         (da) => da.status === 'ACHIEVED' || da.status === 'NOT_ACHIEVED' || da.status === 'OUTSTANDING'
@@ -1391,37 +1771,55 @@ class AssessmentService {
       let totalEvaluatedGoals = 0;
 
       if (hasEvaluatedGoals) {
-        const domainCounts = {
-          PHYSICAL: { passed: 0, total: 0 },
-          COGNITIVE: { passed: 0, total: 0 },
-          LANGUAGE: { passed: 0, total: 0 },
-          SOCIO_EMOTIONAL: { passed: 0, total: 0 },
-          AESTHETIC: { passed: 0, total: 0 },
-        };
-
+        // Group evaluated DAs by DISTINCT goal
+        const studentGoalMap = new Map();
         evaluatedDAs.forEach((da) => {
           const goal = da.goal || da.activity?.content?.goal;
-          const dom = goal?.domain || 'PHYSICAL';
-          if (domainCounts[dom]) {
-            domainCounts[dom].total++;
-            if (da.status === 'ACHIEVED' || da.status === 'OUTSTANDING') {
-              domainCounts[dom].passed++;
+          if (!goal) return;
+          const gid = goal.goal_id ? goal.goal_id.toString() : da.goal_id?.toString();
+          if (!gid) return;
+          const dom = goal.domain || 'PHYSICAL';
+          const isAchieved = da.status === 'ACHIEVED' || da.status === 'OUTSTANDING';
+
+          if (!studentGoalMap.has(gid)) {
+            studentGoalMap.set(gid, { domain: dom, achieved: isAchieved });
+          } else if (isAchieved) {
+            studentGoalMap.get(gid).achieved = true;
+          }
+        });
+
+        const domainCounts = {
+          PHYSICAL: { passed: 0, evaluated: 0, total: domainTargetGoals.PHYSICAL.size },
+          COGNITIVE: { passed: 0, evaluated: 0, total: domainTargetGoals.COGNITIVE.size },
+          LANGUAGE: { passed: 0, evaluated: 0, total: domainTargetGoals.LANGUAGE.size },
+          SOCIO_EMOTIONAL: { passed: 0, evaluated: 0, total: domainTargetGoals.SOCIO_EMOTIONAL.size },
+          AESTHETIC: { passed: 0, evaluated: 0, total: domainTargetGoals.AESTHETIC.size },
+        };
+
+        studentGoalMap.forEach(({ domain, achieved }) => {
+          if (domainCounts[domain]) {
+            domainCounts[domain].evaluated++;
+            if (achieved) {
+              domainCounts[domain].passed++;
             }
           }
         });
 
-        const calcDomain = (domKey, targetTotal) => {
+        const calcDomain = (domKey) => {
           const dc = domainCounts[domKey];
-          if (!dc || dc.total === 0) return null;
-          const rate = Math.round((dc.passed / dc.total) * 100);
-          return { rate, achieved: dc.passed, total: dc.total, targetTotal };
+          if (!dc) return null;
+          const targetTotal = dc.total > 0 ? dc.total : dc.evaluated;
+          if (targetTotal === 0 && dc.evaluated === 0) return null;
+          const effectiveTotal = targetTotal > 0 ? targetTotal : dc.evaluated;
+          const rate = Math.round((dc.passed / effectiveTotal) * 100);
+          return { rate, achieved: dc.passed, total: effectiveTotal, targetTotal: effectiveTotal };
         };
 
-        const phys = calcDomain('PHYSICAL', 25);
-        const cogn = calcDomain('COGNITIVE', 20);
-        const lang = calcDomain('LANGUAGE', 18);
-        const soci = calcDomain('SOCIO_EMOTIONAL', 20);
-        const aest = calcDomain('AESTHETIC', 16);
+        const phys = calcDomain('PHYSICAL');
+        const cogn = calcDomain('COGNITIVE');
+        const lang = calcDomain('LANGUAGE');
+        const soci = calcDomain('SOCIO_EMOTIONAL');
+        const aest = calcDomain('AESTHETIC');
 
         domains = {
           physical: phys?.rate ?? null,
@@ -1478,17 +1876,26 @@ class AssessmentService {
         overallGoalsRate,
         health: {
           status: healthStatus,
+          heightStatus,
+          weightStatus,
+          height: healthRec?.height ? Number(healthRec.height) : null,
+          weight: healthRec?.weight ? Number(healthRec.weight) : null,
+          heightZ: healthRec?.height_for_age_zscore ? Number(healthRec.height_for_age_zscore) : null,
+          weightZ: healthRec?.weight_for_age_zscore ? Number(healthRec.weight_for_age_zscore) : null,
+          bmiZ: healthRec?.bmi_for_age_zscore ? Number(healthRec.bmi_for_age_zscore) : null,
           examLabel,
           examDate: examDateFormatted,
         },
         teacherNotes: hasSavedNote ? savedNote : '',
         isEvaluated: hasSavedNote,
+        isPublished: Boolean(existing?.is_published),
         updatedAt: existing?.updated_at ? existing.updated_at.toISOString() : null,
       };
     });
 
     const completedCount = studentList.filter((s) => s.isEvaluated).length;
     const pendingCount = studentList.length - completedCount;
+    const isClassPublished = dbAssessments.length > 0 && dbAssessments.some((d) => d.is_published);
 
     return {
       classInfo: {
@@ -1507,6 +1914,7 @@ class AssessmentService {
         isStarted,
         isOngoing,
         isCompleted,
+        isPublished: isClassPublished,
       },
       stats: {
         totalStudents: studentList.length,
@@ -1524,6 +1932,7 @@ class AssessmentService {
     const sem = semester === 'SEMESTER_2' ? 'SEMESTER_2' : 'SEMESTER_1';
     const targetClass = await this.resolveClass(classId);
     const cId = targetClass.class_id;
+    const evalAccountId = await this.resolveEvaluatorAccountId(evaluatedBy, classId);
 
     let savedCount = 0;
     if (Array.isArray(records) && records.length > 0) {
@@ -1562,6 +1971,7 @@ class AssessmentService {
           },
           update: {
             teacher_notes: rec.teacherNotes || '',
+            evaluated_by: evalAccountId,
             updated_at: new Date(),
           },
           create: {
@@ -1569,7 +1979,7 @@ class AssessmentService {
             class_id: cId,
             semester: sem,
             teacher_notes: rec.teacherNotes || '',
-            evaluated_by: BigInt(evaluatedBy || 40),
+            evaluated_by: evalAccountId,
           },
         });
         savedCount++;
@@ -1580,6 +1990,132 @@ class AssessmentService {
       success: true,
       message: 'Lưu đánh giá cuối kỳ thành công vào cơ sở dữ liệu',
       savedCount,
+    };
+  }
+
+  /**
+   * Publish / Unpublish Monthly Assessments for the whole class
+   */
+  async publishMonthlyAssessments({ classId, month, year, isPublished = true, publishedBy = 40 }) {
+    const targetClass = await this.resolveClass(classId);
+    const cId = targetClass.class_id;
+    const numMonth = Number(month) || 10;
+    const numYear = Number(year) || 2026;
+    const evalAccountId = await this.resolveEvaluatorAccountId(publishedBy, classId);
+
+    const result = await prisma.monthlyAssessment.updateMany({
+      where: {
+        class_id: cId,
+        month: numMonth,
+        year: numYear,
+      },
+      data: {
+        is_published: Boolean(isPublished),
+        published_at: isPublished ? new Date() : null,
+        updated_at: new Date(),
+      },
+    });
+
+    if (isPublished) {
+      (async () => {
+        try {
+          const assessments = await prisma.monthlyAssessment.findMany({
+            where: { class_id: cId, month: numMonth, year: numYear, is_published: true },
+            include: { student: true },
+          });
+
+          for (const item of assessments) {
+            if (item.student?.account_id) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: [item.student.account_id],
+                creatorAccountId: evalAccountId,
+                type: 'MONTHLY_ROSE_REPORT',
+                title: `Sổ bé ngoan tháng ${numMonth}/${numYear}`,
+                body: `Sổ bé ngoan và nhận xét tháng ${numMonth}/${numYear} của bé ${item.student.full_name} đã được công bố chính thức.`,
+                data: {
+                  type: 'MONTHLY_COMMENT_PUBLISHED',
+                  studentId: item.student_id.toString(),
+                  month: numMonth,
+                  year: numYear,
+                },
+              });
+            }
+          }
+        } catch (e) {
+          logger.warn({ error: e.message }, 'Failed to emit publish notifications for monthly assessment');
+        }
+      })();
+    }
+
+    return {
+      success: true,
+      isPublished: Boolean(isPublished),
+      message: isPublished
+        ? `Đã công bố Sổ Bé Ngoan tháng ${numMonth}/${numYear} cho cả lớp!`
+        : `Đã gỡ công bố Sổ Bé Ngoan tháng ${numMonth}/${numYear}.`,
+      updatedCount: result.count,
+    };
+  }
+
+  /**
+   * Publish / Unpublish Semester Assessments for the whole class
+   */
+  async publishSemesterAssessments({ classId, semester = 'SEMESTER_1', isPublished = true, publishedBy = 40 }) {
+    const targetClass = await this.resolveClass(classId);
+    const cId = targetClass.class_id;
+    const sem = semester === 'SEMESTER_2' ? 'SEMESTER_2' : 'SEMESTER_1';
+    const semLabel = sem === 'SEMESTER_2' ? 'Học kỳ 2' : 'Học kỳ 1';
+    const evalAccountId = await this.resolveEvaluatorAccountId(publishedBy, classId);
+
+    const result = await prisma.semesterAssessment.updateMany({
+      where: {
+        class_id: cId,
+        semester: sem,
+      },
+      data: {
+        is_published: Boolean(isPublished),
+        published_at: isPublished ? new Date() : null,
+        updated_at: new Date(),
+      },
+    });
+
+    if (isPublished) {
+      (async () => {
+        try {
+          const assessments = await prisma.semesterAssessment.findMany({
+            where: { class_id: cId, semester: sem, is_published: true },
+            include: { student: true },
+          });
+
+          for (const item of assessments) {
+            if (item.student?.account_id) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: [item.student.account_id],
+                creatorAccountId: evalAccountId,
+                type: 'SEMESTER_REPORT_PUBLISHED',
+                title: `Kết quả đánh giá ${semLabel}`,
+                body: `Kết quả đánh giá tổng kết ${semLabel} của bé ${item.student.full_name} đã được công bố chính thức.`,
+                data: {
+                  type: 'SEMESTER_REPORT_PUBLISHED',
+                  studentId: item.student_id.toString(),
+                  semester: sem,
+                },
+              });
+            }
+          }
+        } catch (e) {
+          logger.warn({ error: e.message }, 'Failed to emit publish notifications for semester assessment');
+        }
+      })();
+    }
+
+    return {
+      success: true,
+      isPublished: Boolean(isPublished),
+      message: isPublished
+        ? `Đã công bố kết quả đánh giá ${semLabel} cho cả lớp!`
+        : `Đã gỡ công bố kết quả đánh giá ${semLabel}.`,
+      updatedCount: result.count,
     };
   }
 }
