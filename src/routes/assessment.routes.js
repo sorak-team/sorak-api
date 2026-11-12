@@ -14,9 +14,11 @@ router.get('/classes/:classId', assessmentController.getAssessmentOverview);
 // Monthly Assessment (Sổ Bé Ngoan - Table 26)
 router.get('/classes/:classId/monthly', assessmentController.getMonthlyAssessments);
 router.post('/classes/:classId/monthly', assessmentController.saveMonthlyAssessments);
+router.post('/classes/:classId/monthly/publish', assessmentController.publishMonthlyAssessments);
 
 // Semester Assessment (Đánh giá học kỳ - Table 27)
 router.get('/classes/:classId/semester', assessmentController.getSemesterAssessments);
 router.post('/classes/:classId/semester', assessmentController.saveSemesterAssessments);
+router.post('/classes/:classId/semester/publish', assessmentController.publishSemesterAssessments);
 
 export default router;
