@@ -2,6 +2,7 @@ import prisma from '../config/prisma.js';
 import { BadRequest, NotFound, Conflict, Forbidden } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
 import { teacherService } from './teacher.service.js';
+import { notificationService } from './notification.service.js';
 import { calculateWhoAssessment, getClassificationFromZScores } from '../utils/who-calculator.js';
 
 const GRADE_LABELS = {
@@ -308,13 +309,22 @@ export class ClassService {
 
     const activeAllocations = c.teacher_classes.filter((tc) => tc.left_at === null);
 
-    if (user && user.role === 'TEACHER_GV') {
+    if (user && (user.role === 'TEACHER_GV' || user.role === 'TEACHER')) {
       const userSub = String(user.sub);
+      const userAccId = user.accountId ? String(user.accountId) : null;
       const isAssigned = activeAllocations.some((tc) => {
-        const acc = tc.teacher?.account;
+        const t = tc.teacher;
+        const acc = t?.account;
+        const accId = t?.account_id ? String(t.account_id) : acc?.account_id ? String(acc.account_id) : null;
+        const accPublicId = acc?.public_id ? String(acc.public_id) : null;
+        const teacherPublicId = t?.public_id ? String(t.public_id) : null;
+        const teacherId = t?.teacher_id ? String(t.teacher_id) : null;
         return (
-          acc &&
-          (String(acc.account_id) === userSub || String(acc.public_id) === userSub)
+          (accId && userAccId && accId === userAccId) ||
+          (accId && accId === userSub) ||
+          (accPublicId && accPublicId === userSub) ||
+          (teacherPublicId && teacherPublicId === userSub) ||
+          (teacherId && teacherId === userSub)
         );
       });
       if (!isAssigned) {
@@ -479,6 +489,15 @@ export class ClassService {
       throw new NotFound('Lớp học không tồn tại');
     }
 
+    // CR-18 Optimistic Concurrency Control
+    if (data.updatedAt || data.updated_at) {
+      const clientTime = new Date(data.updatedAt || data.updated_at).getTime();
+      const serverTime = new Date(classRecord.updated_at).getTime();
+      if (!isNaN(clientTime) && !isNaN(serverTime) && Math.abs(serverTime - clientTime) > 1000) {
+        throw new Conflict('Thông tin lớp học đã được cập nhật ở phiên khác. Vui lòng tải lại dữ liệu trước khi chỉnh sửa.');
+      }
+    }
+
     if (classRecord.school_year?.status === 'COMPLETED') {
       throw new BadRequest('Năm học đã kết thúc. Chỉ được xem, không được chỉnh sửa lớp học.');
     }
@@ -542,7 +561,7 @@ export class ClassService {
   /**
    * Soft delete classroom
    */
-  async deleteClass(id) {
+  async deleteClass(id, data = {}) {
     // 1. Query class existence
     const where = { ...this._parseId(id), deleted_at: null };
     const classRecord = await prisma.class.findFirst({
@@ -551,6 +570,15 @@ export class ClassService {
     });
     if (!classRecord) {
       throw new NotFound('Lớp học không tồn tại');
+    }
+
+    // CR-18 Optimistic Concurrency Control
+    if (data && (data.updatedAt || data.updated_at)) {
+      const clientTime = new Date(data.updatedAt || data.updated_at).getTime();
+      const serverTime = new Date(classRecord.updated_at).getTime();
+      if (!isNaN(clientTime) && !isNaN(serverTime) && Math.abs(serverTime - clientTime) > 1000) {
+        throw new Conflict('Thông tin lớp học đã được cập nhật ở phiên khác. Vui lòng tải lại dữ liệu trước khi chỉnh sửa.');
+      }
     }
 
     if (classRecord.school_year?.status === 'COMPLETED') {
@@ -1162,6 +1190,46 @@ export class ClassService {
         left_at: null,
       })),
     });
+
+    // Notification 5: Assign Students to Class (Trẻ được phân vào lớp -> PH của trẻ & GV lớp)
+    try {
+      // 1. Gửi thông báo cho từng phụ huynh
+      for (const st of students) {
+        if (st.account_id) {
+          notificationService.emitSystemNotification({
+            recipientAccountIds: [st.account_id],
+            type: 'SCHOOL_ANNOUNCEMENT',
+            title: 'Thông báo phân lớp học sinh',
+            body: `Bé ${st.full_name} đã được phân công vào lớp ${classRecord.name} (Năm học ${classRecord.school_year?.name || ''}).`,
+            data: {
+              type: 'STUDENT_CLASS_ASSIGNED',
+              studentId: st.student_id.toString(),
+              classId: classRecord.class_id.toString(),
+            },
+          }).catch(() => {});
+        }
+      }
+
+      // 2. Gửi thông báo cho các giáo viên phụ trách lớp
+      const teacherAccountIds = (classRecord.teacher_classes || [])
+        .map((tc) => tc.teacher?.account_id)
+        .filter(Boolean);
+      if (teacherAccountIds.length > 0) {
+        notificationService.emitSystemNotification({
+          recipientAccountIds: teacherAccountIds,
+          type: 'SCHOOL_ANNOUNCEMENT',
+          title: 'Tiếp nhận học sinh mới',
+          body: `Lớp ${classRecord.name} vừa được bổ sung ${students.length} học sinh mới vào danh sách lớp.`,
+          data: {
+            type: 'STUDENT_CLASS_ASSIGNED',
+            classId: classRecord.class_id.toString(),
+            studentCount: students.length,
+          },
+        }).catch(() => {});
+      }
+    } catch (e) {
+      logger.warn({ error: e.message }, 'Failed to emit notification for student class assignment');
+    }
 
     return this.getClassStudents(classRecord.public_id || classRecord.class_id.toString());
   }
@@ -2201,6 +2269,24 @@ export class ClassService {
       );
     }
 
+    // Notification 6: Create Transfer Request (GV/BGH tạo yêu cầu chuyển lớp -> BGH)
+    notificationService.getPrincipalAccountIds().then((bghIds) => {
+      if (bghIds.length > 0) {
+        notificationService.emitSystemNotification({
+          recipientAccountIds: bghIds,
+          creatorAccountId: creatorId,
+          type: 'SCHOOL_ANNOUNCEMENT',
+          title: 'Yêu cầu chuyển lớp mới',
+          body: `Có yêu cầu chuyển lớp cho bé ${created.student.full_name} từ lớp ${created.from_class.name} sang lớp ${created.to_class.name}.`,
+          data: {
+            type: 'TRANSFER_REQUEST_CREATED',
+            transferId: created.transfer_id.toString(),
+            studentId: created.student_id.toString(),
+          },
+        }).catch(() => {});
+      }
+    }).catch(() => {});
+
     return {
       id: created.public_id || created.transfer_id.toString(),
       studentCode: created.student.student_code,
@@ -2260,6 +2346,23 @@ export class ClassService {
         approved_at: new Date(),
       },
     });
+
+    // Notification 8: Reject Transfer Request (BGH từ chối chuyển lớp -> Người tạo yêu cầu)
+    if (transfer.created_by) {
+      const reasonText = updated.rejected_reason ? ` Lý do: ${updated.rejected_reason}` : '';
+      notificationService.emitSystemNotification({
+        recipientAccountIds: [transfer.created_by],
+        creatorAccountId: approverId,
+        type: 'SCHOOL_ANNOUNCEMENT',
+        title: 'Yêu cầu chuyển lớp bị từ chối',
+        body: `Yêu cầu chuyển lớp cho bé ${transfer.student?.full_name} đã bị Ban Giám Hiệu từ chối.${reasonText}`,
+        data: {
+          type: 'TRANSFER_REQUEST_REJECTED',
+          transferId: transfer.transfer_id.toString(),
+          reason: updated.rejected_reason,
+        },
+      }).catch(() => {});
+    }
 
     return {
       success: true,
@@ -2393,6 +2496,37 @@ export class ClassService {
           },
         });
       });
+
+      // Notification 7: Approve Transfer Request (BGH duyệt chuyển lớp -> Người tạo + GV lớp nguồn + GV lớp đích + Phụ huynh)
+      (async () => {
+        try {
+          const recipientSet = new Set();
+          if (transfer.created_by) recipientSet.add(transfer.created_by.toString());
+          if (transfer.student?.account_id) recipientSet.add(transfer.student.account_id.toString());
+
+          const [fromTeachers, toTeachers] = await Promise.all([
+            notificationService.getClassTeacherAccountIds(transfer.from_class_id),
+            notificationService.getClassTeacherAccountIds(transfer.to_class_id),
+          ]);
+          fromTeachers.forEach((id) => recipientSet.add(id.toString()));
+          toTeachers.forEach((id) => recipientSet.add(id.toString()));
+
+          await notificationService.emitSystemNotification({
+            recipientAccountIds: Array.from(recipientSet),
+            creatorAccountId: approverId,
+            type: 'SCHOOL_ANNOUNCEMENT',
+            title: 'Yêu cầu chuyển lớp đã được duyệt',
+            body: `Yêu cầu chuyển lớp cho bé ${transfer.student?.full_name} từ ${transfer.from_class?.name} sang ${transfer.to_class?.name} đã được Ban Giám Hiệu phê duyệt thành công.`,
+            data: {
+              type: 'TRANSFER_REQUEST_APPROVED',
+              transferId: transfer.transfer_id.toString(),
+              studentId: transfer.student_id.toString(),
+            },
+          });
+        } catch (e) {
+          logger.warn({ error: e.message }, 'Failed to emit notification for transfer approval');
+        }
+      })();
     } else {
       throw new BadRequest('Trạng thái cập nhật không hợp lệ');
     }
@@ -2522,7 +2656,21 @@ export class ClassService {
       },
     });
 
-    const studentIds = enrollments.map((e) => e.student.student_id);
+    const targetDateMidnight = new Date(Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate()));
+
+    const activeEnrollments = enrollments.filter((enr) => {
+      if (enr.left_at) {
+        const leftMidnight = new Date(Date.UTC(enr.left_at.getUTCFullYear(), enr.left_at.getUTCMonth(), enr.left_at.getUTCDate()));
+        if (targetDateMidnight >= leftMidnight) return false;
+      }
+      if (enr.enrolled_at) {
+        const enrMidnight = new Date(Date.UTC(enr.enrolled_at.getUTCFullYear(), enr.enrolled_at.getUTCMonth(), enr.enrolled_at.getUTCDate()));
+        if (targetDateMidnight < enrMidnight) return false;
+      }
+      return true;
+    });
+
+    const studentIds = activeEnrollments.map((e) => e.student.student_id);
 
     // 1. Fetch Attendance for this class on targetDate
     const attendanceRecords = await prisma.attendance.findMany({
@@ -2626,7 +2774,7 @@ export class ClassService {
     let notRecordedCount = 0;
     let healthCheckedTodayCount = 0;
 
-    const students = enrollments.map((enr) => {
+    const students = activeEnrollments.map((enr) => {
       const s = enr.student;
       const sId = s.student_id.toString();
 
@@ -2827,7 +2975,8 @@ export class ClassService {
     const studentList = enrollments.map((enr) => {
       const s = enr.student;
       return {
-        id: s.student_id.toString(),
+        id: s.public_id || s.student_code || s.student_id.toString(),
+        studentId: s.student_id.toString(),
         publicId: s.public_id,
         studentCode: s.student_code,
         fullName: s.full_name,
@@ -2851,7 +3000,7 @@ export class ClassService {
         studentList: [],
         student: null,
         health: { totalChecks: 0, latest: null, history: [] },
-        attendance: { totalDays: 0, presentCount: 0, excusedCount: 0, unexcusedCount: 0, attendanceRate: 100, history: [] },
+        attendance: { totalDays: 0, presentCount: 0, excusedCount: 0, unexcusedCount: 0, attendanceRate: null, history: [] },
         assessments: { totalAssessed: 0, achievedCount: 0, outstandingCount: 0, notAchievedCount: 0, history: [] },
       };
     }
@@ -2954,16 +3103,35 @@ export class ClassService {
       };
     });
 
-    // 4. Attendance Records History
-    const attendanceRecords = await prisma.attendance.findMany({
+    // 4. Attendance Records History (Across entire school year / all classes attended)
+    const rawAttendanceRecords = await prisma.attendance.findMany({
       where: {
         student_id: sId,
-        class_id: classRecord.class_id,
         deleted_at: null,
         ...(dateRangeFilter ? { date: dateRangeFilter } : {}),
+        class: {
+          school_year_id: classRecord.school_year_id,
+          deleted_at: null,
+        },
       },
-      orderBy: { date: 'desc' },
+      include: {
+        class: {
+          select: { class_id: true, name: true, public_id: true },
+        },
+      },
+      orderBy: [{ date: 'desc' }, { attendance_id: 'desc' }],
     });
+
+    // Deduplicate by date string if multiple records exist across classes on the same day
+    const seenDates = new Set();
+    const attendanceRecords = [];
+    for (const record of rawAttendanceRecords) {
+      const dStr = record.date.toISOString().slice(0, 10);
+      if (!seenDates.has(dStr)) {
+        seenDates.add(dStr);
+        attendanceRecords.push(record);
+      }
+    }
 
     const dayNames = ['Chủ Nhật', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'];
     let presentCount = 0;
@@ -2991,6 +3159,9 @@ export class ClassService {
 
       return {
         id: a.attendance_id.toString(),
+        publicId: a.public_id,
+        classId: a.class_id.toString(),
+        className: a.class?.name || classRecord.name,
         date: dateStr,
         dateFormatted: `${d}/${m}/${y}`,
         dayName,
@@ -3006,7 +3177,7 @@ export class ClassService {
     });
 
     const totalAttendanceDays = attendanceList.length;
-    const attendanceRate = totalAttendanceDays > 0 ? Math.round((presentCount / totalAttendanceDays) * 100) : 100;
+    const attendanceRate = totalAttendanceDays > 0 ? Math.round((presentCount / totalAttendanceDays) * 100) : null;
 
     // 5. Daily Assessments History
     const dailyAssessments = await prisma.dailyAssessment.findMany({
@@ -3234,7 +3405,8 @@ export class ClassService {
       graduationEligibility,
       studentList,
       student: {
-        id: currentStudent.student_id.toString(),
+        id: currentStudent.public_id || currentStudent.student_code || currentStudent.student_id.toString(),
+        studentId: currentStudent.student_id.toString(),
         publicId: currentStudent.public_id,
         studentCode: currentStudent.student_code,
         fullName: currentStudent.full_name,

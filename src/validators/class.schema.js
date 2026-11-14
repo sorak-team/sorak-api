@@ -20,6 +20,8 @@ export const updateClassSchema = Joi.object({
   ageGroup: Joi.string().valid('NHA_TRE', 'MAM', 'CHOI', 'LA').optional(),
   roomNumber: Joi.string().trim().max(50).allow('', null).optional(),
   description: Joi.string().trim().max(255).allow('', null).optional(),
+  updatedAt: Joi.alternatives().try(Joi.date(), Joi.string()).optional(),
+  updated_at: Joi.alternatives().try(Joi.date(), Joi.string()).optional(),
 });
 
 export const queryClassSchema = Joi.object({
