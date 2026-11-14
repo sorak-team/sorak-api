@@ -83,4 +83,58 @@ router.post('/pickup', upload.single('file'), async (req, res, next) => {
   }
 });
 
+// Configure Multer for Bulletin attachments (max 10MB per file)
+const bulletinUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/svg+xml'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(
+        new BadRequest('Định dạng tệp không được hỗ trợ. Vui lòng tải lên ảnh JPG, PNG, GIF hoặc WebP.'),
+      );
+    }
+  },
+});
+
+/**
+ * POST /api/upload/bulletin & POST /api/upload/notification
+ * Upload bulletin image directly to MinIO S3
+ */
+const handleBulletinUpload = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      throw new BadRequest('Vui lòng chọn tệp ảnh để tải lên');
+    }
+
+    const mime = req.file.mimetype || 'image/jpeg';
+    let ext = mime.split('/')[1] || 'jpg';
+    if (ext === 'jpeg') ext = 'jpg';
+    if (ext === 'svg+xml') ext = 'svg';
+
+    const filename = `bulletin_${uuidv4()}.${ext}`;
+    const result = await storageService.upload(filename, req.file.buffer, mime);
+
+    res.success(
+      {
+        url: result.url,
+        relativeUrl: result.relativeUrl,
+        size: result.size,
+        filename: req.file.originalname || filename,
+      },
+      'Tải ảnh bản tin lên MinIO S3 thành công',
+      201,
+    );
+  } catch (err) {
+    next(err);
+  }
+};
+
+router.post('/bulletin', bulletinUpload.single('file'), handleBulletinUpload);
+router.post('/notification', bulletinUpload.single('file'), handleBulletinUpload);
+
 export default router;

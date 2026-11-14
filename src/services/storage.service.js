@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import sharp from 'sharp';
 import { v4 as uuidv4 } from 'uuid';
 import * as Minio from 'minio';
+import { v2 as cloudinary } from 'cloudinary';
 import logger from '../utils/logger.js';
 import { env } from '../config/env.js';
 
@@ -28,6 +29,21 @@ export class StorageService {
     this.minioClient = null;
     this.bucketName = env.minio?.bucket || 'sorak-media';
     this.bucketInitialized = false;
+
+    // Cloudinary configuration (if credentials exist in env)
+    const cloudName = process.env.CLOUDINARY_CLOUD_NAME || env.cloudinary?.cloudName;
+    const apiKey = process.env.CLOUDINARY_API_KEY || env.cloudinary?.apiKey;
+    const apiSecret = process.env.CLOUDINARY_API_SECRET || env.cloudinary?.apiSecret;
+
+    this.cloudinaryConfigured = Boolean(cloudName && apiKey && apiSecret);
+    if (this.cloudinaryConfigured) {
+      cloudinary.config({
+        cloud_name: cloudName,
+        api_key: apiKey,
+        api_secret: apiSecret,
+      });
+      logger.info(`[StorageService] Cloudinary adapter initialized for cloud: ${cloudName}`);
+    }
 
     if (env.minio?.endpoint && env.minio?.accessKey && env.minio?.secretKey) {
       try {
@@ -109,8 +125,45 @@ export class StorageService {
    */
   async upload(filename, buffer, mimetype = 'image/webp') {
     const safeName = filename || `avatar_${uuidv4()}.webp`;
-    const folder = safeName.startsWith('pickup_') ? 'pickup' : 'avatars';
+    let folder = 'avatars';
+    if (safeName.startsWith('pickup_')) {
+      folder = 'pickup';
+    } else if (safeName.startsWith('bulletin_') || safeName.startsWith('notification_')) {
+      folder = 'bulletins';
+    }
     const objectKey = `${folder}/${safeName}`;
+
+    // 0. If Cloudinary is configured, upload to Cloudinary CDN
+    if (this.cloudinaryConfigured) {
+      try {
+        const uploadResult = await new Promise((resolve, reject) => {
+          const uploadStream = cloudinary.uploader.upload_stream(
+            {
+              folder: `sorak/${folder}`,
+              public_id: safeName.replace(/\.[^/.]+$/, ''),
+              resource_type: 'auto',
+            },
+            (error, result) => {
+              if (error) reject(error);
+              else resolve(result);
+            }
+          );
+          uploadStream.end(buffer);
+        });
+
+        logger.info(`[StorageService] Uploaded to Cloudinary: ${uploadResult.secure_url}`);
+        return {
+          key: uploadResult.public_id,
+          url: uploadResult.secure_url,
+          relativeUrl: uploadResult.secure_url,
+          size: uploadResult.bytes || buffer.length,
+          mimetype,
+          provider: 'cloudinary',
+        };
+      } catch (cloudErr) {
+        logger.warn(`[StorageService] Cloudinary upload failed: ${cloudErr.message}. Falling back.`);
+      }
+    }
 
     // 1. If MinIO is configured, upload to MinIO S3 Object Storage
     if (this.minioClient) {
@@ -146,10 +199,14 @@ export class StorageService {
     }
 
     // 2. Fallback: Local filesystem storage
-    const targetPath = path.join(this.uploadsDir, safeName);
+    const targetFolder = path.join(UPLOADS_ROOT, folder);
+    if (!fs.existsSync(targetFolder)) {
+      await fs.promises.mkdir(targetFolder, { recursive: true });
+    }
+    const targetPath = path.join(targetFolder, safeName);
     await fs.promises.writeFile(targetPath, buffer);
 
-    const relativeUrl = `/uploads/avatars/${safeName}`;
+    const relativeUrl = `/uploads/${folder}/${safeName}`;
     const baseUrl = env.serverUrl || `http://localhost:${env.port || 3000}`;
     const fullUrl = `${baseUrl}${relativeUrl}`;
 
