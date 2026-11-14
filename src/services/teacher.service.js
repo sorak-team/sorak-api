@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import prisma from '../config/prisma.js';
 import { BadRequest, NotFound, Conflict, Forbidden } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
+import { notificationService } from './notification.service.js';
 
 export class TeacherService {
   /**
@@ -48,16 +49,29 @@ export class TeacherService {
     gender,
     classId,
     sortBy = 'newest',
+    includeDeleted = false,
   }) {
     const skip = (Math.max(1, page) - 1) * limit;
 
-    const where = {
-      deleted_at: null,
-    };
+    const where = {};
+
+    if (workStatus && workStatus !== 'ALL') {
+      if (workStatus === 'RESIGNED') {
+        where.OR = [
+          { work_status: 'RESIGNED' },
+          { deleted_at: { not: null } },
+        ];
+      } else {
+        where.work_status = workStatus;
+        where.deleted_at = null;
+      }
+    } else if (!includeDeleted) {
+      where.deleted_at = null;
+    }
 
     if (search && search.trim()) {
       const q = search.trim();
-      where.OR = [
+      const searchConditions = [
         { full_name: { contains: q, mode: 'insensitive' } },
         { employee_code: { contains: q, mode: 'insensitive' } },
         { citizen_id: { contains: q, mode: 'insensitive' } },
@@ -65,10 +79,15 @@ export class TeacherService {
         { phone: { contains: q, mode: 'insensitive' } },
         { account: { username: { contains: q, mode: 'insensitive' } } },
       ];
-    }
-
-    if (workStatus && workStatus !== 'ALL') {
-      where.work_status = workStatus;
+      if (where.OR) {
+        where.AND = [
+          { OR: where.OR },
+          { OR: searchConditions },
+        ];
+        delete where.OR;
+      } else {
+        where.OR = searchConditions;
+      }
     }
 
     if (gender && gender !== 'ALL') {
@@ -124,6 +143,7 @@ export class TeacherService {
               username: true,
               role: true,
               is_active: true,
+              deleted_at: true,
             },
           },
           teacher_classes: {
@@ -160,6 +180,7 @@ export class TeacherService {
       workStatus: t.work_status,
       startDate: t.start_date,
       endDate: t.end_date,
+      deletedAt: t.deleted_at,
       createdAt: t.created_at,
       updatedAt: t.updated_at,
       account: t.account
@@ -167,7 +188,8 @@ export class TeacherService {
             id: t.account.public_id || t.account.account_id.toString(),
             publicId: t.account.public_id,
             username: t.account.username,
-            isActive: t.account.is_active,
+            isActive: t.account.is_active && !t.account.deleted_at,
+            isDeleted: Boolean(t.account.deleted_at),
           }
         : null,
       assignedClasses: t.teacher_classes
@@ -207,7 +229,7 @@ export class TeacherService {
    * Get single teacher by ID
    */
   async getTeacherById(id) {
-    const where = { ...this._parseId(id), deleted_at: null };
+    const where = { ...this._parseId(id) };
 
     const teacher = await prisma.teacher.findFirst({
       where,
@@ -220,6 +242,7 @@ export class TeacherService {
             role: true,
             is_active: true,
             last_login_at: true,
+            deleted_at: true,
           },
         },
         teacher_classes: {
@@ -260,6 +283,7 @@ export class TeacherService {
       workStatus: teacher.work_status,
       startDate: teacher.start_date,
       endDate: teacher.end_date,
+      deletedAt: teacher.deleted_at,
       createdAt: teacher.created_at,
       updatedAt: teacher.updated_at,
       account: teacher.account
@@ -267,7 +291,8 @@ export class TeacherService {
             id: teacher.account.public_id || teacher.account.account_id.toString(),
             publicId: teacher.account.public_id,
             username: teacher.account.username,
-            isActive: teacher.account.is_active,
+            isActive: teacher.account.is_active && !teacher.account.deleted_at,
+            isDeleted: Boolean(teacher.account.deleted_at),
             lastLoginAt: teacher.account.last_login_at,
           }
         : null,
@@ -307,7 +332,7 @@ export class TeacherService {
   }
 
   /**
-   * Auto-generate teacher code: CB + 2-digit join year + 001..099
+   * Auto-generate teacher code: CB + 2-digit join year + 001..099 (or higher)
    * e.g. CB21001 for year 2021
    */
   async _generateTeacherCode(startDate) {
@@ -331,13 +356,14 @@ export class TeacherService {
     const yearSuffix = String(joinYear).slice(-2);
     const prefix = `CB${yearSuffix}`;
 
+    // Note: Do NOT filter deleted_at: null here because employee_code has a unique constraint across the whole table.
     const existing = await prisma.teacher.findMany({
-      where: { employee_code: { startsWith: prefix, mode: 'insensitive' }, deleted_at: null },
+      where: { employee_code: { startsWith: prefix, mode: 'insensitive' } },
       select: { employee_code: true },
     });
 
     let maxSeq = 0;
-    const regex = new RegExp(`^${prefix}(\\d{3})$`, 'i');
+    const regex = new RegExp(`^${prefix}(\\d{3,})$`, 'i');
     for (const t of existing) {
       const match = String(t.employee_code || '')
         .trim()
@@ -348,36 +374,57 @@ export class TeacherService {
       }
     }
 
-    const nextSeq = String(maxSeq + 1).padStart(3, '0');
-    return `${prefix}${nextSeq}`;
+    let nextSeqNum = maxSeq + 1;
+    let candidateCode = `${prefix}${String(nextSeqNum).padStart(3, '0')}`;
+
+    // Guarantee uniqueness in database against any gaps, concurrency or existing codes
+    while (
+      await prisma.teacher.findFirst({
+        where: { employee_code: { equals: candidateCode, mode: 'insensitive' } },
+        select: { teacher_id: true },
+      })
+    ) {
+      nextSeqNum++;
+      candidateCode = `${prefix}${String(nextSeqNum).padStart(3, '0')}`;
+    }
+
+    return candidateCode;
   }
 
   /**
    * Create teacher with transactional account binding
    */
   async createTeacher(data) {
+    let isAutoGenerated = false;
     let finalCode = data.employeeCode?.trim().toUpperCase();
+
+    // Auto-generate if code is not provided, legacy GV prefix, or standard system CB prefix
     if (
       !finalCode ||
       finalCode.startsWith('GV') ||
-      (finalCode.startsWith('CB') && finalCode.length > 7)
+      finalCode.startsWith('CB')
     ) {
       finalCode = await this._generateTeacherCode(data.startDate || data.joinDate);
+      isAutoGenerated = true;
     }
 
-    // 1. Verify code and citizen_id uniqueness
+    // 1. Verify code and citizen_id uniqueness against the entire table
     const codeConflict = await prisma.teacher.findFirst({
-      where: { employee_code: finalCode, deleted_at: null },
+      where: { employee_code: { equals: finalCode, mode: 'insensitive' } },
     });
     if (codeConflict) {
-      throw new Conflict(`Mã giáo viên '${finalCode}' đã tồn tại`);
+      if (isAutoGenerated) {
+        finalCode = await this._generateTeacherCode(data.startDate || data.joinDate);
+      } else {
+        throw new Conflict(`Mã giáo viên '${finalCode}' đã tồn tại trên hệ thống`);
+      }
     }
 
     const citizenConflict = await prisma.teacher.findFirst({
-      where: { citizen_id: data.citizenId, deleted_at: null },
+      where: { citizen_id: data.citizenId },
     });
     if (citizenConflict) {
-      throw new Conflict(`Số CCCD '${data.citizenId}' đã được đăng ký bởi giáo viên khác`);
+      throw new Conflict(`Số CCCD '${data.citizenId}' đã được đăng ký bởi giáo viên khác (${citizenConflict.full_name})`);
     }
 
     if (data.phone && data.phone.trim()) {
@@ -398,48 +445,74 @@ export class TeacherService {
       }
     }
 
-    // 2. Create teacher profile (without auto-creating account)
-    const createdTeacher = await prisma.$transaction(async (tx) => {
-      const teacher = await tx.teacher.create({
-        data: {
-          account_id: null,
-          employee_code: finalCode,
-          full_name: data.fullName,
-          date_of_birth: new Date(data.dateOfBirth),
-          gender: data.gender,
-          citizen_id: data.citizenId,
-          phone: data.phone || null,
-          email: data.email || null,
-          avatar_url: data.avatarUrl || null,
-          address: data.address || null,
-          position: data.position || null,
-          work_status: data.workStatus || 'WORKING',
-          start_date: new Date(data.startDate),
-          end_date: data.endDate ? new Date(data.endDate) : null,
-        },
-      });
+    // 2. Create teacher profile with retry on concurrent employee_code conflict
+    let attempts = 0;
+    const maxAttempts = 3;
+    let createdTeacher;
 
-      // Optional initial class assignment
-      if (data.classId) {
-        const targetClass = await tx.class.findFirst({
-          where: { ...this._parseClassId(data.classId), deleted_at: null },
-        });
-        if (targetClass) {
-          await tx.teacherClass.create({
+    while (attempts < maxAttempts) {
+      attempts++;
+      try {
+        createdTeacher = await prisma.$transaction(async (tx) => {
+          const teacher = await tx.teacher.create({
             data: {
-              teacher_id: teacher.teacher_id,
-              class_id: targetClass.class_id,
-              assigned_at: new Date(),
+              account_id: null,
+              employee_code: finalCode,
+              full_name: data.fullName,
+              date_of_birth: new Date(data.dateOfBirth),
+              gender: data.gender,
+              citizen_id: data.citizenId,
+              phone: data.phone || null,
+              email: data.email || null,
+              avatar_url: data.avatarUrl || null,
+              address: data.address || null,
+              position: data.position || null,
+              work_status: data.workStatus || 'WORKING',
+              start_date: new Date(data.startDate),
+              end_date: data.endDate ? new Date(data.endDate) : null,
             },
           });
-        }
-      }
 
-      return teacher;
-    });
+          // Optional initial class assignment
+          if (data.classId) {
+            const targetClass = await tx.class.findFirst({
+              where: { ...this._parseClassId(data.classId), deleted_at: null },
+            });
+            if (targetClass) {
+              await tx.teacherClass.create({
+                data: {
+                  teacher_id: teacher.teacher_id,
+                  class_id: targetClass.class_id,
+                  assigned_at: new Date(),
+                },
+              });
+            }
+          }
+
+          return teacher;
+        });
+
+        break;
+      } catch (err) {
+        if (
+          err.code === 'P2002' &&
+          err.meta?.target?.includes('employee_code') &&
+          isAutoGenerated &&
+          attempts < maxAttempts
+        ) {
+          logger.warn(
+            { finalCode, attempt: attempts },
+            'Teacher employee_code collision detected during insert, regenerating code...',
+          );
+          finalCode = await this._generateTeacherCode(data.startDate || data.joinDate);
+          continue;
+        }
+        throw err;
+      }
+    }
 
     logger.info(
-      { teacherId: createdTeacher.teacher_id.toString() },
+      { teacherId: createdTeacher.teacher_id.toString(), employeeCode: finalCode },
       'Created teacher profile and account',
     );
 
@@ -459,6 +532,15 @@ export class TeacherService {
       throw new NotFound('Giáo viên không tồn tại trên hệ thống');
     }
 
+    // CR-18 Optimistic Concurrency Control
+    if (data.updatedAt || data.updated_at) {
+      const clientTime = new Date(data.updatedAt || data.updated_at).getTime();
+      const serverTime = new Date(teacher.updated_at).getTime();
+      if (!isNaN(clientTime) && !isNaN(serverTime) && Math.abs(serverTime - clientTime) > 1000) {
+        throw new Conflict('Dữ liệu đã được cập nhật trong một phiên khác. Thay đổi của bạn chưa được lưu. Vui lòng tải lại dữ liệu mới nhất và thực hiện lại.');
+      }
+    }
+
     if (currentUser) {
       const isSelf =
         (teacher.account_id && currentUser.accountId && String(teacher.account_id) === String(currentUser.accountId)) ||
@@ -473,10 +555,13 @@ export class TeacherService {
 
     if (data.citizenId && data.citizenId !== teacher.citizen_id) {
       const conflict = await prisma.teacher.findFirst({
-        where: { citizen_id: data.citizenId, deleted_at: null },
+        where: {
+          citizen_id: data.citizenId,
+          teacher_id: { not: teacher.teacher_id },
+        },
       });
       if (conflict) {
-        throw new Conflict(`Số CCCD '${data.citizenId}' đã được sử dụng`);
+        throw new Conflict(`Số CCCD '${data.citizenId}' đã được sử dụng bởi giáo viên khác (${conflict.full_name})`);
       }
     }
 
@@ -626,6 +711,23 @@ export class TeacherService {
       include: { class: true },
     });
 
+    // Notification 3: Assign Teacher to Class (BGH phân công GV vào lớp)
+    if (teacher.account_id) {
+      notificationService
+        .emitSystemNotification({
+          recipientAccountIds: [teacher.account_id],
+          type: 'SCHOOL_ANNOUNCEMENT',
+          title: 'Phân công lớp học mới',
+          body: `Bạn đã được Ban Giám Hiệu phân công giảng dạy tại lớp ${classRecord.name}.`,
+          data: {
+            type: 'TEACHER_CLASS_ASSIGNED',
+            classId: classRecord.class_id.toString(),
+            teacherId: teacher.teacher_id.toString(),
+          },
+        })
+        .catch(() => {});
+    }
+
     return {
       allocationId: created.id.toString(),
       teacherId: teacher.public_id || teacher.teacher_id.toString(),
@@ -669,6 +771,23 @@ export class TeacherService {
         leave_reason: 'REMOVED',
       },
     });
+
+    // Notification 4: Unassign Teacher From Class (BGH gỡ GV khỏi lớp)
+    if (teacher.account_id) {
+      notificationService
+        .emitSystemNotification({
+          recipientAccountIds: [teacher.account_id],
+          type: 'SCHOOL_ANNOUNCEMENT',
+          title: 'Gỡ phân công lớp học',
+          body: `Bạn đã được gỡ khỏi danh sách giáo viên phụ trách lớp ${classRecord.name}.`,
+          data: {
+            type: 'TEACHER_CLASS_UNASSIGNED',
+            classId: classRecord.class_id.toString(),
+            teacherId: teacher.teacher_id.toString(),
+          },
+        })
+        .catch(() => {});
+    }
 
     return { success: true, message: 'Đã hoàn tất gỡ giáo viên khỏi lớp học' };
   }
@@ -737,15 +856,23 @@ export class TeacherService {
     }
 
     await prisma.$transaction(async (tx) => {
-      // 1. Soft delete teacher
+      // 1. Soft delete teacher and mark as RESIGNED
       await tx.teacher.update({
         where: { teacher_id: teacher.teacher_id },
         data: {
+          work_status: 'RESIGNED',
+          end_date: new Date(),
           deleted_at: new Date(),
         },
       });
 
-      // 2. Deactivate associated account if exists (BR-14(3), BR-24(3))
+      // 2. End any active class assignments
+      await tx.teacherClass.updateMany({
+        where: { teacher_id: teacher.teacher_id, left_at: null },
+        data: { left_at: new Date(), leave_reason: 'RESIGNED' },
+      });
+
+      // 3. Deactivate associated account if exists (BR-14(3), BR-24(3))
       if (teacher.account_id) {
         await tx.account.update({
           where: { account_id: teacher.account_id },
