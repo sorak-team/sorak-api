@@ -2,6 +2,14 @@ import prisma from '../config/prisma.js';
 import { NotFound, BadRequest } from '../utils/http-error.js';
 import { TIMETABLE_DAYS } from './mock-data.js';
 import { calculateWhoAssessment, getClassificationFromZScores } from '../utils/who-calculator.js';
+import {
+  createStandardWorkbook,
+  addSchoolHeaderBanner,
+  applyHeaderStyles,
+  applyZebraRows,
+  autoFitColumns,
+  formatDateDMY,
+} from '../utils/excel.helper.js';
 
 class HealthService {
   /**
@@ -82,11 +90,8 @@ class HealthService {
       where: {
         class_id: targetClass.class_id,
         student: { deleted_at: null },
-        status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
-        OR: [
-          { left_at: null },
-          { left_at: { gt: targetDateStart } },
-        ],
+        status: 'ENROLLED',
+        left_at: null,
       },
       include: {
         student: true,
@@ -100,7 +105,11 @@ class HealthService {
         date: { gte: targetDateStart, lte: targetDateEnd },
         deleted_at: null,
       },
-      select: { student_id: true },
+      select: { student_id: true, status: true, notes: true, absence_reason: true },
+    });
+    const existingAttMap = new Map();
+    existingAtts.forEach((a) => {
+      existingAttMap.set(a.student_id.toString(), a);
     });
     const existingAttSet = new Set(existingAtts.map((a) => a.student_id.toString()));
 
@@ -111,8 +120,10 @@ class HealthService {
         enrollments.push(enr);
         continue;
       }
-      if (enr.enrolled_at && new Date(enr.enrolled_at) <= targetDateEnd) {
-        enrollments.push(enr);
+      if (enr.enrolled_at) {
+        if (new Date(enr.enrolled_at) <= targetDateEnd) {
+          enrollments.push(enr);
+        }
         continue;
       }
       const inOtherClass = await prisma.studentEnrollment.findFirst({
@@ -164,11 +175,20 @@ class HealthService {
         bmiVal: bmiVal,
       });
 
+      const att = existingAttMap.get(st.student_id.toString());
+      const isAbsent = att
+        ? att.status === 'EXCUSED_ABSENCE' || att.status === 'UNEXCUSED_ABSENCE' || att.status === 'ABSENT'
+        : false;
+      const attStatus = att ? att.status : 'PRESENT';
+
       return {
         id: st.public_id || st.student_id.toString(),
         code: st.student_code,
         name: st.full_name,
         gender: st.gender,
+        status: attStatus,
+        rawStatus: attStatus,
+        isAbsent,
         height: heightVal,
         weight: weightVal,
         bmi: bmiVal,
@@ -268,7 +288,9 @@ class HealthService {
    */
   async saveHealthRecords({ classId, date, records, recordedBy }) {
     const targetDateStr = date || new Date().toISOString().slice(0, 10);
-    const targetDate = new Date(`${targetDateStr}T00:00:00.000Z`);
+    const targetDateStart = new Date(`${targetDateStr}T00:00:00.000Z`);
+    const targetDateEnd = new Date(`${targetDateStr}T23:59:59.999Z`);
+    const targetDate = targetDateStart;
 
     const now = new Date();
     const todayEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
@@ -306,22 +328,65 @@ class HealthService {
         const student = await this._resolveStudent(rawId);
         if (!student) continue;
 
-        if (rec.height !== undefined && rec.height !== null && rec.height !== '') {
-          const h = Number(rec.height);
-          if (h <= 0 || h > 150) {
-            throw new BadRequest(`Chiều cao phải lớn hơn 0 và không vượt quá 150 cm (${student.full_name})`);
+        const sId = student.student_id;
+        const isAbsent = Boolean(
+          rec.isAbsent ||
+          rec.status === 'ABSENT' ||
+          rec.status === 'EXCUSED_ABSENCE' ||
+          rec.status === 'UNEXCUSED_ABSENCE' ||
+          rec.rawStatus === 'EXCUSED_ABSENCE' ||
+          rec.rawStatus === 'UNEXCUSED_ABSENCE'
+        );
+
+        const rawHeight =
+          rec.height !== undefined && rec.height !== null && rec.height !== ''
+            ? Number(rec.height)
+            : null;
+        const rawWeight =
+          rec.weight !== undefined && rec.weight !== null && rec.weight !== ''
+            ? Number(rec.weight)
+            : null;
+
+        const isExamined =
+          !isAbsent &&
+          rawHeight !== null &&
+          !isNaN(rawHeight) &&
+          rawHeight > 0 &&
+          rawWeight !== null &&
+          !isNaN(rawWeight) &&
+          rawWeight > 0;
+
+        // Nếu học sinh vắng hoặc không khám sức khỏe trong ngày này:
+        if (!isExamined) {
+          const existing = await prisma.healthAssessment.findFirst({
+            where: {
+              student_id: sId,
+              assessment_date: {
+                gte: targetDateStart,
+                lte: targetDateEnd,
+              },
+              deleted_at: null,
+            },
+          });
+          if (existing) {
+            await prisma.healthAssessment.delete({
+              where: { assessment_id: existing.assessment_id },
+            });
           }
-        }
-        if (rec.weight !== undefined && rec.weight !== null && rec.weight !== '') {
-          const w = Number(rec.weight);
-          if (w <= 0 || w > 50) {
-            throw new BadRequest(`Cân nặng phải lớn hơn 0 và không vượt quá 50 kg (${student.full_name})`);
-          }
+          // Bỏ qua, không lưu bản ghi giả
+          continue;
         }
 
-        const sId = student.student_id;
-        const height = Number(rec.height) || 85.0;
-        const weight = Number(rec.weight) || 12.0;
+        // Với học sinh có khám, kiểm tra giới hạn chiều cao & cân nặng
+        if (rawHeight <= 0 || rawHeight > 150) {
+          throw new BadRequest(`Chiều cao phải lớn hơn 0 và không vượt quá 150 cm (${student.full_name})`);
+        }
+        if (rawWeight <= 0 || rawWeight > 50) {
+          throw new BadRequest(`Cân nặng phải lớn hơn 0 và không vượt quá 50 kg (${student.full_name})`);
+        }
+
+        const height = rawHeight;
+        const weight = rawWeight;
         const note = rec.note || rec.notes || null;
         const fallbackBmi = Number((weight / ((height / 100) ** 2)).toFixed(2));
         const whoRes = await calculateWhoAssessment({
@@ -340,7 +405,10 @@ class HealthService {
         const existing = await prisma.healthAssessment.findFirst({
           where: {
             student_id: sId,
-            assessment_date: targetDate,
+            assessment_date: {
+              gte: targetDateStart,
+              lte: targetDateEnd,
+            },
             deleted_at: null,
           },
         });
@@ -410,6 +478,210 @@ class HealthService {
       success: true,
       message: 'Đã xóa toàn bộ dữ liệu sức khoẻ',
     };
+  }
+
+  /**
+   * Xuất danh sách theo dõi sức khỏe & thể lực ra Excel
+   */
+  async exportHealthExcel({ classId, schoolYearId, date }) {
+    let targetClass = null;
+    if (classId) {
+      targetClass = await this._resolveClass(classId);
+      if (!targetClass) {
+        throw new NotFound('Không tìm thấy lớp học yêu cầu.');
+      }
+    }
+
+    let records = [];
+
+    if (targetClass) {
+      const enrollments = await prisma.studentEnrollment.findMany({
+        where: {
+          class_id: targetClass.class_id,
+          status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
+          student: { deleted_at: null },
+        },
+        include: {
+          student: {
+            include: {
+              health_assessments: {
+                where: {
+                  deleted_at: null,
+                  ...(date ? { assessment_date: new Date(`${date}T00:00:00.000Z`) } : {}),
+                },
+                orderBy: { assessment_date: 'desc' },
+              },
+            },
+          },
+        },
+        orderBy: { student: { student_code: 'asc' } },
+      });
+
+      for (const enr of enrollments) {
+        const st = enr.student;
+        const assessments = st.health_assessments || [];
+        if (assessments.length === 0) {
+          records.push({
+            student: st,
+            assessment: null,
+            className: targetClass.name,
+          });
+        } else {
+          for (const a of assessments) {
+            records.push({
+              student: st,
+              assessment: a,
+              className: targetClass.name,
+            });
+          }
+        }
+      }
+    } else {
+      const assessments = await prisma.healthAssessment.findMany({
+        where: {
+          deleted_at: null,
+          ...(date ? { assessment_date: new Date(`${date}T00:00:00.000Z`) } : {}),
+        },
+        include: {
+          student: {
+            include: {
+              student_enrollments: {
+                where: { status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] } },
+                include: { class: true },
+                take: 1,
+              },
+            },
+          },
+        },
+        orderBy: [{ assessment_date: 'desc' }, { student: { student_code: 'asc' } }],
+      });
+
+      records = assessments.map((a) => ({
+        student: a.student,
+        assessment: a,
+        className: a.student?.student_enrollments?.[0]?.class?.name || 'Chưa xếp lớp',
+      }));
+    }
+
+    const { workbook, worksheet } = createStandardWorkbook('Theo dõi sức khỏe');
+
+    const title = targetClass
+      ? `SỔ THEO DÕI SỨC KHỎE & THỂ LỰC - LỚP ${targetClass.name.toUpperCase()}`
+      : 'SỔ THEO DÕI SỨC KHỎE & THỂ LỰC TOÀN TRƯỜNG';
+    const subtitle = `Năm học: ${targetClass?.school_year?.name || 'Hiện tại'} | Đơn vị: Trường Mầm non Sorak | Ngày xuất: ${formatDateDMY(new Date())} | Tổng cộng: ${records.length} bản ghi`;
+
+    const totalCols = 17;
+    const startRow = addSchoolHeaderBanner(worksheet, { title, subtitle, totalCols });
+
+    const headerRow = worksheet.addRow([
+      'STT',
+      'Mã học sinh',
+      'Họ và tên',
+      'Ngày sinh',
+      'Giới tính',
+      'Lớp',
+      'Ngày đo',
+      'Chiều cao (cm)',
+      'Cân nặng (kg)',
+      'Chỉ số BMI',
+      'HAZ (Chiều cao/tuổi)',
+      'Đánh giá chiều cao',
+      'WAZ (Cân nặng/tuổi)',
+      'Đánh giá cân nặng',
+      'BAZ (BMI/tuổi)',
+      'Thể trạng dinh dưỡng',
+      'Ghi chú / Lời dặn y tế',
+    ]);
+    applyHeaderStyles(headerRow);
+
+    records.forEach((item, index) => {
+      const st = item.student;
+      const h = item.assessment;
+
+      let hazStr = '—';
+      let wazStr = '—';
+      let bazStr = '—';
+      let heightEval = '—';
+      let weightEval = '—';
+      let overallEval = 'Chưa có số đo';
+      let statusColor = 'NORMAL';
+
+      if (h) {
+        const heightZ = h.height_for_age_zscore != null ? Number(h.height_for_age_zscore) : null;
+        const weightZ = h.weight_for_age_zscore != null ? Number(h.weight_for_age_zscore) : null;
+        const bmiZ = h.bmi_for_age_zscore != null ? Number(h.bmi_for_age_zscore) : null;
+        const bmiVal = Number(h.bmi);
+
+        hazStr = heightZ != null ? heightZ.toFixed(2) : '—';
+        wazStr = weightZ != null ? weightZ.toFixed(2) : '—';
+        bazStr = bmiZ != null ? bmiZ.toFixed(2) : '—';
+
+        if (heightZ != null) {
+          if (heightZ < -3) heightEval = 'Thấp còi độ 2';
+          else if (heightZ < -2) heightEval = 'Thấp còi độ 1';
+          else if (heightZ > 2) heightEval = 'Cao hơn so với tuổi';
+          else heightEval = 'Bình thường';
+        }
+
+        if (weightZ != null) {
+          if (weightZ < -3) weightEval = 'Suy dinh dưỡng nặng';
+          else if (weightZ < -2) weightEval = 'Suy dinh dưỡng vừa';
+          else if (weightZ > 2) weightEval = 'Cân nặng cao hơn tuổi';
+          else weightEval = 'Bình thường';
+        }
+
+        const evaluation = getClassificationFromZScores({
+          heightZ,
+          weightZ,
+          bmiZ,
+          bmiVal,
+        });
+
+        overallEval = evaluation.label || 'Bình thường';
+        statusColor = evaluation.status || 'NORMAL';
+      }
+
+      const row = worksheet.addRow([
+        index + 1,
+        st.student_code || '',
+        st.full_name || `${st.last_name || ''} ${st.first_name || ''}`.trim(),
+        st.dob ? formatDateDMY(st.dob) : '',
+        st.gender === 'MALE' ? 'Nam' : 'Nữ',
+        item.className,
+        h ? formatDateDMY(h.assessment_date) : 'Chưa đo',
+        h ? Number(h.height) : '—',
+        h ? Number(h.weight) : '—',
+        h ? Number(h.bmi) : '—',
+        hazStr,
+        heightEval,
+        wazStr,
+        weightEval,
+        bazStr,
+        overallEval,
+        h?.notes || 'Bình thường',
+      ]);
+
+      if (statusColor === 'SEVERE') {
+        row.getCell(16).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFEE2E2' },
+        };
+        row.getCell(16).font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFB91C1C' } };
+      } else if (statusColor === 'MODERATE' || statusColor === 'UNDERWEIGHT' || statusColor === 'RISK_OVERWEIGHT') {
+        row.getCell(16).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFEF3C7' },
+        };
+        row.getCell(16).font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFB45309' } };
+      }
+    });
+
+    applyZebraRows(worksheet, startRow + 1, records.length);
+    autoFitColumns(worksheet);
+
+    return await workbook.xlsx.writeBuffer();
   }
 }
 
