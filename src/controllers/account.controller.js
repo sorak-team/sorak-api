@@ -32,7 +32,7 @@ export const toggleAccountStatus = async (req, res) => {
 export const resetAccountPassword = async (req, res) => {
   const { id } = req.params;
   const { newPassword } = req.body;
-  const result = await accountService.resetPassword(id, newPassword);
+  const result = await accountService.resetPassword(id, newPassword, req.user);
   res.success(result);
 };
 

