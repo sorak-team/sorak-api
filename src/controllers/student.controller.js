@@ -1,5 +1,5 @@
 import { studentService } from '../services/student.service.js';
-
+import { studentImportExportService } from '../services/student-import-export.service.js';
 
 export const listStudents = async (req, res) => {
   const result = await studentService.listStudents(req.query);
@@ -60,3 +60,56 @@ export const deleteParent = async (req, res) => {
   res.success(result);
 };
 
+/**
+ * Tải file Excel mẫu nhập học sinh
+ */
+export const getImportTemplate = async (req, res) => {
+  const buffer = await studentImportExportService.getImportTemplate();
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader(
+    'Content-Disposition',
+    'attachment; filename="Mau_Nhap_Hoc_Sinh_Sorak.xlsx"',
+  );
+  res.send(buffer);
+};
+
+/**
+ * Xem trước dữ liệu và kiểm tra lỗi từ file Excel tải lên
+ */
+export const previewImport = async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: 'Vui lòng chọn file Excel để tải lên.' });
+  }
+  const result = await studentImportExportService.previewImport(req.file.buffer);
+  res.success(result, 'Kiểm tra tệp dữ liệu thành công');
+};
+
+/**
+ * Xác nhận thực thi nhập học sinh
+ */
+export const importStudents = async (req, res) => {
+  const { students } = req.body;
+  const actorId = req.user?.accountId;
+  const result = await studentImportExportService.importStudents(students, actorId);
+  res.success(result, `Nhập thành công ${result.successCount}/${result.total} học sinh.`);
+};
+
+/**
+ * Xuất danh sách học sinh ra file Excel
+ */
+export const exportStudentsExcel = async (req, res) => {
+  const buffer = await studentImportExportService.exportStudentsExcel(req.query);
+  const filename = `Danh_Sach_Hoc_Sinh_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${filename}"`,
+  );
+  res.send(buffer);
+};

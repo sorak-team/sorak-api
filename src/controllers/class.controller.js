@@ -1,4 +1,5 @@
 import { classService } from '../services/class.service.js';
+import { classExportService } from '../services/class-export.service.js';
 
 export const listClasses = async (req, res) => {
   const result = await classService.listClasses(req.query);
@@ -24,7 +25,7 @@ export const updateClass = async (req, res) => {
 
 export const deleteClass = async (req, res) => {
   const { id } = req.params;
-  const result = await classService.deleteClass(id);
+  const result = await classService.deleteClass(id, req.body);
   res.success(result);
 };
 
@@ -199,5 +200,51 @@ export const graduateStudentFromClass = async (req, res) => {
   const result = await classService.graduateStudentFromClass(id, studentId);
   res.success(result);
 };
+
+/**
+ * Xuất danh sách tất cả các lớp ra file Excel
+ */
+export const exportClassesExcel = async (req, res) => {
+  const buffer = await classExportService.exportClassesExcel(req.query);
+  const filename = `Danh_Sach_Lop_Hoc_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${filename}"`,
+  );
+  res.send(buffer);
+};
+
+/**
+ * Xuất sổ danh sách học sinh của 1 lớp ra Excel
+ */
+export const exportClassRosterExcel = async (req, res) => {
+  const { id } = req.params;
+  const buffer = await classExportService.exportClassRosterExcel(id);
+  const filename = `Danh_Sach_Hoc_Sinh_Lop_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${filename}"`,
+  );
+  res.send(buffer);
+};
+
+/**
+ * Xuất sổ danh sách học sinh theo bản in HTML A4
+ */
+export const exportClassRosterPrintHtml = async (req, res) => {
+  const { id } = req.params;
+  const html = await classExportService.exportClassRosterPrintHtml(id);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+};
+
 
 
