@@ -19,15 +19,16 @@ const parentItemSchema = Joi.object({
     }),
   citizenId: Joi.string()
     .trim()
-    .pattern(/^[0-9]{9,12}$/)
-    .allow('', null)
-    .optional()
+    .pattern(/^[0-9]{12}$/)
+    .required()
     .messages({
-      'string.pattern.base': 'Số CCCD phải có từ 9 đến 12 chữ số',
+      'string.empty': 'Vui lòng nhập số CCCD/định danh.',
+      'string.pattern.base': 'Số CCCD/định danh phải gồm đúng 12 chữ số.',
+      'any.required': 'Vui lòng nhập số CCCD/định danh.',
     }),
   citizen_id: Joi.string()
     .trim()
-    .pattern(/^[0-9]{9,12}$/)
+    .pattern(/^[0-9]{12}$/)
     .allow('', null)
     .optional(),
   id: Joi.any().optional(),
@@ -42,14 +43,22 @@ export const createStudentSchema = Joi.object({
     'string.min': 'Mã học sinh phải có ít nhất 2 ký tự',
     'any.required': 'Mã học sinh là bắt buộc',
   }),
-  fullName: Joi.string().trim().min(2).max(150).required().messages({
-    'string.empty': 'Họ và tên học sinh không được để trống',
-    'string.min': 'Họ và tên phải có ít nhất 2 ký tự',
-    'any.required': 'Họ và tên học sinh là bắt buộc',
-  }),
-  dateOfBirth: Joi.date().iso().min('2000-01-01').required().messages({
+  fullName: Joi.string()
+    .trim()
+    .min(2)
+    .max(150)
+    .pattern(/^(?!.*\s{2,}).*$/)
+    .required()
+    .messages({
+      'string.empty': 'Họ và tên học sinh không được để trống',
+      'string.min': 'Họ và tên phải có ít nhất 2 ký tự',
+      'string.pattern.base': 'Họ tên không được chứa nhiều khoảng trắng liên tiếp.',
+      'any.required': 'Họ và tên học sinh là bắt buộc',
+    }),
+  dateOfBirth: Joi.date().iso().min('2000-01-01').max('now').required().messages({
     'date.base': 'Ngày sinh không đúng định dạng YYYY-MM-DD',
     'date.min': 'Ngày sinh học sinh phải từ năm 2000 trở đi',
+    'date.max': 'Ngày sinh không được lớn hơn ngày hiện tại.',
     'any.required': 'Ngày sinh là bắt buộc',
   }),
   gender: Joi.string().valid('MALE', 'FEMALE').required().messages({
@@ -84,15 +93,37 @@ export const createStudentSchema = Joi.object({
   enrolledAt: Joi.date().iso().optional(),
 
   // Parents / Guardians array
-  parents: Joi.array().items(parentItemSchema).optional().default([]),
+  parents: Joi.array()
+    .items(parentItemSchema)
+    .min(1)
+    .max(2)
+    .required()
+    .messages({
+      'array.min': 'Vui lòng bổ sung ít nhất một phụ huynh/người giám hộ trước khi tạo học sinh.',
+      'array.max': 'Mỗi học sinh chỉ có tối đa 2 phụ huynh/người giám hộ.',
+      'any.required': 'Vui lòng bổ sung ít nhất một phụ huynh/người giám hộ trước khi tạo học sinh.',
+    }),
 });
 
 export const updateStudentSchema = Joi.object({
-  fullName: Joi.string().trim().min(2).max(150).optional(),
-  dateOfBirth: Joi.date().iso().min('2000-01-01').optional().messages({
+  fullName: Joi.string()
+    .trim()
+    .min(2)
+    .max(150)
+    .pattern(/^(?!.*\s{2,}).*$/)
+    .optional()
+    .messages({
+      'string.empty': 'Họ và tên học sinh không được để trống',
+      'string.min': 'Họ và tên phải có ít nhất 2 ký tự',
+      'string.pattern.base': 'Họ tên không được chứa nhiều khoảng trắng liên tiếp.',
+    }),
+  dateOfBirth: Joi.date().iso().min('2000-01-01').max('now').optional().messages({
     'date.base': 'Ngày sinh không đúng định dạng YYYY-MM-DD',
     'date.min': 'Ngày sinh học sinh phải từ năm 2000 trở đi',
+    'date.max': 'Ngày sinh không được lớn hơn ngày hiện tại.',
   }),
+  updatedAt: Joi.alternatives().try(Joi.date().iso(), Joi.string()).optional(),
+  updated_at: Joi.alternatives().try(Joi.date().iso(), Joi.string()).optional(),
   gender: Joi.string().valid('MALE', 'FEMALE').optional(),
   ethnic: Joi.string().trim().max(50).allow('', null).optional(),
   nationality: Joi.string().trim().max(50).optional(),
@@ -120,7 +151,15 @@ export const updateStudentSchema = Joi.object({
     .optional(),
 
   // Parents / Guardians array
-  parents: Joi.array().items(parentItemSchema).optional(),
+  parents: Joi.array()
+    .items(parentItemSchema)
+    .min(1)
+    .max(2)
+    .optional()
+    .messages({
+      'array.min': 'Vui lòng bổ sung ít nhất một phụ huynh/người giám hộ trước khi lưu học sinh.',
+      'array.max': 'Mỗi học sinh chỉ có tối đa 2 phụ huynh/người giám hộ.',
+    }),
 });
 
 export const queryStudentSchema = Joi.object({
@@ -173,15 +212,14 @@ export const updateParentSchema = Joi.object({
     .optional(),
   citizenId: Joi.string()
     .trim()
-    .pattern(/^[0-9]{9,12}$/)
-    .allow('', null)
+    .pattern(/^[0-9]{12}$/)
     .optional()
     .messages({
-      'string.pattern.base': 'Số CCCD phải có từ 9 đến 12 chữ số',
+      'string.pattern.base': 'Số CCCD/định danh phải gồm đúng 12 chữ số.',
     }),
   citizen_id: Joi.string()
     .trim()
-    .pattern(/^[0-9]{9,12}$/)
+    .pattern(/^[0-9]{12}$/)
     .allow('', null)
     .optional(),
 });

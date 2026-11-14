@@ -1,6 +1,25 @@
 import prisma from '../config/prisma.js';
 import { BadRequest, NotFound } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
+import { notificationService } from './notification.service.js';
+
+async function resolveAccountBigIntId(userIdentifier) {
+  if (!userIdentifier) return 1n;
+  if (typeof userIdentifier === 'bigint') return userIdentifier;
+  if (/^\d+$/.test(String(userIdentifier))) {
+    return BigInt(userIdentifier);
+  }
+  const acc = await prisma.account.findFirst({
+    where: {
+      OR: [
+        { public_id: String(userIdentifier) },
+        { username: String(userIdentifier) },
+      ],
+    },
+    select: { account_id: true },
+  });
+  return acc?.account_id ? BigInt(acc.account_id) : 1n;
+}
 
 export class SchoolYearService {
 
@@ -656,6 +675,14 @@ export class SchoolYearService {
           isCompleted: activeInClass.length === 0,
         };
       });
+
+      const AGE_GROUP_ORDER = { NHA_TRE: 1, MAM: 2, CHOI: 3, LA: 4 };
+      classesList.sort((a, b) => {
+        const orderA = AGE_GROUP_ORDER[a.ageGroup] || 99;
+        const orderB = AGE_GROUP_ORDER[b.ageGroup] || 99;
+        if (orderA !== orderB) return orderA - orderB;
+        return (a.className || '').localeCompare(b.className || '', 'vi', { numeric: true });
+      });
   
       return {
         currentYear: {
@@ -774,6 +801,7 @@ export class SchoolYearService {
 
   async executeTransition(id, accountId, body = {}) {
       const bigId = BigInt(id);
+      const creatorId = await resolveAccountBigIntId(accountId);
       const { copyThemes = true, copyGoals = true } = body || {};
   
       const currentYear = await prisma.schoolYear.findFirst({
@@ -908,7 +936,7 @@ export class SchoolYearService {
                     name: oldSub.name,
                     start_date: subStart,
                     end_date: subEnd,
-                    created_by: accountId ? BigInt(accountId) : null,
+                    created_by: creatorId,
                   },
                 });
               }
@@ -967,7 +995,7 @@ export class SchoolYearService {
             await tx.notification.create({
               data: {
                 account_id: staff.account_id,
-                created_by: accountId ? BigInt(accountId) : null,
+                created_by: creatorId,
                 type: 'SCHOOL_ANNOUNCEMENT',
                 title: `Chuyển giao năm học mới: ${targetYearName}`,
                 body: `Hệ thống đã hoàn tất chuyển giao từ ${currentYear.name} sang ${targetYearName}. Ban giám hiệu có thể bắt đầu tạo lớp học và phân lớp cho năm học mới.`,
@@ -1071,6 +1099,7 @@ export class SchoolYearService {
 
   async createHoliday(id, accountId, data) {
       const bigId = BigInt(id);
+      const creatorId = await resolveAccountBigIntId(accountId);
       const { name, startDate, endDate, isTeachingAllowed = false, description, scope, targetGrades, type } = data;
   
       if (!name?.trim()) throw BadRequest('Vui lòng nhập tên ngày nghỉ hoặc sự kiện.');
@@ -1114,9 +1143,35 @@ export class SchoolYearService {
           is_teaching_allowed: Boolean(isTeachingAllowed),
           target_grades: Array.isArray(targetGrades) ? targetGrades : [],
           description: finalDesc || null,
-          created_by: accountId ? BigInt(accountId) : 1n,
+          created_by: creatorId,
         },
       });
+
+      // Notification 9: Create Academic Calendar (BGH thêm ngày nghỉ/sự kiện quan trọng)
+      (async () => {
+        try {
+          const teachers = await prisma.account.findMany({
+            where: { role: 'TEACHER_GV', is_active: true, deleted_at: null },
+            select: { account_id: true },
+          });
+          const sStr = sDate.toLocaleDateString('vi-VN');
+          const eStr = eDate.toLocaleDateString('vi-VN');
+          const dateText = sStr === eStr ? `ngày ${sStr}` : `từ ${sStr} đến ${eStr}`;
+          await notificationService.emitSystemNotification({
+            recipientAccountIds: teachers.map((t) => t.account_id),
+            creatorAccountId: accountId,
+            type: 'SCHEDULE_WEATHER_CHANGE',
+            title: `Lịch trường mới: ${holiday.name}`,
+            body: `Ban Giám Hiệu đã thêm sự kiện/ngày nghỉ "${holiday.name}" (${dateText}).`,
+            data: {
+              type: 'ACADEMIC_CALENDAR_CREATED',
+              holidayId: holiday.public_id,
+            },
+          });
+        } catch (e) {
+          logger.warn({ error: e.message }, 'Failed to emit notification for holiday creation');
+        }
+      })();
   
       return {
         id: holiday.public_id,
@@ -1127,6 +1182,7 @@ export class SchoolYearService {
 
   async importHolidays(id, accountId, items) {
       const bigId = BigInt(id);
+      const creatorId = await resolveAccountBigIntId(accountId);
       if (!Array.isArray(items) || items.length === 0) {
         throw BadRequest('Danh sách ngày nghỉ để import không hợp lệ.');
       }
@@ -1154,7 +1210,7 @@ export class SchoolYearService {
             is_teaching_allowed: Boolean(item.isTeachingAllowed),
             target_grades: Array.isArray(item.targetGrades) ? item.targetGrades : [],
             description: desc || null,
-            created_by: accountId ? BigInt(accountId) : 1n,
+            created_by: creatorId,
           },
         });
         createdList.push(created);
@@ -1219,6 +1275,29 @@ export class SchoolYearService {
         where: { holiday_id: existing.holiday_id },
         data: updateData,
       });
+
+      // Notification 10: Update Academic Calendar (Ngày nghỉ, sự kiện thay đổi)
+      (async () => {
+        try {
+          const teachers = await prisma.account.findMany({
+            where: { role: 'TEACHER_GV', is_active: true, deleted_at: null },
+            select: { account_id: true },
+          });
+          await notificationService.emitSystemNotification({
+            recipientAccountIds: teachers.map((t) => t.account_id),
+            creatorAccountId: accountId,
+            type: 'SCHEDULE_WEATHER_CHANGE',
+            title: `Cập nhật lịch trường: ${updated.name}`,
+            body: `Lịch sự kiện/ngày nghỉ "${updated.name}" đã được Ban Giám Hiệu cập nhật.`,
+            data: {
+              type: 'ACADEMIC_CALENDAR_UPDATED',
+              holidayId: updated.public_id,
+            },
+          });
+        } catch (e) {
+          logger.warn({ error: e.message }, 'Failed to emit notification for holiday update');
+        }
+      })();
   
       return {
         id: updated.public_id,
