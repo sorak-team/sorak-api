@@ -28,7 +28,7 @@ export async function calculateWhoAssessment({
 
   // Fallback if dateOfBirth is invalid
   if (!dob || isNaN(dob.getTime())) {
-    let fallbackLabel = 'Bình thường (Đạt chuẩn WHO)';
+    let fallbackLabel = 'Bình thường';
     let fallbackColor = 'emerald';
     let fallbackStatus = 'NORMAL';
 
@@ -103,7 +103,7 @@ export async function calculateWhoAssessment({
     }
 
     // 3. BMI theo tuổi (BAZ)
-    let bmiClass = { label: 'Bình thường (Đạt chuẩn WHO)', severity: 'adequate' };
+    let bmiClass = { label: 'Bình thường', severity: 'adequate' };
     if (bz < -3) {
       bmiClass = { label: 'Gầy còm mức độ nặng', severity: 'severe' };
     } else if (bz < -2) {
@@ -118,7 +118,7 @@ export async function calculateWhoAssessment({
 
     // 4. Overall Holistic Assessment (Tiêu chuẩn liên tịch Y tế học đường & WHO)
     let overall = {
-      label: 'Bình thường (Đạt chuẩn WHO)',
+      label: 'Bình thường',
       color: 'emerald',
       status: 'NORMAL',
     };
@@ -170,7 +170,7 @@ export async function calculateWhoAssessment({
         height: { label: 'Chưa xác định', severity: 'unknown' },
         weight: { label: 'Chưa xác định', severity: 'unknown' },
         bmi: { label: 'Bình thường', severity: 'unknown' },
-        overall: { label: 'Bình thường (Đạt chuẩn WHO)', color: 'emerald', status: 'NORMAL' },
+        overall: { label: 'Bình thường', color: 'emerald', status: 'NORMAL' },
       },
     };
   }
@@ -184,22 +184,55 @@ export function getClassificationFromZScores({ heightZ, weightZ, bmiZ, bmiVal })
   const wz = weightZ != null ? Number(weightZ) : null;
   const bz = bmiZ != null ? Number(bmiZ) : null;
 
-  if (bz != null) {
-    if (bz > 3) return { label: 'Béo phì', color: 'rose', status: 'OBESE' };
-    if (bz > 2) return { label: 'Thừa cân', color: 'rose', status: 'OVERWEIGHT' };
-    if (bz > 1.5 && (wz == null || wz > 1.5)) return { label: 'Nguy cơ thừa cân', color: 'amber', status: 'RISK_OVERWEIGHT' };
-    if (bz < -3) return { label: 'Gầy còm mức độ nặng', color: 'rose', status: 'SEVERELY_WASTED' };
-    if (bz < -2) return { label: 'Gầy còm', color: 'amber', status: 'WASTED' };
-  }
+  const issues = [];
+  let isSevere = false;
+  let isModerate = false;
 
   if (hz != null) {
-    if (hz < -3) return { label: 'Thấp còi độ 2 (nặng)', color: 'rose', status: 'SEVERELY_STUNTED' };
-    if (hz < -2) return { label: 'Thấp còi độ 1', color: 'amber', status: 'STUNTED' };
+    if (hz < -3) {
+      issues.push('Thấp còi độ 2');
+      isSevere = true;
+    } else if (hz < -2) {
+      issues.push('Thấp còi độ 1');
+      isModerate = true;
+    }
   }
 
   if (wz != null) {
-    if (wz < -3) return { label: 'Suy dinh dưỡng nặng', color: 'rose', status: 'SEVERELY_UNDERWEIGHT' };
-    if (wz < -2) return { label: 'Suy dinh dưỡng nhẹ cân', color: 'amber', status: 'UNDERWEIGHT' };
+    if (wz < -3) {
+      issues.push('Suy dinh dưỡng nặng');
+      isSevere = true;
+    } else if (wz < -2) {
+      issues.push('Suy dinh dưỡng nhẹ cân');
+      isModerate = true;
+    }
+  }
+
+  if (bz != null) {
+    if (bz > 3) {
+      issues.push('Béo phì');
+      isSevere = true;
+    } else if (bz > 2) {
+      issues.push('Thừa cân');
+      isModerate = true;
+    } else if (bz > 1.5 && (wz == null || wz > 1.5)) {
+      issues.push('Nguy cơ thừa cân');
+      isModerate = true;
+    } else if (bz < -3 && !issues.some((i) => i.includes('Suy dinh dưỡng'))) {
+      issues.push('Gầy còm mức độ nặng');
+      isSevere = true;
+    } else if (bz < -2 && !issues.some((i) => i.includes('Suy dinh dưỡng'))) {
+      issues.push('Gầy còm');
+      isModerate = true;
+    }
+  }
+
+  if (issues.length > 0) {
+    return {
+      label: issues.join(' & '),
+      color: isSevere ? 'rose' : 'amber',
+      status: isSevere ? 'SEVERE' : 'MODERATE',
+    };
   }
 
   if (bz == null && hz == null && wz == null && bmiVal != null) {
@@ -209,5 +242,5 @@ export function getClassificationFromZScores({ heightZ, weightZ, bmiZ, bmiVal })
     if (num > 17.5) return { label: 'Nguy cơ thừa cân', color: 'amber', status: 'RISK_OVERWEIGHT' };
   }
 
-  return { label: 'Bình thường (Đạt chuẩn WHO)', color: 'emerald', status: 'NORMAL' };
+  return { label: 'Bình thường', color: 'emerald', status: 'NORMAL' };
 }

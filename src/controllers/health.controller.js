@@ -40,6 +40,26 @@ class HealthController {
       }
     }
 
+  async exportHealthExcel(req, res, next) {
+    try {
+      const classId = req.params.classId || req.query.classId || req.query.class_id;
+      const { schoolYearId, date } = req.query;
+      const buffer = await healthService.exportHealthExcel({ classId, schoolYearId, date });
+      const filename = `So_Theo_Doi_Suc_Khoe_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${filename}"`,
+      );
+      res.send(buffer);
+    } catch (err) {
+      next(err);
+    }
+  }
+
 }
 export const healthController = new HealthController();
 export default healthController;
