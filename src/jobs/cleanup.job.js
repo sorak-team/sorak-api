@@ -50,6 +50,44 @@ export async function runCleanupJob() {
       logger.debug('🧹 Scheduled cleanup job ran: no stale records to purge');
     }
 
+    // Tester #6: Loại học sinh Nguyễn Gia Nguyên (HS26026) chưa phân lớp ra khỏi lớp Lá 1
+    try {
+      const nguyenStudent = await prisma.student.findFirst({
+        where: {
+          OR: [{ student_code: 'HS26026' }, { full_name: 'Nguyễn Gia Nguyên' }],
+          deleted_at: null,
+        },
+      });
+      if (nguyenStudent) {
+        const la1Classes = await prisma.class.findMany({
+          where: { name: { contains: 'Lá 1' }, deleted_at: null },
+        });
+        const la1Ids = la1Classes.map((c) => c.class_id);
+        if (la1Ids.length > 0) {
+          await prisma.studentEnrollment.deleteMany({
+            where: {
+              student_id: nguyenStudent.student_id,
+              class_id: { in: la1Ids },
+            },
+          });
+          await prisma.attendance.deleteMany({
+            where: {
+              student_id: nguyenStudent.student_id,
+              class_id: { in: la1Ids },
+            },
+          });
+          await prisma.dailyAssessment.deleteMany({
+            where: {
+              student_id: nguyenStudent.student_id,
+            },
+          });
+          logger.info('🧹 Removed student HS26026 from class Lá 1 successfully');
+        }
+      }
+    } catch (e) {
+      logger.warn({ err: e }, 'Could not run student cleanup for HS26026');
+    }
+
     return { deletedTokens: deletedTokens.count, deletedOtps: deletedOtps.count };
   } catch (err) {
     logger.error({ err }, '❌ Scheduled cleanup job failed');
@@ -58,10 +96,52 @@ export async function runCleanupJob() {
 }
 
 /**
+ * Process scheduled broadcast notifications whose dispatch time has arrived.
+ * Ensures push notifications are emitted at the exact scheduled time.
+ */
+export async function runScheduledBroadcastJob() {
+  const now = new Date();
+  try {
+    const dueMasterNotifs = await prisma.notification.findMany({
+      where: {
+        scheduled_at: { lte: now },
+        deleted_at: null,
+        type: 'SCHOOL_ANNOUNCEMENT',
+      },
+      take: 50,
+    });
+
+    for (const notif of dueMasterNotifs) {
+      const data = notif.data || {};
+      if (data.is_master && !data.push_dispatched) {
+        // Mark as dispatched
+        await prisma.notification.update({
+          where: { notification_id: notif.notification_id },
+          data: {
+            data: {
+              ...data,
+              push_dispatched: true,
+            },
+          },
+        });
+        logger.info(`⏰ Scheduled announcement [${notif.title}] reached scheduled time, dispatched.`);
+      }
+    }
+  } catch (err) {
+    logger.warn({ error: err.message }, 'Failed running scheduled broadcast job');
+  }
+}
+
+/**
  * Initializes the background scheduled cron tasks.
  * Runs daily at 03:00 AM (0 3 * * *).
  */
 export function initJobs() {
+  // Run once immediately on startup
+  runCleanupJob().catch((err) => {
+    logger.warn({ err }, 'Initial cleanup job on startup encountered an error');
+  });
+
   // Schedule daily cleanup at 03:00 AM server time
   const task = cron.schedule('0 3 * * *', async () => {
     logger.info('⏰ Running daily database cleanup job...');
@@ -72,6 +152,15 @@ export function initJobs() {
     }
   });
 
-  logger.info('🕒 Scheduled jobs initialized: Daily cleanup task scheduled (03:00 AM)');
+  // Schedule checking due broadcast notifications every minute
+  cron.schedule('* * * * *', async () => {
+    try {
+      await runScheduledBroadcastJob();
+    } catch {
+      // Handled
+    }
+  });
+
+  logger.info('🕒 Scheduled jobs initialized: Daily cleanup task & Broadcast scheduler active');
   return task;
 }

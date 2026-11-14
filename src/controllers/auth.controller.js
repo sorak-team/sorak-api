@@ -1,3 +1,4 @@
+import jwt from 'jsonwebtoken';
 import { authService } from '../services/auth.service.js';
 import { env } from '../config/env.js';
 
@@ -23,11 +24,25 @@ export const isMobileClient = (req) => {
 };
 
 export const login = async (req, res) => {
-  const { username, identifier, password, role, captchaToken } = req.body;
+  const { username, identifier, password, role, captchaToken, isLinkingChild } = req.body;
   const loginUsername = (username || identifier || '').trim();
   const deviceInfo = req.headers['user-agent'];
   const ipAddress = req.ip || req.socket.remoteAddress;
   const isMobile = isMobileClient(req);
+
+  // Check if caller is authenticated user linking a child account
+  let verifiedLinkingChild = false;
+  if (req.headers.authorization?.startsWith('Bearer ')) {
+    try {
+      const token = req.headers.authorization.split(' ')[1];
+      const decoded = jwt.verify(token, env.jwt.accessSecret);
+      if (decoded && (decoded.role === 'PARENT_PH' || decoded.role === 'ADMIN_BGH' || decoded.role === 'PRINCIPAL_BGH')) {
+        verifiedLinkingChild = true;
+      }
+    } catch {
+      // ignore invalid token
+    }
+  }
 
   const result = await authService.login({
     username: loginUsername,
@@ -38,6 +53,7 @@ export const login = async (req, res) => {
     deviceInfo,
     ipAddress,
     isMobile,
+    isLinkingChild: verifiedLinkingChild || Boolean(isLinkingChild),
   });
 
   // If account has 2FA enabled, return tempToken and masked email for OTP challenge
