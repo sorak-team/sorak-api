@@ -1,6 +1,16 @@
 import prisma from '../config/prisma.js';
 import { BadRequest, NotFound } from '../utils/http-error.js';
+import { validatePickupQuota, getStudentPickupQuotaInfo } from '../utils/pickup-quota.helper.js';
+import { notificationService } from './notification.service.js';
 import { TIMETABLE_DAYS, TIMETABLE_SLOTS } from './mock-data.js';
+import {
+  createStandardWorkbook,
+  addSchoolHeaderBanner,
+  applyHeaderStyles,
+  applyZebraRows,
+  autoFitColumns,
+  formatDateDMY,
+} from '../utils/excel.helper.js';
 
 function resolveAcademicWeekDates(weekId) {
   if (!weekId) return null;
@@ -35,9 +45,20 @@ class AttendanceService {
     if (!classId) return null;
     const str = String(classId).trim();
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-    if (!isUuid) return null;
+    if (isUuid) {
+      return prisma.class.findFirst({
+        where: { public_id: str, deleted_at: null },
+        include: { school_year: true },
+      });
+    }
+    if (/^\d+$/.test(str)) {
+      return prisma.class.findFirst({
+        where: { class_id: BigInt(str), deleted_at: null },
+        include: { school_year: true },
+      });
+    }
     return prisma.class.findFirst({
-      where: { public_id: str, deleted_at: null },
+      where: { name: str, deleted_at: null },
       include: { school_year: true },
     });
   }
@@ -90,16 +111,13 @@ class AttendanceService {
     const targetDateStart = new Date(`${targetDateStr}T00:00:00.000Z`);
     const targetDateEnd = new Date(`${targetDateStr}T23:59:59.999Z`);
 
-    // 2.1 Fetch enrolled students active on targetDate (exclude students transferred out prior to this date)
+    // 2.1 Fetch enrolled students active on targetDate (only active ENROLLED students)
     const rawEnrollments = await prisma.studentEnrollment.findMany({
       where: {
         class_id: targetClass.class_id,
         student: { deleted_at: null },
-        status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
-        OR: [
-          { left_at: null },
-          { left_at: { gt: targetDateStart } },
-        ],
+        status: 'ENROLLED',
+        left_at: null,
       },
       include: {
         student: true,
@@ -125,8 +143,10 @@ class AttendanceService {
         enrollments.push(enr);
         continue;
       }
-      if (enr.enrolled_at && new Date(enr.enrolled_at) <= targetDateEnd) {
-        enrollments.push(enr);
+      if (enr.enrolled_at) {
+        if (new Date(enr.enrolled_at) <= targetDateEnd) {
+          enrollments.push(enr);
+        }
         continue;
       }
       const inOtherClass = await prisma.studentEnrollment.findFirst({
@@ -216,7 +236,10 @@ class AttendanceService {
     const healthRecords = await prisma.healthAssessment.findMany({
       where: {
         student_id: { in: studentIds },
-        assessment_date: targetDate,
+        assessment_date: {
+          gte: targetDateStart,
+          lte: targetDateEnd,
+        },
         deleted_at: null,
       },
     });
@@ -291,6 +314,7 @@ class AttendanceService {
         gender: st.gender,
         status,
         rawStatus,
+        isAbsent: rawStatus === 'EXCUSED_ABSENCE' || rawStatus === 'UNEXCUSED_ABSENCE' || rawStatus === 'ABSENT' || status === 'ABSENT',
         reason,
         note: reason,
         notes: reason,
@@ -489,10 +513,8 @@ class AttendanceService {
             }
           }
 
-          if (!foundTheme) {
-            foundTheme = themes[0];
-            foundSubTheme = themes[0].sub_themes?.[0] || null;
-          }
+          // If no matching theme found for this week, do NOT fallback to themes[0]
+          // so that weeks without a theme correctly return null ("Chưa có chủ đề")
 
           if (!activeTheme && foundTheme) {
             activeTheme = {
@@ -517,6 +539,34 @@ class AttendanceService {
       console.warn('Failed to resolve theme and sub-theme for timetable overview:', err);
     }
 
+    // 8. Query school year calendar holidays & events
+    let holidays = [];
+    try {
+      const dbHolidays = await prisma.schoolHoliday.findMany({
+        where: {
+          school_year_id: targetClass.school_year_id,
+          deleted_at: null,
+        },
+        orderBy: { start_date: 'asc' },
+      });
+
+      holidays = dbHolidays.map((h) => {
+        const isExplicitEvent = (h.description || '').includes('[SỰ KIỆN]') || (h.description || '').includes('[EVENT]');
+        const itemType = isExplicitEvent ? 'EVENT' : (h.is_teaching_allowed ? 'EVENT' : 'HOLIDAY');
+        return {
+          id: h.public_id,
+          name: h.name,
+          startDate: h.start_date.toISOString().slice(0, 10),
+          endDate: h.end_date.toISOString().slice(0, 10),
+          isTeachingAllowed: h.is_teaching_allowed,
+          type: itemType,
+          targetGrades: h.target_grades || [],
+        };
+      });
+    } catch (err) {
+      console.warn('Failed to fetch holidays for timetable overview:', err);
+    }
+
     return {
       classInfo: {
         id: targetClass.public_id || targetClass.class_id.toString(),
@@ -528,6 +578,7 @@ class AttendanceService {
         selectedDate: targetDateStr,
         themeName: activeTheme?.name || null,
         subThemeName: activeSubTheme?.name || null,
+        ageGroup: targetClass.age_group,
       },
       theme: activeTheme,
       selectedTheme: activeTheme,
@@ -547,6 +598,7 @@ class AttendanceService {
       healthDays: healthDateMap,
       dismissalDays: dismissalDateMap,
       days: TIMETABLE_DAYS,
+      holidays,
       slots,
       students,
     };
@@ -729,11 +781,8 @@ class AttendanceService {
       where: {
         class_id: targetClass.class_id,
         student: { deleted_at: null },
-        status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
-        OR: [
-          { left_at: null },
-          { left_at: { gt: targetDateStart } },
-        ],
+        status: 'ENROLLED',
+        left_at: null,
       },
       include: {
         student: {
@@ -774,8 +823,10 @@ class AttendanceService {
         enrollments.push(enr);
         continue;
       }
-      if (enr.enrolled_at && new Date(enr.enrolled_at) <= targetDateEnd) {
-        enrollments.push(enr);
+      if (enr.enrolled_at) {
+        if (new Date(enr.enrolled_at) <= targetDateEnd) {
+          enrollments.push(enr);
+        }
         continue;
       }
       const inOtherClass = await prisma.studentEnrollment.findFirst({
@@ -1150,11 +1201,8 @@ class AttendanceService {
       where: {
         class_id: targetClassId,
         student: { deleted_at: null },
-        status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
-        OR: [
-          { left_at: null },
-          { left_at: { gt: filterDateStart } },
-        ],
+        status: 'ENROLLED',
+        left_at: null,
       },
       select: { student_id: true, enrolled_at: true },
     });
@@ -1176,8 +1224,10 @@ class AttendanceService {
         enrollments.push(enr);
         continue;
       }
-      if (enr.enrolled_at && new Date(enr.enrolled_at) <= filterDateEnd) {
-        enrollments.push(enr);
+      if (enr.enrolled_at) {
+        if (new Date(enr.enrolled_at) <= filterDateEnd) {
+          enrollments.push(enr);
+        }
         continue;
       }
       const inOtherClass = await prisma.studentEnrollment.findFirst({
@@ -1215,12 +1265,21 @@ class AttendanceService {
             student_code: true,
             full_name: true,
             avatar_url: true,
+            account: {
+              select: {
+                account_id: true,
+                is_active: true,
+                deleted_at: true,
+              },
+            },
           },
         },
         authorizer: {
           select: {
             account_id: true,
             username: true,
+            is_active: true,
+            deleted_at: true,
           },
         },
         approver: {
@@ -1253,10 +1312,15 @@ class AttendanceService {
     const mapped = auths.map((a) => {
       const s = a.student;
       const isDateActive = a.start_date <= targetDate && a.end_date >= targetDate;
+      const isParentLocked = Boolean(
+        (a.authorizer && (!a.authorizer.is_active || a.authorizer.deleted_at !== null)) ||
+        (s?.account && (!s.account.is_active || s.account.deleted_at !== null))
+      );
 
       return {
         id: a.public_id || a.authorization_id.toString(),
         publicId: a.public_id,
+        isParentLocked,
         student: {
           id: s.public_id || s.student_id.toString(),
           code: s.student_code,
@@ -1337,9 +1401,21 @@ class AttendanceService {
     if (!student) {
       throw new NotFound('Không tìm thấy học sinh để tạo ủy quyền đón.');
     }
+
+    if (pickupCitizenId && pickupCitizenId.trim()) {
+      if (!/^[0-9]{12}$/.test(pickupCitizenId.trim())) {
+        throw new BadRequest('Số CCCD/Định danh cá nhân phải gồm 12 chữ số.');
+      }
+    }
     const sId = student.student_id;
     const start = new Date(`${startDate}T00:00:00.000Z`);
     const end = new Date(`${endDate}T23:59:59.999Z`);
+
+    // Rule: Daily limit: delegates <= (4 - parents)
+    await validatePickupQuota(prisma, sId, {
+      startDate,
+      endDate,
+    });
 
     const created = await prisma.pickupAuthorization.create({
       data: {
@@ -1405,6 +1481,39 @@ class AttendanceService {
       ? { public_id: String(authId).trim() }
       : { authorization_id: BigInt(authId) };
 
+    const existingAuth = await prisma.pickupAuthorization.findFirst({
+      where,
+      include: {
+        authorizer: true,
+        student: {
+          include: {
+            account: true,
+          },
+        },
+      },
+    });
+    if (!existingAuth) throw new NotFound('Yêu cầu ủy quyền đón không tồn tại');
+
+    // Rule: Do not allow approving requests sent from locked parent account
+    const isAuthorizerLocked =
+      existingAuth.authorizer && (!existingAuth.authorizer.is_active || existingAuth.authorizer.deleted_at !== null);
+    const isStudentParentLocked =
+      existingAuth.student?.account && (!existingAuth.student.account.is_active || existingAuth.student.account.deleted_at !== null);
+
+    if (isAuthorizerLocked || isStudentParentLocked) {
+      throw new BadRequest('Tài khoản phụ huynh đã bị khóa, không thể phê duyệt yêu cầu ủy quyền đưa đón.');
+    }
+
+    // Rule: Total guardians + approved pickup authorizers per day <= 4
+    // (i.e. delegates on any day in range <= 4 - parents)
+    const startIso = existingAuth.start_date.toISOString().split('T')[0];
+    const endIso = existingAuth.end_date.toISOString().split('T')[0];
+    await validatePickupQuota(prisma, existingAuth.student_id, {
+      startDate: startIso,
+      endDate: endIso,
+      excludeAuthId: existingAuth.authorization_id,
+    });
+
     const updated = await prisma.pickupAuthorization.update({
       where,
       data: {
@@ -1417,6 +1526,25 @@ class AttendanceService {
         student: true,
       },
     });
+
+    // Notification 12: Approve Authorization (GV duyệt người đón hộ -> Phụ huynh của trẻ)
+    const parentAccountId = updated.student?.account_id || updated.created_by;
+    if (parentAccountId) {
+      notificationService
+        .emitSystemNotification({
+          recipientAccountIds: [parentAccountId],
+          creatorAccountId: staffId,
+          type: 'SCHOOL_ANNOUNCEMENT',
+          title: 'Ủy quyền đón trẻ đã được duyệt',
+          body: `Giáo viên đã duyệt người được ủy quyền đón bé ${updated.student?.full_name}: ${updated.pickup_person_name} (${updated.relationship}).`,
+          data: {
+            type: 'PICKUP_AUTH_APPROVED',
+            authId: updated.public_id || updated.authorization_id.toString(),
+            studentId: updated.student_id?.toString(),
+          },
+        })
+        .catch(() => {});
+    }
 
     return {
       id: updated.public_id || updated.authorization_id.toString(),
@@ -1461,6 +1589,9 @@ class AttendanceService {
       ? { public_id: String(authId).trim() }
       : { authorization_id: BigInt(authId) };
 
+    const existingAuth = await prisma.pickupAuthorization.findFirst({ where });
+    if (!existingAuth) throw new NotFound('Yêu cầu ủy quyền đón không tồn tại');
+
     const updated = await prisma.pickupAuthorization.update({
       where,
       data: {
@@ -1474,6 +1605,27 @@ class AttendanceService {
       },
     });
 
+    // Notification 13: Reject Authorization (GV từ chối yêu cầu đón hộ -> Phụ huynh của trẻ)
+    const parentAccountId = updated.student?.account_id || updated.created_by;
+    if (parentAccountId) {
+      const reasonText = updated.rejected_reason ? ` Lý do: ${updated.rejected_reason}` : '';
+      notificationService
+        .emitSystemNotification({
+          recipientAccountIds: [parentAccountId],
+          creatorAccountId: staffId,
+          type: 'SCHOOL_ANNOUNCEMENT',
+          title: 'Ủy quyền đón trẻ bị từ chối',
+          body: `Yêu cầu ủy quyền đón bé ${updated.student?.full_name} đã bị giáo viên từ chối.${reasonText}`,
+          data: {
+            type: 'PICKUP_AUTH_REJECTED',
+            authId: updated.public_id || updated.authorization_id.toString(),
+            studentId: updated.student_id?.toString(),
+            reason: updated.rejected_reason,
+          },
+        })
+        .catch(() => {});
+    }
+
     return {
       id: updated.public_id || updated.authorization_id.toString(),
       status: updated.status,
@@ -1481,6 +1633,524 @@ class AttendanceService {
       rejectedReason: updated.rejected_reason,
       studentName: updated.student?.full_name,
     };
+  }
+
+  /**
+   * Get pickup quota information and blocked dates for a student
+   */
+  async getStudentPickupQuota({ studentId, startDate, endDate, month }) {
+    const student = await this._resolveStudent(studentId);
+    if (!student) {
+      throw new NotFound('Không tìm thấy thông tin học sinh.');
+    }
+
+    let start = startDate;
+    let end = endDate;
+    if (month && !start && !end) {
+      const parts = month.split('-');
+      if (parts.length === 2) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        start = `${month}-01`;
+        end = `${month}-${String(lastDay).padStart(2, '0')}`;
+      }
+    }
+
+    return getStudentPickupQuotaInfo(prisma, student.student_id, {
+      startDate: start,
+      endDate: end,
+    });
+  }
+
+  /**
+   * Helper: Vẽ bảng điểm danh chi tiết của một tháng lên worksheet
+   */
+  _renderAttendanceMonthSheet(worksheet, {
+    targetClass,
+    targetMonth,
+    targetYear,
+    enrollments,
+    attendances,
+    holidays,
+    now,
+  }) {
+    const endOfMonth = new Date(Date.UTC(targetYear, targetMonth, 0, 23, 59, 59, 999));
+    const daysInMonth = endOfMonth.getUTCDate();
+
+    const attMap = new Map();
+    attendances.forEach((att) => {
+      const d = new Date(att.date);
+      const dayNum = d.getUTCDate();
+      const sId = att.student_id.toString();
+      attMap.set(`${sId}_${dayNum}`, att.status);
+    });
+
+    const isHolidayDay = (dayNum) => {
+      const curDate = new Date(Date.UTC(targetYear, targetMonth - 1, dayNum));
+      return holidays.some((h) => {
+        const hStart = new Date(h.start_date);
+        const hEnd = new Date(h.end_date);
+        return curDate >= hStart && curDate <= hEnd && !h.is_teaching_allowed;
+      });
+    };
+
+    const dayNames = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+
+    const totalCols = 3 + daysInMonth + 4;
+    const title = `SỔ THEO DÕI ĐIỂM DANH & CHUYÊN CẦN - THÁNG ${String(targetMonth).padStart(2, '0')}/${targetYear}`;
+    const subtitle = `Lớp: ${targetClass.name.toUpperCase()} | Năm học: ${targetClass.school_year?.name || '2026-2027'} | Sĩ số: ${enrollments.length} học sinh | Ngày xuất: ${formatDateDMY(now)}`;
+
+    const startRow = addSchoolHeaderBanner(worksheet, { title, subtitle, totalCols });
+
+    // Header 1: Day numbers
+    const row1Values = ['STT', 'Mã học sinh', 'Họ và tên trẻ'];
+    for (let d = 1; d <= daysInMonth; d++) {
+      row1Values.push(`Ngày ${d}`);
+    }
+    row1Values.push('Tổng đi học', 'Nghỉ có phép', 'Nghỉ K.phép', 'Chuyên cần (%)');
+
+    const headerRow1 = worksheet.addRow(row1Values);
+    applyHeaderStyles(headerRow1);
+
+    // Header 2: Day of week indicator
+    const row2Values = ['', '', ''];
+    for (let d = 1; d <= daysInMonth; d++) {
+      const curDate = new Date(Date.UTC(targetYear, targetMonth - 1, d));
+      const dow = dayNames[curDate.getUTCDay()];
+      row2Values.push(dow);
+    }
+    row2Values.push('', '', '', '');
+    const headerRow2 = worksheet.addRow(row2Values);
+
+    headerRow2.height = 20;
+    headerRow2.eachCell((cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE0E7FF' },
+      };
+      cell.font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FF1E3A8A' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      };
+    });
+
+    let classTotalPresent = 0;
+    let classTotalExcused = 0;
+    let classTotalUnexcused = 0;
+    const studentStats = new Map();
+
+    enrollments.forEach((enr, idx) => {
+      const st = enr.student;
+      const sId = st.student_id.toString();
+      const rowValues = [
+        idx + 1,
+        st.student_code || '',
+        st.full_name || `${st.last_name || ''} ${st.first_name || ''}`.trim(),
+      ];
+
+      let studentPresent = 0;
+      let studentExcused = 0;
+      let studentUnexcused = 0;
+      let studentSchoolDays = 0;
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const curDate = new Date(Date.UTC(targetYear, targetMonth - 1, d));
+        const dayOfWeek = curDate.getUTCDay();
+        const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
+        const isHol = isHolidayDay(d);
+
+        const status = attMap.get(`${sId}_${d}`);
+
+        if (status === 'PRESENT') {
+          rowValues.push('x');
+          studentPresent++;
+          studentSchoolDays++;
+        } else if (status === 'EXCUSED_ABSENCE') {
+          rowValues.push('P');
+          studentExcused++;
+          studentSchoolDays++;
+        } else if (status === 'UNEXCUSED_ABSENCE') {
+          rowValues.push('K');
+          studentUnexcused++;
+          studentSchoolDays++;
+        } else if (isWeekend || isHol) {
+          rowValues.push('-');
+        } else {
+          rowValues.push('');
+        }
+      }
+
+      classTotalPresent += studentPresent;
+      classTotalExcused += studentExcused;
+      classTotalUnexcused += studentUnexcused;
+
+      const rate = studentSchoolDays > 0 ? ((studentPresent / studentSchoolDays) * 100).toFixed(1) + '%' : '100%';
+
+      studentStats.set(sId, {
+        present: studentPresent,
+        excused: studentExcused,
+        unexcused: studentUnexcused,
+        schoolDays: studentSchoolDays,
+        rate,
+      });
+
+      rowValues.push(studentPresent, studentExcused, studentUnexcused, rate);
+      const studentRow = worksheet.addRow(rowValues);
+
+      studentRow.eachCell((cell, colNumber) => {
+        if (colNumber > 3) {
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        }
+        if (cell.value === 'x') {
+          cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF15803D' } };
+        } else if (cell.value === 'P') {
+          cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFD97706' } };
+        } else if (cell.value === 'K') {
+          cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFDC2626' } };
+        } else if (cell.value === '-') {
+          cell.font = { name: 'Segoe UI', size: 9, color: { argb: 'FF94A3B8' } };
+        }
+      });
+    });
+
+    // Summary total row
+    const totalRowValues = ['TỔNG CỘNG', '', ''];
+    for (let d = 1; d <= daysInMonth; d++) {
+      totalRowValues.push('');
+    }
+    const totalSchoolDaysAll = classTotalPresent + classTotalExcused + classTotalUnexcused;
+    const avgRate = totalSchoolDaysAll > 0 ? ((classTotalPresent / totalSchoolDaysAll) * 100).toFixed(1) + '%' : '100%';
+    totalRowValues.push(classTotalPresent, classTotalExcused, classTotalUnexcused, avgRate);
+
+    const summaryRow = worksheet.addRow(totalRowValues);
+    summaryRow.height = 24;
+    summaryRow.eachCell((cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFF1F5F9' },
+      };
+      cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF0F172A' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = {
+        top: { style: 'medium', color: { argb: 'FF64748B' } },
+        bottom: { style: 'medium', color: { argb: 'FF64748B' } },
+        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      };
+    });
+    summaryRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
+
+    worksheet.addRow([]);
+    const legendRow = worksheet.addRow([
+      'Ghi chú ký hiệu:',
+      'x: Có mặt',
+      'P: Nghỉ học có phép',
+      'K: Nghỉ học không phép',
+      '-: Nghỉ thứ Bảy, Chủ Nhật hoặc ngày Lễ',
+    ]);
+    legendRow.font = { name: 'Segoe UI', size: 9, italic: true, color: { argb: 'FF64748B' } };
+
+    autoFitColumns(worksheet);
+
+    for (let c = 4; c < 4 + daysInMonth; c++) {
+      worksheet.getColumn(c).width = 7.5;
+    }
+
+    return {
+      month: targetMonth,
+      year: targetYear,
+      label: `Tháng ${String(targetMonth).padStart(2, '0')}`,
+      classPresent: classTotalPresent,
+      classExcused: classTotalExcused,
+      classUnexcused: classTotalUnexcused,
+      classDays: totalSchoolDaysAll,
+      studentStats,
+    };
+  }
+
+  /**
+   * Helper: Vẽ trang tổng kết chuyên cần cả năm học
+   */
+  _renderAttendanceFullYearSummary(worksheet, {
+    targetClass,
+    enrollments,
+    monthsList,
+    monthlyResults,
+    now,
+  }) {
+    const totalCols = 3 + monthsList.length + 4;
+    const title = `BẢNG TỔNG HỢP CHUYÊN CẦN NĂM HỌC ${targetClass.school_year?.name || '2026-2027'}`;
+    const subtitle = `Lớp: ${targetClass.name.toUpperCase()} | Sĩ số: ${enrollments.length} học sinh | Tổng số tháng: ${monthsList.length} tháng | Ngày xuất: ${formatDateDMY(now)}`;
+
+    const startRow = addSchoolHeaderBanner(worksheet, { title, subtitle, totalCols });
+
+    const headerValues = ['STT', 'Mã học sinh', 'Họ và tên trẻ'];
+    monthsList.forEach((m) => {
+      headerValues.push(m.label);
+    });
+    headerValues.push('Tổng ngày đi học', 'Nghỉ có phép (CP)', 'Nghỉ K.phép (KP)', 'Chuyên cần (%)');
+
+    const headerRow = worksheet.addRow(headerValues);
+    applyHeaderStyles(headerRow);
+
+    let classYearPresent = 0;
+    let classYearExcused = 0;
+    let classYearUnexcused = 0;
+    let classYearDays = 0;
+
+    enrollments.forEach((enr, idx) => {
+      const st = enr.student;
+      const sId = st.student_id.toString();
+      const rowValues = [
+        idx + 1,
+        st.student_code || '',
+        st.full_name || `${st.last_name || ''} ${st.first_name || ''}`.trim(),
+      ];
+
+      let totalStudentPresent = 0;
+      let totalStudentExcused = 0;
+      let totalStudentUnexcused = 0;
+      let totalStudentDays = 0;
+
+      monthsList.forEach((m) => {
+        const mRes = monthlyResults.find((r) => r.month === m.month && r.year === m.year);
+        const sStat = mRes?.studentStats?.get(sId);
+        if (sStat && sStat.schoolDays > 0) {
+          rowValues.push(`${sStat.present}/${sStat.schoolDays}`);
+          totalStudentPresent += sStat.present;
+          totalStudentExcused += sStat.excused;
+          totalStudentUnexcused += sStat.unexcused;
+          totalStudentDays += sStat.schoolDays;
+        } else {
+          rowValues.push('-');
+        }
+      });
+
+      classYearPresent += totalStudentPresent;
+      classYearExcused += totalStudentExcused;
+      classYearUnexcused += totalStudentUnexcused;
+      classYearDays += totalStudentDays;
+
+      const rate = totalStudentDays > 0
+        ? ((totalStudentPresent / totalStudentDays) * 100).toFixed(1) + '%'
+        : '100%';
+
+      rowValues.push(totalStudentPresent, totalStudentExcused, totalStudentUnexcused, rate);
+      const studentRow = worksheet.addRow(rowValues);
+      studentRow.eachCell((cell, colNumber) => {
+        if (colNumber > 3) {
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        }
+      });
+    });
+
+    const totalRowValues = ['TỔNG CỘNG', '', ''];
+    monthsList.forEach((m) => {
+      const mRes = monthlyResults.find((r) => r.month === m.month && r.year === m.year);
+      if (mRes && mRes.classDays > 0) {
+        totalRowValues.push(`${mRes.classPresent}/${mRes.classDays}`);
+      } else {
+        totalRowValues.push('-');
+      }
+    });
+
+    const totalClassYearDaysAll = classYearPresent + classYearExcused + classYearUnexcused;
+    const avgYearRate = totalClassYearDaysAll > 0
+      ? ((classYearPresent / totalClassYearDaysAll) * 100).toFixed(1) + '%'
+      : '100%';
+
+    totalRowValues.push(classYearPresent, classYearExcused, classYearUnexcused, avgYearRate);
+
+    const summaryRow = worksheet.addRow(totalRowValues);
+    summaryRow.height = 24;
+    summaryRow.eachCell((cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFF1F5F9' },
+      };
+      cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF0F172A' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = {
+        top: { style: 'medium', color: { argb: 'FF64748B' } },
+        bottom: { style: 'medium', color: { argb: 'FF64748B' } },
+        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      };
+    });
+    summaryRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
+
+    applyZebraRows(worksheet, startRow + 1, startRow + enrollments.length);
+    autoFitColumns(worksheet);
+  }
+
+  /**
+   * Xuất ma trận sổ điểm danh & chuyên cần ra Excel:
+   * - Nếu isFullYear = true (hoặc không truyền tháng): Xuất trọn bộ cả năm học (Mỗi tháng 1 sheet + Trang tổng hợp cả năm)
+   * - Nếu có tháng cụ thể: Xuất 1 sheet điểm danh tháng tương ứng (tương thích ngược)
+   */
+  async exportAttendanceExcel({ classId, month, year, isFullYear }) {
+    let targetClass = null;
+    if (classId) {
+      targetClass = await this._resolveClass(classId);
+    }
+    if (!targetClass) {
+      targetClass = await prisma.class.findFirst({
+        where: { deleted_at: null },
+        include: { school_year: true },
+        orderBy: { class_id: 'asc' },
+      });
+    }
+    if (!targetClass) {
+      throw new NotFound('Không tìm thấy lớp học yêu cầu.');
+    }
+
+    const now = new Date();
+
+    // 1. Fetch active students in class
+    const enrollments = await prisma.studentEnrollment.findMany({
+      where: {
+        class_id: targetClass.class_id,
+        status: { notIn: ['TRANSFERRED_SCHOOL', 'DROPPED_OUT'] },
+        student: { deleted_at: null },
+      },
+      include: {
+        student: true,
+      },
+      orderBy: { student: { student_code: 'asc' } },
+    });
+
+    const isFullYearExport = isFullYear || month === 'all' || (!month && !year);
+
+    if (!isFullYearExport) {
+      // Xuất 1 tháng đơn lẻ (backward compatibility)
+      const targetMonth = month ? parseInt(month, 10) : (now.getMonth() + 1);
+      const targetYear = year ? parseInt(year, 10) : now.getFullYear();
+
+      const startOfMonth = new Date(Date.UTC(targetYear, targetMonth - 1, 1, 0, 0, 0, 0));
+      const endOfMonth = new Date(Date.UTC(targetYear, targetMonth, 0, 23, 59, 59, 999));
+
+      const [attendances, holidays] = await Promise.all([
+        prisma.attendance.findMany({
+          where: {
+            class_id: targetClass.class_id,
+            date: { gte: startOfMonth, lte: endOfMonth },
+            deleted_at: null,
+          },
+        }),
+        prisma.schoolHoliday.findMany({
+          where: {
+            school_year_id: targetClass.school_year_id,
+            start_date: { lte: endOfMonth },
+            end_date: { gte: startOfMonth },
+            deleted_at: null,
+          },
+        }),
+      ]);
+
+      const { workbook, worksheet } = createStandardWorkbook('Sổ điểm danh');
+      this._renderAttendanceMonthSheet(worksheet, {
+        targetClass,
+        targetMonth,
+        targetYear,
+        enrollments,
+        attendances,
+        holidays,
+        now,
+      });
+
+      return await workbook.xlsx.writeBuffer();
+    }
+
+    // Xuất trọn bộ cả năm học (Mỗi tháng 1 sheet riêng + Sheet Tổng hợp cả năm)
+    let monthsList = [];
+    if (targetClass.school_year?.start_date && targetClass.school_year?.end_date) {
+      const cur = new Date(targetClass.school_year.start_date);
+      const end = new Date(targetClass.school_year.end_date);
+      while (cur <= end) {
+        monthsList.push({
+          month: cur.getUTCMonth() + 1,
+          year: cur.getUTCFullYear(),
+          label: `Tháng ${String(cur.getUTCMonth() + 1).padStart(2, '0')}`,
+        });
+        cur.setUTCMonth(cur.getUTCMonth() + 1);
+      }
+    }
+
+    if (monthsList.length === 0) {
+      const startYear = now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
+      monthsList = [
+        { month: 9, year: startYear, label: 'Tháng 09' },
+        { month: 10, year: startYear, label: 'Tháng 10' },
+        { month: 11, year: startYear, label: 'Tháng 11' },
+        { month: 12, year: startYear, label: 'Tháng 12' },
+        { month: 1, year: startYear + 1, label: 'Tháng 01' },
+        { month: 2, year: startYear + 1, label: 'Tháng 02' },
+        { month: 3, year: startYear + 1, label: 'Tháng 03' },
+        { month: 4, year: startYear + 1, label: 'Tháng 04' },
+        { month: 5, year: startYear + 1, label: 'Tháng 05' },
+      ];
+    }
+
+    const { workbook, worksheet: summarySheet } = createStandardWorkbook('Tổng hợp cả năm');
+
+    const monthlyResults = [];
+    for (const mItem of monthsList) {
+      const startOfMonth = new Date(Date.UTC(mItem.year, mItem.month - 1, 1, 0, 0, 0, 0));
+      const endOfMonth = new Date(Date.UTC(mItem.year, mItem.month, 0, 23, 59, 59, 999));
+
+      const [attendances, holidays] = await Promise.all([
+        prisma.attendance.findMany({
+          where: {
+            class_id: targetClass.class_id,
+            date: { gte: startOfMonth, lte: endOfMonth },
+            deleted_at: null,
+          },
+        }),
+        prisma.schoolHoliday.findMany({
+          where: {
+            school_year_id: targetClass.school_year_id,
+            start_date: { lte: endOfMonth },
+            end_date: { gte: startOfMonth },
+            deleted_at: null,
+          },
+        }),
+      ]);
+
+      const monthSheet = workbook.addWorksheet(mItem.label, {
+        views: [{ showGridLines: true }],
+        pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+      });
+
+      const mRes = this._renderAttendanceMonthSheet(monthSheet, {
+        targetClass,
+        targetMonth: mItem.month,
+        targetYear: mItem.year,
+        enrollments,
+        attendances,
+        holidays,
+        now,
+      });
+
+      monthlyResults.push(mRes);
+    }
+
+    this._renderAttendanceFullYearSummary(summarySheet, {
+      targetClass,
+      enrollments,
+      monthsList,
+      monthlyResults,
+      now,
+    });
+
+    return await workbook.xlsx.writeBuffer();
   }
 }
 

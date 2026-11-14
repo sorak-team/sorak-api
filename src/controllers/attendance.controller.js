@@ -163,6 +163,50 @@ class AttendanceController {
       next(err);
     }
   }
+
+  async getStudentPickupQuota(req, res, next) {
+    try {
+      const { studentId } = req.params;
+      const { startDate, endDate, month } = req.query;
+      const data = await attendanceService.getStudentPickupQuota({
+        studentId,
+        startDate,
+        endDate,
+        month,
+      });
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async exportAttendanceExcel(req, res, next) {
+    try {
+      const classId = req.params.classId || req.query.classId || req.query.class_id;
+      const { month, year, isFullYear } = req.query;
+      const shouldExportFullYear = isFullYear === 'true' || isFullYear === true || (!month && !year) || month === 'all';
+      const buffer = await attendanceService.exportAttendanceExcel({
+        classId,
+        month,
+        year,
+        isFullYear: shouldExportFullYear,
+      });
+      const filename = shouldExportFullYear
+        ? `So_Theo_Doi_Chuyen_Can_Ca_Nam_${year || new Date().getFullYear()}.xlsx`
+        : `So_Diem_Danh_${month ? `${month}_` : ''}${year || new Date().getFullYear()}.xlsx`;
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${filename}"`,
+      );
+      res.send(buffer);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 export default new AttendanceController();
