@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import prisma from '../config/prisma.js';
 import { BadRequest, NotFound, Conflict } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
+import { notificationService } from './notification.service.js';
 
 export class AccountService {
   /**
@@ -516,6 +517,38 @@ export class AccountService {
         where: { account_id: account.account_id },
         data: updateData,
       });
+
+      // Notification 2: Assign Role (BGH thay đổi quyền Teacher <-> Principal)
+      if (updateData.role && updateData.role !== account.role) {
+        // Tester_20 Bug 2: Revoke all active sessions of this account when role is changed
+        await prisma.refreshToken.updateMany({
+          where: {
+            account_id: account.account_id,
+            is_revoked: false,
+          },
+          data: { is_revoked: true },
+        });
+
+        const roleLabels = {
+          PRINCIPAL_BGH: 'Ban Giám Hiệu (Hiệu trưởng)',
+          TEACHER_GV: 'Giáo viên',
+          PARENT_PH: 'Phụ huynh',
+        };
+        notificationService
+          .emitSystemNotification({
+            recipientAccountIds: [account.account_id],
+            creatorAccountId: currentUser?.account_id || currentUser?.accountId,
+            type: 'SCHOOL_ANNOUNCEMENT',
+            title: 'Vai trò tài khoản đã thay đổi',
+            body: `Tài khoản ${account.username} của bạn đã được Ban Giám Hiệu chuyển đổi sang vai trò: ${roleLabels[updateData.role] || updateData.role}.`,
+            data: {
+              type: 'ROLE_ASSIGNED',
+              role: updateData.role,
+              accountId: account.account_id.toString(),
+            },
+          })
+          .catch(() => {});
+      }
     }
 
     // If contact or avatar data is passed and linked to teacher/student, update the linked profile
@@ -584,6 +617,22 @@ export class AccountService {
       data: { is_active: isActive },
     });
 
+    // Notification 1: Change Account Status (BGH khóa/kích hoạt tài khoản)
+    notificationService
+      .emitSystemNotification({
+        recipientAccountIds: [account.account_id],
+        creatorAccountId: currentUser?.account_id || currentUser?.accountId,
+        type: 'SCHOOL_ANNOUNCEMENT',
+        title: isActive ? 'Tài khoản đã được kích hoạt' : 'Tài khoản đã bị tạm khóa',
+        body: `Tài khoản ${account.username} của bạn đã được ${isActive ? 'kích hoạt hoạt động' : 'tạm khóa'} bởi Ban Giám Hiệu.`,
+        data: {
+          type: 'ACCOUNT_STATUS_CHANGED',
+          isActive,
+          accountId: account.account_id.toString(),
+        },
+      })
+      .catch(() => {});
+
     // If locked/deactivated, revoke active refresh sessions
     if (!isActive) {
       await prisma.refreshToken.updateMany({
@@ -602,11 +651,22 @@ export class AccountService {
   /**
    * Reset account password
    */
-  async resetPassword(id, newPassword = 'Sorak@2026') {
+  async resetPassword(id, newPassword = 'Sorak@2026', currentUser = null) {
     const where = { ...this._parseId(id), deleted_at: null };
     const account = await prisma.account.findFirst({ where });
     if (!account) {
       throw new NotFound('Tài khoản không tồn tại');
+    }
+
+    if (currentUser) {
+      const currentAccId = currentUser.accountId || currentUser.sub || currentUser.id;
+      if (
+        (currentAccId && String(account.account_id) === String(currentAccId)) ||
+        (account.public_id && currentUser.publicId && account.public_id === currentUser.publicId) ||
+        (currentUser.username && account.username.toLowerCase() === currentUser.username.toLowerCase())
+      ) {
+        throw new BadRequest('Bạn không thể đặt lại mật khẩu cho chính mình tại chức năng quản lý tài khoản. Vui lòng sử dụng chức năng Đổi mật khẩu.');
+      }
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
@@ -615,7 +675,7 @@ export class AccountService {
       where: { account_id: account.account_id },
       data: {
         password_hash: passwordHash,
-        password_changed_at: new Date(),
+        password_changed_at: null, // Reset password flags account as using default/assigned password so user is prompted to change it
       },
     });
 
@@ -651,6 +711,10 @@ export class AccountService {
         is_active: false,
       },
     });
+
+    // Note: Do NOT unlink teacher.account_id or student.account_id.
+    // Keeping the foreign key allows teacher/student profiles to remain intact while
+    // accurately reflecting that their linked login account has been deleted (isDeleted: true).
 
     // Revoke sessions
     await prisma.refreshToken.updateMany({
