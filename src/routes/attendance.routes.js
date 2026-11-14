@@ -6,6 +6,9 @@ const router = Router();
 
 
 router.use(authMiddleware);
+
+router.get('/export/excel', attendanceController.exportAttendanceExcel);
+router.get('/classes/:classId/export/excel', attendanceController.exportAttendanceExcel);
 router.get('/classes/:classId/timetable', attendanceController.getTimetableOverview);
 router.post('/classes/:classId/records', attendanceController.updateAttendance);
 router.delete('/classes/:classId/records', attendanceController.clearAttendance);
@@ -15,6 +18,8 @@ router.delete('/classes/:classId/dismissal', attendanceController.clearAllDismis
 router.delete('/classes/:classId/dismissal/:studentId', attendanceController.cancelDismissal);
 router.get('/classes/:classId/authorizations', attendanceController.getPickupAuthorizations);
 router.post('/classes/:classId/authorizations', attendanceController.createPickupAuthorization);
+router.get('/classes/:classId/students/:studentId/pickup-quota', attendanceController.getStudentPickupQuota);
+router.get('/students/:studentId/pickup-quota', attendanceController.getStudentPickupQuota);
 router.patch('/classes/:classId/authorizations/:authId/approve', attendanceController.approvePickupAuthorization);
 router.patch('/classes/:classId/authorizations/:authId/reject', attendanceController.rejectPickupAuthorization);
 
