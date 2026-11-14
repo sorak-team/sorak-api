@@ -68,6 +68,7 @@ enum TeacherLeaveReasonEnum {
   COMPLETED_SCHOOL_YEAR
   LEAVE_OF_ABSENCE
   RESIGNED
+  REMOVED
 
   @@map("teacher_leave_reason_enum")
 }
@@ -190,6 +191,15 @@ enum CurriculumThemeStatusEnum {
   @@map("curriculum_theme_status_enum")
 }
 
+enum ThemePlanStatusEnum {
+  DRAFT
+  PENDING_APPROVAL
+  USED
+  REJECTED
+
+  @@map("theme_plan_status_enum")
+}
+
 // ============================================================================
 // MODULE 1: AUTHENTICATION, ACCESS CONTROL & NOTIFICATIONS (5 TABLES)
 // ============================================================================
@@ -233,6 +243,8 @@ model Account {
   monthly_assessments_evaluated MonthlyAssessment[]   @relation("MonthlyAssessmentEvaluatedBy")
   monthly_assessments_feedback  MonthlyAssessment[]   @relation("MonthlyAssessmentFeedbackBy")
   semester_assessments_evaluated SemesterAssessment[] @relation("SemesterAssessmentEvaluatedBy")
+  class_theme_plans_submitted   ClassThemePlan[]      @relation("ClassThemePlanSubmittedBy")
+  class_theme_plans_reviewed    ClassThemePlan[]      @relation("ClassThemePlanReviewedBy")
 
   @@index([username], map: "idx_accounts_username")
   @@index([role], map: "idx_accounts_role")
@@ -369,6 +381,8 @@ model Class {
   monthly_assessments  MonthlyAssessment[]
   semester_assessments SemesterAssessment[]
   theme_goals          ClassThemeGoal[]
+  theme_contents       ClassThemeContent[]
+  theme_plans          ClassThemePlan[]
 
   @@unique([school_year_id, name], map: "uq_year_class_name")
   @@index([school_year_id], map: "idx_classes_school_year")
@@ -682,21 +696,26 @@ model CurriculumTheme {
   school_year_id BigInt
   age_group      String                    @db.VarChar(20)
   name           String                    @db.VarChar(100)
-  start_date     DateTime                  @db.Date
-  end_date       DateTime                  @db.Date
-  status         CurriculumThemeStatusEnum @default(DRAFT)
-  description    String?
-  deleted_at     DateTime?                 @db.Timestamptz(6)
-  created_at     DateTime                  @default(now()) @db.Timestamptz(6)
-  updated_at     DateTime                  @default(now()) @updatedAt @db.Timestamptz(6)
+  start_date          DateTime                  @db.Date
+  end_date            DateTime                  @db.Date
+  submission_deadline DateTime?                 @db.Timestamptz(6)
+  allow_late_submit   Boolean                   @default(true)
+  status              CurriculumThemeStatusEnum @default(DRAFT)
+  description         String?
+  deleted_at          DateTime?                 @db.Timestamptz(6)
+  created_at          DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime                  @default(now()) @updatedAt @db.Timestamptz(6)
 
   // Relations
   school_year    SchoolYear                @relation(fields: [school_year_id], references: [school_year_id], onDelete: Restrict)
   sub_themes     SubTheme[]
   class_goals    ClassThemeGoal[]
+  class_contents ClassThemeContent[]
+  class_plans    ClassThemePlan[]
   activities     EducationalActivity[]
 
   @@index([school_year_id, age_group, start_date, end_date], map: "idx_themes_dates")
+  @@index([school_year_id, age_group, submission_deadline], map: "idx_themes_submission_deadline")
   @@index([status], map: "idx_themes_status")
   @@map("curriculum_themes")
 }
@@ -758,8 +777,9 @@ model EducationalContent {
   updated_at DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
 
   // Relations
-  goal       EducationalGoal       @relation(fields: [goal_id], references: [goal_id], onDelete: Cascade)
-  activities EducationalActivity[]
+  goal                 EducationalGoal       @relation(fields: [goal_id], references: [goal_id], onDelete: Cascade)
+  activities           EducationalActivity[]
+  class_theme_contents ClassThemeContent[]
 
   @@index([goal_id], map: "idx_contents_goal")
   @@map("educational_contents")
@@ -846,6 +866,53 @@ model ClassThemeGoal {
   @@map("class_theme_goals")
 }
 
+model ClassThemeContent {
+  id         BigInt             @id @default(autoincrement())
+  class_id   BigInt
+  theme_id   BigInt
+  content_id BigInt
+  created_at DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  class      Class              @relation(fields: [class_id], references: [class_id], onDelete: Cascade)
+  theme      CurriculumTheme    @relation(fields: [theme_id], references: [theme_id], onDelete: Cascade)
+  content    EducationalContent @relation(fields: [content_id], references: [content_id], onDelete: Cascade)
+
+  @@unique([class_id, theme_id, content_id], map: "uq_class_theme_content")
+  @@index([class_id, theme_id], map: "idx_class_theme_contents_lookup")
+  @@index([content_id], map: "idx_class_theme_contents_content")
+  @@map("class_theme_contents")
+}
+
+model ClassThemePlan {
+  id               BigInt              @id @default(autoincrement())
+  public_id        String              @unique @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  class_id         BigInt
+  theme_id         BigInt
+  status           ThemePlanStatusEnum @default(DRAFT)
+  submitted_at     DateTime?           @db.Timestamptz(6)
+  submitted_by     BigInt?
+  reviewed_at      DateTime?           @db.Timestamptz(6)
+  reviewed_by      BigInt?
+  rejection_reason String?             @db.Text
+  review_note      String?             @db.Text
+  created_at       DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime            @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  class            Class               @relation(fields: [class_id], references: [class_id], onDelete: Cascade)
+  theme            CurriculumTheme     @relation(fields: [theme_id], references: [theme_id], onDelete: Restrict)
+  submitter        Account?            @relation("ClassThemePlanSubmittedBy", fields: [submitted_by], references: [account_id], onDelete: SetNull)
+  reviewer         Account?            @relation("ClassThemePlanReviewedBy", fields: [reviewed_by], references: [account_id], onDelete: SetNull)
+
+  @@unique([class_id, theme_id], map: "uq_class_theme_plan")
+  @@index([class_id], map: "idx_class_theme_plan_class")
+  @@index([theme_id], map: "idx_class_theme_plan_theme")
+  @@index([status], map: "idx_class_theme_plan_status")
+  @@map("class_theme_plans")
+}
+
 // ============================================================================
 // MODULE 8: CHILD DEVELOPMENTAL ASSESSMENT & SỔ BÉ NGOAN (3 TABLES)
 // ============================================================================
@@ -891,6 +958,8 @@ model MonthlyAssessment {
   week_5_rose           Boolean   @default(false)
   roses_count           Int       @default(0) @db.SmallInt
   teacher_notes         String
+  is_published          Boolean   @default(false)
+  published_at          DateTime? @db.Timestamptz(6)
   evaluated_by          BigInt
   parent_feedback       String?
   feedback_at           DateTime? @db.Timestamptz(6)
@@ -918,6 +987,8 @@ model SemesterAssessment {
   class_id               BigInt
   semester               SemesterEnum
   teacher_notes          String
+  is_published           Boolean      @default(false)
+  published_at           DateTime?    @db.Timestamptz(6)
   evaluated_by           BigInt
   created_at             DateTime     @default(now()) @db.Timestamptz(6)
   updated_at             DateTime     @default(now()) @updatedAt @db.Timestamptz(6)
