@@ -22,6 +22,7 @@ export const loginSchema = Joi.object({
     }),
   captchaToken: Joi.string().trim().allow('', null).optional(),
   rememberMe: Joi.boolean().default(true).optional(),
+  isLinkingChild: Joi.boolean().optional(),
 })
   .or('username', 'identifier')
   .messages({

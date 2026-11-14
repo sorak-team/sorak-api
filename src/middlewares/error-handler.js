@@ -36,11 +36,29 @@ export function errorHandler(err, req, res, _next) {
     code = err.code || statusToCode(status);
     message = err.message;
     details = err.details;
+  } else if (err instanceof Prisma.PrismaClientValidationError) {
+    status = 400;
+    code = 'VALIDATION_ERROR';
+    message = 'Dữ liệu không hợp lệ hoặc không đúng định dạng.';
+    details = err.message;
   } else if (err instanceof Prisma.PrismaClientKnownRequestError) {
     if (err.code === 'P2002') {
       status = 409;
       code = 'DUPLICATE_KEY';
-      message = 'Resource already exists';
+      const target = Array.isArray(err.meta?.target) ? err.meta.target.join(', ') : String(err.meta?.target || '');
+      if (target.includes('employee_code')) {
+        message = 'Mã giáo viên đã tồn tại trên hệ thống';
+      } else if (target.includes('citizen_id')) {
+        message = 'Số CCCD/CMND đã tồn tại trên hệ thống';
+      } else if (target.includes('student_code')) {
+        message = 'Mã học sinh đã tồn tại trên hệ thống';
+      } else if (target.includes('phone')) {
+        message = 'Số điện thoại đã tồn tại trên hệ thống';
+      } else if (target.includes('email')) {
+        message = 'Email đã tồn tại trên hệ thống';
+      } else {
+        message = 'Dữ liệu đã tồn tại trên hệ thống';
+      }
       details = err.meta;
     } else if (err.code === 'P2025') {
       status = 404;
@@ -49,10 +67,16 @@ export function errorHandler(err, req, res, _next) {
     } else {
       status = 400;
       code = 'DB_ERROR';
-      message = err.message;
+      message = 'Lỗi xử lý dữ liệu. Vui lòng kiểm tra lại thông tin hoặc thử lại sau.';
     }
   } else if (err instanceof Error) {
-    message = err.message;
+    if (err.name?.includes('Prisma') || err.message?.includes('prisma.') || err.message?.includes('Invalid `prisma.')) {
+      status = 500;
+      code = 'INTERNAL_ERROR';
+      message = 'Đã có lỗi xảy ra trong quá trình xử lý. Vui lòng thử lại sau.';
+    } else {
+      message = err.message;
+    }
   }
 
   if (status >= 500) {

@@ -60,7 +60,7 @@ export class StudentService {
       }
   
       if (status && status !== 'ALL') {
-        where.status = status;
+        where.status = String(status).toUpperCase();
       }
   
       if (gender && gender !== 'ALL') {
@@ -91,55 +91,44 @@ export class StudentService {
             ...(isCompleted ? {} : { left_at: null }),
           },
         };
-      } else if (targetSyId && status !== 'DROPPED_OUT') {
+      } else if (targetSyId && !['RESERVED', 'TRANSFERRED', 'DROPPED_OUT', 'GRADUATED'].includes(where.status)) {
         const isSyUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
           String(targetSyId),
         );
-        const targetYear = await prisma.schoolYear.findFirst({
-          where: isSyUuid ? { public_id: String(targetSyId) } : { school_year_id: BigInt(targetSyId) },
-        });
-        const isTargetSyActive = targetYear?.status === 'ACTIVE';
 
         const syFilter = isSyUuid
           ? { school_year: { public_id: String(targetSyId) } }
           : { school_year_id: BigInt(targetSyId) };
 
-        if (isTargetSyActive) {
-          where.OR = [
-            {
-              student_enrollments: {
-                some: {
-                  class: {
-                    OR: [
-                      syFilter,
-                      { school_year: { name: { contains: String(targetSyId) } } },
-                    ],
-                  },
-                  left_at: null,
+        where.OR = [
+          // 1. Học sinh đang có phân lớp trong năm học được chọn
+          {
+            student_enrollments: {
+              some: {
+                class: {
+                  OR: [
+                    syFilter,
+                    { school_year: { name: { contains: String(targetSyId) } } },
+                  ],
                 },
               },
             },
-            {
-              student_enrollments: {
-                none: {
-                  left_at: null,
-                },
-              },
-              status: 'STUDYING',
-            },
-          ];
-        } else {
-          where.student_enrollments = {
-            some: {
-              class: {
-                OR: [
-                  syFilter,
-                  { school_year: { name: { contains: String(targetSyId) } } },
-                ],
+          },
+          // 2. Học sinh chưa phân lớp (chưa có lớp nào còn đang theo học)
+          {
+            student_enrollments: {
+              none: {
+                left_at: null,
               },
             },
-          };
-        }
+          },
+          // 3. Học sinh có trạng thái phi học tập (Bảo lưu, Chuyển trường, Thôi học, Tốt nghiệp)
+          {
+            status: {
+              in: ['RESERVED', 'TRANSFERRED', 'DROPPED_OUT', 'GRADUATED'],
+            },
+          },
+        ];
       }
   
       let orderBy = { created_at: 'desc' };
@@ -391,42 +380,17 @@ export class StudentService {
         parents = [],
       } = payload;
   
-      // Validate class if provided
+      // New students are admitted as unassigned ("Chưa phân lớp"). Class allocation is performed via Class Management.
       let targetClass = null;
-      if (classId) {
-        const isNumeric = /^\d+$/.test(String(classId));
-        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-          String(classId),
-        );
-        if (isNumeric) {
-          targetClass = await prisma.class.findFirst({
-            where: { class_id: BigInt(classId), deleted_at: null },
-            include: { school_year: true },
-          });
-        } else if (isUuid) {
-          targetClass = await prisma.class.findFirst({
-            where: { public_id: String(classId), deleted_at: null },
-            include: { school_year: true },
-          });
-        } else {
-          // Fallback for mock IDs like 'nt-a1' or matching by name
-          targetClass = await prisma.class.findFirst({
-            where: {
-              OR: [
-                { name: { contains: String(classId), mode: 'insensitive' } },
-                { age_group: { contains: String(classId), mode: 'insensitive' } },
-              ],
-              deleted_at: null,
-            },
-            include: { school_year: true },
-          });
-        }
-        if (!targetClass && (isNumeric || isUuid)) {
-          throw new NotFound(`Lớp học (ID: ${classId}) không tồn tại`);
-        }
-      }
   
-      // Auto-generate or format studentCode (HS + YY + 001..999 per admission year)
+      if (fullName && /\s{2,}/.test(fullName)) {
+      throw new BadRequest('Họ tên không được chứa nhiều khoảng trắng liên tiếp.');
+    }
+    if (dateOfBirth && new Date(dateOfBirth).getTime() > Date.now()) {
+      throw new BadRequest('Ngày sinh không được lớn hơn ngày hiện tại.');
+    }
+
+    // Auto-generate or format studentCode (HS + YY + 001..999 per admission year)
       let finalStudentCode;
       if (!studentCode || String(studentCode).trim().toUpperCase().startsWith('HS')) {
         const startYear = targetClass?.school_year?.start_date
@@ -473,20 +437,18 @@ export class StudentService {
         });
   
         // 2. Validate & Create Parents
+        if (!Array.isArray(parents) || parents.length === 0) {
+          throw new BadRequest('Vui lòng bổ sung ít nhất một phụ huynh/người giám hộ trước khi tạo học sinh.');
+        }
+        if (parents.length > 2) {
+          throw new BadRequest('Mỗi học sinh chỉ có tối đa 2 phụ huynh/người giám hộ.');
+        }
         if (Array.isArray(parents) && parents.length > 0) {
           const cccds = parents
             .map((p) => (p.citizenId || p.citizen_id || '').trim())
             .filter(Boolean);
           if (new Set(cccds).size !== cccds.length) {
             throw new BadRequest('Số CCCD của các phụ huynh/người giám hộ không được trùng nhau.');
-          }
-          for (const cccd of cccds) {
-            const existing = await prisma.parent.findFirst({
-              where: { citizen_id: cccd, deleted_at: null },
-            });
-            if (existing) {
-              throw new Conflict(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
-            }
           }
 
           for (const p of parents) {
@@ -504,16 +466,8 @@ export class StudentService {
           }
         }
   
-        // 3. Initial Class Enrollment if provided
-        if (targetClass) {
-          await tx.studentEnrollment.create({
-            data: {
-              student_id: student.student_id,
-              class_id: targetClass.class_id,
-              enrolled_at: new Date(enrolledAt),
-            },
-          });
-        }
+        // 3. Newly created students strictly default to unassigned (Chưa phân lớp).
+        // Class assignment must be performed explicitly via the Class Allocation function.
   
         return student;
       });
@@ -533,6 +487,27 @@ export class StudentService {
       // Nếu trạng thái ở student là đã tốt nghiệp thì không thể chỉnh sửa được nữa
       if (student.status === 'GRADUATED') {
         throw new BadRequest('Học sinh đã tốt nghiệp không thể chỉnh sửa hồ sơ hoặc trạng thái.');
+      }
+
+      // CR-18 Optimistic Concurrency Control
+      if (payload.updatedAt || payload.updated_at) {
+        const clientTime = new Date(payload.updatedAt || payload.updated_at).getTime();
+        const serverTime = new Date(student.updated_at).getTime();
+        if (!isNaN(clientTime) && !isNaN(serverTime) && Math.abs(serverTime - clientTime) > 1000) {
+          throw new Conflict('Dữ liệu đã được cập nhật trong một phiên khác. Thay đổi của bạn chưa được lưu. Vui lòng tải lại dữ liệu mới nhất và thực hiện lại.');
+        }
+      }
+
+      // Prevent direct status change to GRADUATED from regular edit form
+      if (payload.status === 'GRADUATED' && student.status !== 'GRADUATED') {
+        throw new BadRequest('Trạng thái Đã tốt nghiệp chỉ được cập nhật thông qua quy trình xác nhận hoàn thành chương trình học của nhà trường.');
+      }
+
+      if (payload.fullName && /\s{2,}/.test(payload.fullName)) {
+        throw new BadRequest('Họ tên không được chứa nhiều khoảng trắng liên tiếp.');
+      }
+      if (payload.dateOfBirth && new Date(payload.dateOfBirth).getTime() > Date.now()) {
+        throw new BadRequest('Ngày sinh không được lớn hơn ngày hiện tại.');
       }
   
       const {
@@ -654,23 +629,46 @@ export class StudentService {
       }
   
       if (Array.isArray(payload.parents)) {
+        if (payload.parents.length === 0) {
+          throw new BadRequest('Vui lòng bổ sung ít nhất một phụ huynh/người giám hộ trước khi lưu học sinh.');
+        }
+        if (payload.parents.length > 2) {
+          throw new BadRequest('Mỗi học sinh chỉ có tối đa 2 phụ huynh/người giám hộ.');
+        }
+        // Check upcoming dates so adding parents doesn't exceed 4 people total (max 4 - parents per day)
+        const newParentCount = payload.parents.length;
+        const maxAllowed = 4 - newParentCount;
+        const today = new Date();
+        today.setUTCHours(0, 0, 0, 0);
+        const upcomingAuths = await prisma.pickupAuthorization.findMany({
+          where: {
+            student_id: student.student_id,
+            end_date: { gte: today },
+            status: { in: ['PENDING', 'APPROVED'] },
+            deleted_at: null,
+          },
+        });
+        const dayCounts = {};
+        for (const a of upcomingAuths) {
+          const startKey = a.start_date.toISOString().split('T')[0];
+          const endKey = a.end_date.toISOString().split('T')[0];
+          const loopStart = startKey < today.toISOString().split('T')[0] ? today.toISOString().split('T')[0] : startKey;
+          const cur = new Date(`${loopStart}T00:00:00.000Z`);
+          const e = new Date(`${endKey}T00:00:00.000Z`);
+          while (cur <= e) {
+            const k = cur.toISOString().split('T')[0];
+            dayCounts[k] = (dayCounts[k] || 0) + 1;
+            if (dayCounts[k] > maxAllowed) {
+              throw new BadRequest(`Không thể cập nhật danh sách phụ huynh do ngày ${k} đã có ${dayCounts[k]} người ủy quyền đón (vượt quá hạn mức ${maxAllowed} người/ngày).`);
+            }
+            cur.setUTCDate(cur.getUTCDate() + 1);
+          }
+        }
         const cccds = payload.parents
           .map((p) => (p.citizenId || p.citizen_id || '').trim())
           .filter(Boolean);
         if (new Set(cccds).size !== cccds.length) {
           throw new BadRequest('Số CCCD của các phụ huynh/người giám hộ không được trùng nhau.');
-        }
-        for (const cccd of cccds) {
-          const existing = await prisma.parent.findFirst({
-            where: {
-              citizen_id: cccd,
-              student_id: { not: student.student_id },
-              deleted_at: null,
-            },
-          });
-          if (existing) {
-            throw new Conflict(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
-          }
         }
 
         await prisma.$transaction(async (tx) => {
@@ -794,6 +792,41 @@ export class StudentService {
       });
       if (!student) throw new NotFound('Hồ sơ học sinh không tồn tại');
 
+      const activeParentsCount = await prisma.parent.count({
+        where: { student_id: student.student_id, deleted_at: null },
+      });
+      if (activeParentsCount >= 2) {
+        throw new BadRequest('Mỗi học sinh chỉ có tối đa 2 phụ huynh/người giám hộ.');
+      }
+
+      // Check upcoming dates so adding a 2nd parent doesn't violate 4 - 2 = 2 delegates/day
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0);
+      const upcomingAuths = await prisma.pickupAuthorization.findMany({
+        where: {
+          student_id: student.student_id,
+          end_date: { gte: today },
+          status: { in: ['PENDING', 'APPROVED'] },
+          deleted_at: null,
+        },
+      });
+      const dayCounts = {};
+      for (const a of upcomingAuths) {
+        const startKey = a.start_date.toISOString().split('T')[0];
+        const endKey = a.end_date.toISOString().split('T')[0];
+        const loopStart = startKey < today.toISOString().split('T')[0] ? today.toISOString().split('T')[0] : startKey;
+        const cur = new Date(`${loopStart}T00:00:00.000Z`);
+        const e = new Date(`${endKey}T00:00:00.000Z`);
+        while (cur <= e) {
+          const k = cur.toISOString().split('T')[0];
+          dayCounts[k] = (dayCounts[k] || 0) + 1;
+          if (dayCounts[k] > 2) {
+            throw new BadRequest(`Không thể thêm phụ huynh thứ 2 do ngày ${k} đã có ${dayCounts[k]} người ủy quyền đón (vượt quá hạn mức tối đa 2 người ủy quyền/ngày).`);
+          }
+          cur.setUTCDate(cur.getUTCDate() + 1);
+        }
+      }
+
       const cccd = (parentData.citizenId || parentData.citizen_id || '').trim();
       if (cccd) {
         const existingInStudent = await prisma.parent.findFirst({
@@ -801,12 +834,6 @@ export class StudentService {
         });
         if (existingInStudent) {
           throw new BadRequest('Số CCCD đã tồn tại trong danh sách phụ huynh của học sinh này.');
-        }
-        const existingOther = await prisma.parent.findFirst({
-          where: { student_id: { not: student.student_id }, citizen_id: cccd, deleted_at: null },
-        });
-        if (existingOther) {
-          throw new BadRequest(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
         }
       }
 
@@ -845,14 +872,6 @@ export class StudentService {
       if (parentData.avatarUrl !== undefined) updateData.avatar_url = parentData.avatarUrl || null;
       if (parentData.citizenId !== undefined || parentData.citizen_id !== undefined) {
         const cccd = (parentData.citizenId !== undefined ? parentData.citizenId : parentData.citizen_id || '').trim();
-        if (cccd) {
-          const existing = await prisma.parent.findFirst({
-            where: { parent_id: { not: parent.parent_id }, citizen_id: cccd, deleted_at: null },
-          });
-          if (existing) {
-            throw new Conflict(`Số CCCD '${cccd}' đã được sử dụng bởi phụ huynh khác.`);
-          }
-        }
         updateData.citizen_id = cccd || null;
       }
 
@@ -877,6 +896,13 @@ export class StudentService {
         where: { ...this._parseParentId(parentId), deleted_at: null },
       });
       if (!parent) throw new NotFound('Thông tin phụ huynh không tồn tại');
+
+      const activeParentsCount = await prisma.parent.count({
+        where: { student_id: parent.student_id, deleted_at: null },
+      });
+      if (activeParentsCount <= 1) {
+        throw new BadRequest('Mỗi học sinh phải có tối thiểu 1 phụ huynh/người giám hộ. Không thể xóa phụ huynh duy nhất này.');
+      }
   
       await prisma.parent.update({
         where: { parent_id: parent.parent_id },
