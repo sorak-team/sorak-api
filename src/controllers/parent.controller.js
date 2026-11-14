@@ -56,6 +56,24 @@ class ParentController {
     }
   }
 
+  async getPickupQuota(req, res, next) {
+    try {
+      const data = await parentService.getPickupQuota(req.user.sub, req.query);
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async getStudentReport(req, res, next) {
+    try {
+      const data = await parentService.getStudentReport(req.user.sub, req.query);
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   async getGoodBehavior(req, res, next) {
     try {
       const data = await parentService.getGoodBehavior(req.user.sub, req.query);
