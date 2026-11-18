@@ -281,7 +281,8 @@ model RefreshToken {
   created_at  DateTime  @default(now()) @db.Timestamptz(6)
 
   // Relations
-  account     Account   @relation(fields: [account_id], references: [account_id], onDelete: Cascade)
+  account       Account       @relation(fields: [account_id], references: [account_id], onDelete: Cascade)
+  device_tokens DeviceToken[]
 
   @@index([account_id, is_revoked], map: "idx_refresh_tokens_lookup")
   @@index([token_hash], map: "idx_refresh_tokens_hash")
@@ -291,6 +292,7 @@ model RefreshToken {
 model DeviceToken {
   token_id     BigInt             @id @default(autoincrement())
   account_id   BigInt
+  session_id   BigInt?
   device_token String             @db.VarChar(255)
   platform     DevicePlatformEnum
   device_name  String?            @db.VarChar(100)
@@ -301,9 +303,11 @@ model DeviceToken {
 
   // Relations
   account      Account            @relation(fields: [account_id], references: [account_id], onDelete: Cascade)
+  session      RefreshToken?      @relation(fields: [session_id], references: [token_id], onDelete: SetNull)
 
   @@unique([account_id, device_token], map: "uq_account_device")
   @@index([account_id], map: "idx_device_tokens_account")
+  @@index([session_id], map: "idx_device_tokens_session")
   @@map("device_tokens")
 }
 
@@ -673,6 +677,7 @@ model SchoolHoliday {
   is_teaching_allowed Boolean    @default(false)
   target_grades       String[]   @default([])
   description         String?
+  makeup_date         DateTime?  @db.Date
   created_by          BigInt
   deleted_at          DateTime?  @db.Timestamptz(6)
   created_at          DateTime   @default(now()) @db.Timestamptz(6)
@@ -683,6 +688,7 @@ model SchoolHoliday {
   creator             Account    @relation("SchoolHolidayCreatedBy", fields: [created_by], references: [account_id], onDelete: Restrict)
 
   @@index([school_year_id, start_date, end_date], map: "idx_holidays_lookup")
+  @@index([makeup_date], map: "idx_holidays_makeup_date")
   @@map("school_holidays")
 }
 

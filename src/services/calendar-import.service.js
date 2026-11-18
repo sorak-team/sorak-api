@@ -113,11 +113,16 @@ export class CalendarImportService {
       throw new BadRequest('Tệp Excel không có dữ liệu để nhập.');
     }
 
-    let headerRowNumber = 1;
-    for (let r = 1; r <= Math.min(10, worksheet.rowCount); r++) {
+    let headerRowNumber = 5;
+    for (let r = 1; r <= Math.min(15, worksheet.rowCount); r++) {
       const row = worksheet.getRow(r);
-      const text = (row.values || []).join(' ');
-      if (/tên sự kiện|ngày nghỉ/i.test(text)) {
+      const cell1 = String(row.getCell(1).value || '').toLowerCase();
+      const cell2 = String(row.getCell(2).value || '').toLowerCase();
+      const cell3 = String(row.getCell(3).value || '').toLowerCase();
+      if (
+        (cell1.includes('tên sự kiện') || cell1.includes('ngày nghỉ') || cell1.includes('sự kiện')) &&
+        (cell2.includes('ngày bắt đầu') || cell2.includes('bắt đầu') || cell3.includes('ngày kết thúc') || cell3.includes('kết thúc'))
+      ) {
         headerRowNumber = r;
         break;
       }
@@ -126,6 +131,16 @@ export class CalendarImportService {
     const syStart = new Date(schoolYear.start_date);
     const syEnd = new Date(schoolYear.end_date);
 
+    // Fetch existing holidays in DB to check for duplicates
+    const existingHolidays = await prisma.schoolHoliday.findMany({
+      where: {
+        school_year_id: schoolYear.school_year_id,
+        deleted_at: null,
+      },
+      select: { name: true, start_date: true },
+    });
+
+    const seenInFile = new Map();
     const rows = [];
     let validCount = 0;
     let invalidCount = 0;
@@ -133,14 +148,28 @@ export class CalendarImportService {
     for (let r = headerRowNumber + 1; r <= worksheet.rowCount; r++) {
       const row = worksheet.getRow(r);
       const rawName = row.getCell(1).value;
-      if (!rawName && !row.getCell(2).value) {
+      const rawStart = row.getCell(2).value;
+      const rawEnd = row.getCell(3).value;
+
+      if (!rawName && !rawStart) {
+        continue;
+      }
+
+      const name = String(rawName || '').trim();
+      const lowerName = name.toLowerCase();
+
+      // Skip instruction, subtitle, or repeated header rows
+      if (
+        lowerName.startsWith('vui lòng đọc') ||
+        lowerName.includes('ngày xuất:') ||
+        lowerName.startsWith('tên sự kiện') ||
+        lowerName.includes('mẫu nhập lịch') ||
+        lowerName.startsWith('trường mầm non')
+      ) {
         continue;
       }
 
       const rowErrors = [];
-      const name = String(rawName || '').trim();
-      const rawStart = row.getCell(2).value;
-      const rawEnd = row.getCell(3).value;
       const rawTeaching = String(row.getCell(4).value || '').trim();
       const rawGrades = String(row.getCell(5).value || 'Tất cả').trim();
       const description = String(row.getCell(6).value || '').trim();
@@ -165,6 +194,24 @@ export class CalendarImportService {
         }
         if (startDate.getTime() < syStart.getTime() - 86400000 * 30 || endDate.getTime() > syEnd.getTime() + 86400000 * 30) {
           rowErrors.push(`Khoảng thời gian cần nằm trong niên khóa (${formatDateDMY(syStart)} - ${formatDateDMY(syEnd)}).`);
+        }
+
+        // Check for duplicates in DB and within file
+        const dmy = formatDateDMY(startDate);
+        const dupKey = `${lowerName}__${dmy}`;
+
+        const isDbDuplicate = existingHolidays.some(
+          (h) => h.name.toLowerCase() === lowerName && formatDateDMY(h.start_date) === dmy
+        );
+        if (isDbDuplicate) {
+          rowErrors.push(`Sự kiện/ngày nghỉ "${name}" (${dmy}) đã tồn tại trong năm học.`);
+        }
+
+        if (seenInFile.has(dupKey)) {
+          const prevRow = seenInFile.get(dupKey);
+          rowErrors.push(`Bị trùng lặp với dòng ${prevRow} trong file tải lên.`);
+        } else {
+          seenInFile.set(dupKey, r);
         }
       }
 
@@ -252,6 +299,26 @@ export class CalendarImportService {
       try {
         const start = item.startDateRaw ? new Date(item.startDateRaw) : new Date(item.startDate);
         const end = item.endDateRaw ? new Date(item.endDateRaw) : new Date(item.endDate);
+
+        // Check if identical event already exists in DB
+        const existing = await prisma.schoolHoliday.findFirst({
+          where: {
+            school_year_id: schoolYear.school_year_id,
+            name: { equals: item.name.trim(), mode: 'insensitive' },
+            start_date: start,
+            deleted_at: null,
+          },
+        });
+
+        if (existing) {
+          results.failedCount++;
+          results.errors.push({
+            rowNumber: item.rowNumber,
+            name: item.name,
+            reasons: [`Sự kiện "${item.name}" đã tồn tại trong năm học.`],
+          });
+          continue;
+        }
 
         await prisma.schoolHoliday.create({
           data: {
