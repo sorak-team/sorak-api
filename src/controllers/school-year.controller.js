@@ -90,7 +90,7 @@ export const updateHoliday = async (req, res) => {
 
 export const deleteHoliday = async (req, res) => {
   const { id, holidayId } = req.params;
-  const result = await schoolYearService.deleteHoliday(id, holidayId);
+  const result = await schoolYearService.deleteHoliday(id, holidayId, req.user?.sub);
   res.success(result);
 };
 

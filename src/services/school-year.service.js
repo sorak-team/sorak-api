@@ -21,7 +21,261 @@ async function resolveAccountBigIntId(userIdentifier) {
   return acc?.account_id ? BigInt(acc.account_id) : 1n;
 }
 
+export function getValidMakeupSaturdays(dateInput) {
+  let y, m, dt;
+  if (typeof dateInput === 'string' && dateInput.includes('-')) {
+    const parts = dateInput.split('T')[0].split('-').map(Number);
+    y = parts[0];
+    m = parts[1] - 1;
+    dt = parts[2];
+  } else {
+    const d = new Date(dateInput);
+    y = d.getUTCFullYear();
+    m = d.getUTCMonth();
+    dt = d.getUTCDate();
+  }
+  const dateObj = new Date(Date.UTC(y, m, dt));
+  const day = dateObj.getUTCDay(); // 0: Sunday, 1: Mon, ..., 6: Sat
+  const daysUntilCurrentSat = day === 0 ? -1 : 6 - day;
+
+  const currentSat = new Date(Date.UTC(y, m, dt + daysUntilCurrentSat));
+  const nextSat = new Date(Date.UTC(y, m, dt + daysUntilCurrentSat + 7));
+
+  const toIso = (d) => {
+    const yStr = d.getUTCFullYear();
+    const mStr = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dStr = String(d.getUTCDate()).padStart(2, '0');
+    return `${yStr}-${mStr}-${dStr}`;
+  };
+
+  return [toIso(currentSat), toIso(nextSat)];
+}
+
+async function copyActivitiesToMakeupDay({ schoolYearId, originalDate, makeupDate, targetGrades, creatorAccountId }) {
+  const sDateStr = typeof originalDate === 'string' ? originalDate.slice(0, 10) : originalDate.toISOString().slice(0, 10);
+  const sDateStart = new Date(`${sDateStr}T00:00:00.000Z`);
+  const sDateEnd = new Date(`${sDateStr}T23:59:59.999Z`);
+
+  const mDateStr = typeof makeupDate === 'string' ? makeupDate.slice(0, 10) : makeupDate.toISOString().slice(0, 10);
+  const mDateStart = new Date(`${mDateStr}T00:00:00.000Z`);
+  const mDateEnd = new Date(`${mDateStr}T23:59:59.999Z`);
+  const mDate = mDateStart;
+
+  const classWhere = {
+    school_year_id: schoolYearId,
+    deleted_at: null,
+  };
+  if (Array.isArray(targetGrades) && targetGrades.length > 0) {
+    classWhere.age_group = { in: targetGrades };
+  }
+  const affectedClasses = await prisma.class.findMany({
+    where: classWhere,
+    select: { class_id: true, age_group: true },
+  });
+  if (affectedClasses.length === 0) return 0;
+  const classIds = affectedClasses.map((c) => c.class_id);
+
+  const originalActs = await prisma.subThemeActivity.findMany({
+    where: {
+      class_id: { in: classIds },
+      scheduled_date: {
+        gte: sDateStart,
+        lte: sDateEnd,
+      },
+    },
+    include: {
+      activity: true,
+    },
+  });
+
+  if (originalActs.length === 0) return 0;
+
+  const subThemes = await prisma.subTheme.findMany({
+    where: {
+      theme: { school_year_id: schoolYearId },
+      start_date: { lte: mDateEnd },
+      end_date: { gte: mDateStart },
+      deleted_at: null,
+    },
+    include: {
+      theme: { select: { age_group: true } },
+    },
+  });
+  const subThemeByAgeGroup = new Map();
+  subThemes.forEach((st) => {
+    if (st.theme?.age_group) {
+      subThemeByAgeGroup.set(st.theme.age_group, st.sub_theme_id);
+    }
+  });
+
+  const classAgeGroupMap = new Map();
+  affectedClasses.forEach((c) => {
+    classAgeGroupMap.set(c.class_id.toString(), c.age_group);
+  });
+
+  await prisma.subThemeActivity.deleteMany({
+    where: {
+      class_id: { in: classIds },
+      scheduled_date: {
+        gte: mDateStart,
+        lte: mDateEnd,
+      },
+    },
+  });
+
+  const fmtVN = (d) => `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  const copyPayload = originalActs.map((act) => {
+    const ageGroup = classAgeGroupMap.get(act.class_id.toString());
+    const targetSubThemeId = (ageGroup && subThemeByAgeGroup.get(ageGroup)) || act.sub_theme_id;
+
+    return {
+      class_id: act.class_id,
+      sub_theme_id: targetSubThemeId,
+      activity_id: act.activity_id,
+      routine_slot: act.routine_slot,
+      order_index: act.order_index,
+      scheduled_date: mDate,
+      day_of_week: 'SATURDAY',
+      status: act.status,
+      notes: act.notes
+        ? `[Dạy bù ngày ${fmtVN(sDateStart)}] ${act.notes}`
+        : `[Dạy bù ngày ${fmtVN(sDateStart)}]`,
+      created_by: creatorAccountId ? BigInt(creatorAccountId) : act.created_by,
+    };
+  });
+
+  await prisma.subThemeActivity.createMany({
+    data: copyPayload,
+  });
+
+  return copyPayload.length;
+}
+
+function formatVnDate(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  const day = String(dt.getUTCDate ? dt.getUTCDate() : dt.getDate()).padStart(2, '0');
+  const month = String((dt.getUTCMonth ? dt.getUTCMonth() : dt.getMonth()) + 1).padStart(2, '0');
+  const year = dt.getUTCFullYear ? dt.getUTCFullYear() : dt.getFullYear();
+  return `${day}/${month}/${year}`;
+}
+
+function formatVnDayOfWeek(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  const dow = dt.getUTCDay !== undefined ? dt.getUTCDay() : dt.getDay();
+  const dows = ['Chủ Nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
+  return dows[dow] || '';
+}
+
+async function getAffectedRecipients(schoolYearId, targetGrades) {
+  const teacherIdSet = new Set();
+  const parentIdSet = new Set();
+
+  const isAllGrades = !Array.isArray(targetGrades) || targetGrades.length === 0;
+
+  if (isAllGrades) {
+    const [teachers, parents] = await Promise.all([
+      prisma.account.findMany({
+        where: { role: 'TEACHER_GV', is_active: true, deleted_at: null },
+        select: { account_id: true },
+      }),
+      prisma.account.findMany({
+        where: { role: 'PARENT_PH', is_active: true, deleted_at: null },
+        select: { account_id: true },
+      }),
+    ]);
+    teachers.forEach((t) => teacherIdSet.add(t.account_id));
+    parents.forEach((p) => parentIdSet.add(p.account_id));
+  } else {
+    const classes = await prisma.class.findMany({
+      where: {
+        school_year_id: BigInt(schoolYearId),
+        age_group: { in: targetGrades },
+        deleted_at: null,
+      },
+      select: { class_id: true },
+    });
+    const classIds = classes.map((c) => c.class_id);
+
+    if (classIds.length > 0) {
+      const [teacherClasses, enrollments] = await Promise.all([
+        prisma.teacherClass.findMany({
+          where: {
+            class_id: { in: classIds },
+            left_at: null,
+            teacher: {
+              deleted_at: null,
+              account: { is_active: true, deleted_at: null },
+            },
+          },
+          include: {
+            teacher: { select: { account_id: true } },
+          },
+        }),
+        prisma.studentEnrollment.findMany({
+          where: {
+            class_id: { in: classIds },
+            status: 'ENROLLED',
+            left_at: null,
+            student: {
+              deleted_at: null,
+              account: { is_active: true, deleted_at: null },
+            },
+          },
+          include: {
+            student: { select: { account_id: true } },
+          },
+        }),
+      ]);
+
+      teacherClasses.forEach((tc) => {
+        if (tc.teacher?.account_id) teacherIdSet.add(tc.teacher.account_id);
+      });
+      enrollments.forEach((e) => {
+        if (e.student?.account_id) parentIdSet.add(e.student.account_id);
+      });
+    }
+  }
+
+  return {
+    teacherAccountIds: Array.from(teacherIdSet),
+    parentAccountIds: Array.from(parentIdSet),
+  };
+}
+
 export class SchoolYearService {
+  async _resolveSchoolYear(id) {
+    if (!id) return null;
+    const strId = String(id).trim();
+    let item = null;
+    if (/^\d+$/.test(strId)) {
+      item = await prisma.schoolYear.findFirst({
+        where: { school_year_id: BigInt(strId), deleted_at: null },
+      });
+    } else if (strId.toLowerCase() === 'active') {
+      item = await prisma.schoolYear.findFirst({
+        where: { status: 'ACTIVE', deleted_at: null },
+      });
+    } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(strId)) {
+      item = await prisma.schoolYear.findFirst({
+        where: { public_id: strId, deleted_at: null },
+      });
+    } else {
+      const normalizedYear = strId.replace('-', '–');
+      item = await prisma.schoolYear.findFirst({
+        where: {
+          OR: [
+            { public_id: strId },
+            { name: { contains: strId, mode: 'insensitive' } },
+            { name: { contains: normalizedYear, mode: 'insensitive' } },
+          ],
+          deleted_at: null,
+        },
+      });
+    }
+    return item;
+  }
 
   async listSchoolYears({ page = 1, limit = 20, search, status, sortBy = 'newest' }) {
       const skip = (Math.max(1, page) - 1) * limit;
@@ -1017,7 +1271,11 @@ export class SchoolYearService {
     }
 
   async listHolidays(id, { month, year } = {}) {
-      const bigId = BigInt(id);
+      const schoolYear = await this._resolveSchoolYear(id);
+      if (!schoolYear) {
+        throw new NotFound('Không tìm thấy năm học');
+      }
+      const bigId = schoolYear.school_year_id;
       let holidays = await prisma.schoolHoliday.findMany({
         where: {
           school_year_id: bigId,
@@ -1085,6 +1343,7 @@ export class SchoolYearService {
             name: h.name,
             startDate: h.start_date.toISOString().split('T')[0],
             endDate: h.end_date.toISOString().split('T')[0],
+            makeupDate: h.makeup_date ? h.makeup_date.toISOString().split('T')[0] : null,
             displayDate: new Date(h.start_date).toLocaleDateString('vi-VN'),
             isTeachingAllowed: h.is_teaching_allowed,
             type: itemType,
@@ -1098,9 +1357,11 @@ export class SchoolYearService {
     }
 
   async createHoliday(id, accountId, data) {
-      const bigId = BigInt(id);
+      const schoolYear = await this._resolveSchoolYear(id);
+      if (!schoolYear) throw NotFound('Năm học không tồn tại.');
+      const bigId = schoolYear.school_year_id;
       const creatorId = await resolveAccountBigIntId(accountId);
-      const { name, startDate, endDate, isTeachingAllowed = false, description, scope, targetGrades, type } = data;
+      const { name, startDate, endDate, isTeachingAllowed = false, description, scope, targetGrades, type, makeupDate, copyActivities } = data;
   
       if (!name?.trim()) throw BadRequest('Vui lòng nhập tên ngày nghỉ hoặc sự kiện.');
       if (!startDate || !endDate) throw BadRequest('Vui lòng chọn ngày bắt đầu và kết thúc.');
@@ -1108,11 +1369,6 @@ export class SchoolYearService {
       const sDate = new Date(startDate);
       const eDate = new Date(endDate);
       if (eDate < sDate) throw BadRequest('Ngày kết thúc không được trước ngày bắt đầu.');
-
-      const schoolYear = await prisma.schoolYear.findUnique({
-        where: { school_year_id: bigId },
-      });
-      if (!schoolYear) throw NotFound('Năm học không tồn tại.');
 
       const syStart = new Date(schoolYear.start_date);
       const syEnd = new Date(schoolYear.end_date);
@@ -1125,6 +1381,41 @@ export class SchoolYearService {
           `Thời gian sự kiện/ngày nghỉ (${fmt(sDate)} - ${fmt(eDate)}) phải nằm trong khung thời gian của năm học ${schoolYear.name} (${fmt(syStart)} - ${fmt(syEnd)}).`,
         );
       }
+
+      // Khi năm học / học kỳ 1 đã bắt đầu: Ban Giám Hiệu chỉ có thể tạo ngày nghỉ cho ngày hôm sau trở đi
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      const isSchoolYearStarted = now >= syStart;
+      if (isSchoolYearStarted && !Boolean(isTeachingAllowed)) {
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        if (sDate < tomorrow) {
+          const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+          throw BadRequest(
+            `Năm học đã bắt đầu. Ban Giám Hiệu chỉ có thể tạo ngày nghỉ từ ngày mai (${fmt(tomorrow)}) trở đi.`,
+          );
+        }
+      }
+
+      let makeupDateObj = null;
+      let effectiveTeachingAllowed = Boolean(isTeachingAllowed);
+      if (makeupDate) {
+        const sStr = sDate.toISOString().split('T')[0];
+        const eStr = eDate.toISOString().split('T')[0];
+        if (sStr !== eStr) {
+          throw BadRequest('Chỉ được thiết lập ngày dạy bù cho ngày nghỉ hoặc sự kiện 1 ngày.');
+        }
+        // Khi thiết lập ngày dạy bù, ngày sự kiện/ngày nghỉ gốc sẽ không dạy (lịch dạy dời sang ngày bù)
+        effectiveTeachingAllowed = false;
+        const validSaturdays = getValidMakeupSaturdays(sStr);
+        const mStr = new Date(makeupDate).toISOString().split('T')[0];
+        if (!validSaturdays.includes(mStr)) {
+          throw BadRequest(
+            `Ngày dạy bù không hợp lệ. Chỉ được chọn Thứ Bảy tuần này (${validSaturdays[0]}) hoặc Thứ Bảy tuần sau (${validSaturdays[1]}).`
+          );
+        }
+        makeupDateObj = new Date(mStr);
+      }
   
       let finalDesc = description?.trim() || '';
       if (type === 'EVENT' && !finalDesc.includes('[SỰ KIỆN]')) {
@@ -1133,6 +1424,20 @@ export class SchoolYearService {
       if (scope && scope !== 'Toàn trường' && !finalDesc.startsWith(`[${scope}]`)) {
         finalDesc = `[${scope}] ${finalDesc}`.trim();
       }
+
+      // Check for duplicate holiday/event with same name and start_date in this school year
+      const duplicate = await prisma.schoolHoliday.findFirst({
+        where: {
+          school_year_id: bigId,
+          name: { equals: name.trim(), mode: 'insensitive' },
+          start_date: sDate,
+          deleted_at: null,
+        },
+      });
+      if (duplicate) {
+        const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+        throw BadRequest(`Sự kiện / ngày nghỉ "${name.trim()}" vào ngày ${fmt(sDate)} đã tồn tại trong năm học.`);
+      }
   
       const holiday = await prisma.schoolHoliday.create({
         data: {
@@ -1140,48 +1445,130 @@ export class SchoolYearService {
           name: name.trim(),
           start_date: sDate,
           end_date: eDate,
-          is_teaching_allowed: Boolean(isTeachingAllowed),
+          is_teaching_allowed: effectiveTeachingAllowed,
           target_grades: Array.isArray(targetGrades) ? targetGrades : [],
           description: finalDesc || null,
+          makeup_date: makeupDateObj,
           created_by: creatorId,
         },
       });
 
-      // Notification 9: Create Academic Calendar (BGH thêm ngày nghỉ/sự kiện quan trọng)
+      let copiedCount = 0;
+      if (makeupDateObj && copyActivities !== false) {
+        try {
+          copiedCount = await copyActivitiesToMakeupDay({
+            schoolYearId: bigId,
+            originalDate: sDate,
+            makeupDate: makeupDateObj,
+            targetGrades: holiday.target_grades,
+            creatorAccountId: creatorId,
+          });
+        } catch (copyErr) {
+          logger.error({ error: copyErr.message }, 'Failed to copy activities to makeup day');
+        }
+      }
+
+      // Notification: Gửi thông báo đến Giáo viên và Phụ huynh khi thêm ngày nghỉ / sự kiện
       (async () => {
         try {
-          const teachers = await prisma.account.findMany({
-            where: { role: 'TEACHER_GV', is_active: true, deleted_at: null },
-            select: { account_id: true },
-          });
-          const sStr = sDate.toLocaleDateString('vi-VN');
-          const eStr = eDate.toLocaleDateString('vi-VN');
-          const dateText = sStr === eStr ? `ngày ${sStr}` : `từ ${sStr} đến ${eStr}`;
-          await notificationService.emitSystemNotification({
-            recipientAccountIds: teachers.map((t) => t.account_id),
-            creatorAccountId: accountId,
-            type: 'SCHEDULE_WEATHER_CHANGE',
-            title: `Lịch trường mới: ${holiday.name}`,
-            body: `Ban Giám Hiệu đã thêm sự kiện/ngày nghỉ "${holiday.name}" (${dateText}).`,
-            data: {
-              type: 'ACADEMIC_CALENDAR_CREATED',
-              holidayId: holiday.public_id,
-            },
-          });
+          const { teacherAccountIds, parentAccountIds } = await getAffectedRecipients(bigId, holiday.target_grades);
+          const sDateFormatted = formatVnDate(sDate);
+          const eDateFormatted = formatVnDate(eDate);
+          const sDayVn = formatVnDayOfWeek(sDate);
+          const isSameDay = sDate.toISOString().split('T')[0] === eDate.toISOString().split('T')[0];
+          const dateRangeText = isSameDay ? `${sDayVn} (${sDateFormatted})` : `từ ${sDateFormatted} đến ${eDateFormatted}`;
+
+          if (makeupDateObj) {
+            const mDateFormatted = formatVnDate(makeupDateObj);
+            const mDayVn = formatVnDayOfWeek(makeupDateObj);
+
+            // 1. Gửi cho Giáo viên
+            if (teacherAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: teacherAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `📅 Lịch dạy bù: ${holiday.name}`,
+                body: `Ban Giám Hiệu đã bố trí ngày dạy bù: ${sDayVn} (${sDateFormatted}) được dời sang ${mDayVn} (${mDateFormatted}). Toàn bộ kế hoạch hoạt động giáo dục ngày ${sDateFormatted} đã được tự động chuyển sang ngày dạy bù. Thầy/Cô vui lòng chuẩn bị giáo án và điểm danh đầy đủ vào Thứ Bảy.`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_CREATED',
+                  holidayId: holiday.public_id,
+                  originalDate: sDate.toISOString().split('T')[0],
+                  makeupDate: makeupDateObj.toISOString().split('T')[0],
+                  targetRole: 'TEACHER',
+                },
+              });
+            }
+
+            // 2. Gửi cho Phụ huynh
+            if (parentAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: parentAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `📢 Thông báo nghỉ học & lịch học bù`,
+                body: `Kính gửi Phụ huynh: Nhà trường xin thông báo các bé được nghỉ vào ${sDayVn} (${sDateFormatted}) nhân dịp ${holiday.name}. Lịch học của bé sẽ được học bù vào ${mDayVn} (${mDateFormatted}). Kính mong quý phụ huynh lưu ý đưa đón bé đúng giờ!`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_CREATED',
+                  holidayId: holiday.public_id,
+                  originalDate: sDate.toISOString().split('T')[0],
+                  makeupDate: makeupDateObj.toISOString().split('T')[0],
+                  targetRole: 'PARENT',
+                },
+              });
+            }
+          } else {
+            // Ngày nghỉ / Sự kiện thông thường (không học bù)
+            if (teacherAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: teacherAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `📅 Lịch trường: ${holiday.name}`,
+                body: `Ban Giám Hiệu thông báo lịch nghỉ ${holiday.name} ${dateRangeText}. Lịch giảng dạy trong các ngày này đã được khóa. Chúc Thầy/Cô kỳ nghỉ vui vẻ!`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_CREATED',
+                  holidayId: holiday.public_id,
+                  targetRole: 'TEACHER',
+                },
+              });
+            }
+
+            if (parentAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: parentAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `📢 Thông báo nghỉ học: ${holiday.name}`,
+                body: `Kính gửi Phụ huynh: Nhà trường xin thông báo các bé được nghỉ học ${dateRangeText} nhân dịp ${holiday.name}. Kính chúc các bé và gia đình kỳ nghỉ nhiều niềm vui!`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_CREATED',
+                  holidayId: holiday.public_id,
+                  targetRole: 'PARENT',
+                },
+              });
+            }
+          }
         } catch (e) {
-          logger.warn({ error: e.message }, 'Failed to emit notification for holiday creation');
+          logger.warn({ error: e.message }, 'Failed to emit notifications for holiday creation');
         }
       })();
   
       return {
         id: holiday.public_id,
         name: holiday.name,
-        message: 'Thêm ngày nghỉ / sự kiện thành công!',
+        makeupDate: holiday.makeup_date ? holiday.makeup_date.toISOString().split('T')[0] : null,
+        copiedActivitiesCount: copiedCount,
+        message: copiedCount > 0
+          ? `Thêm ngày nghỉ thành công! Đã sao chép ${copiedCount} hoạt động giáo dục sang ngày dạy bù.`
+          : 'Thêm ngày nghỉ / sự kiện thành công!',
       };
     }
 
   async importHolidays(id, accountId, items) {
-      const bigId = BigInt(id);
+      const schoolYear = await this._resolveSchoolYear(id);
+      if (!schoolYear) throw NotFound('Năm học không tồn tại.');
+      const bigId = schoolYear.school_year_id;
       const creatorId = await resolveAccountBigIntId(accountId);
       if (!Array.isArray(items) || items.length === 0) {
         throw BadRequest('Danh sách ngày nghỉ để import không hợp lệ.');
@@ -1200,6 +1587,17 @@ export class SchoolYearService {
         if (item.scope && item.scope !== 'Toàn trường' && !desc.startsWith(`[${item.scope}]`)) {
           desc = `[${item.scope}] ${desc}`.trim();
         }
+
+        // Skip if identical holiday already exists in this school year
+        const dup = await prisma.schoolHoliday.findFirst({
+          where: {
+            school_year_id: bigId,
+            name: { equals: item.name.trim(), mode: 'insensitive' },
+            start_date: sDate,
+            deleted_at: null,
+          },
+        });
+        if (dup) continue;
 
         const created = await prisma.schoolHoliday.create({
           data: {
@@ -1224,7 +1622,9 @@ export class SchoolYearService {
     }
 
   async updateHoliday(id, holidayId, accountId, data) {
-      const bigId = BigInt(id);
+      const schoolYear = await this._resolveSchoolYear(id);
+      if (!schoolYear) throw NotFound('Năm học không tồn tại.');
+      const bigId = schoolYear.school_year_id;
       const existing = await prisma.schoolHoliday.findFirst({
         where: {
           school_year_id: bigId,
@@ -1247,6 +1647,30 @@ export class SchoolYearService {
       if (data.isTeachingAllowed !== undefined) updateData.is_teaching_allowed = Boolean(data.isTeachingAllowed);
       if (data.targetGrades !== undefined) {
         updateData.target_grades = Array.isArray(data.targetGrades) ? data.targetGrades : [];
+      }
+      if (data.makeupDate !== undefined) {
+        if (!data.makeupDate) {
+          updateData.makeup_date = null;
+        } else {
+          const sDate = updateData.start_date || existing.start_date;
+          const eDate = updateData.end_date || existing.end_date;
+
+          const sStr = sDate.toISOString().split('T')[0];
+          const eStr = eDate.toISOString().split('T')[0];
+          if (sStr !== eStr) {
+            throw BadRequest('Chỉ được thiết lập ngày dạy bù cho ngày nghỉ hoặc sự kiện 1 ngày.');
+          }
+          // Khi thiết lập ngày dạy bù, ngày sự kiện/ngày nghỉ gốc sẽ không dạy (lịch dạy dời sang ngày bù)
+          updateData.is_teaching_allowed = false;
+          const validSaturdays = getValidMakeupSaturdays(sStr);
+          const mStr = new Date(data.makeupDate).toISOString().split('T')[0];
+          if (!validSaturdays.includes(mStr)) {
+            throw BadRequest(
+              `Ngày dạy bù không hợp lệ. Chỉ được chọn Thứ Bảy tuần này (${validSaturdays[0]}) hoặc Thứ Bảy tuần sau (${validSaturdays[1]}).`
+            );
+          }
+          updateData.makeup_date = new Date(mStr);
+        }
       }
       if (data.description !== undefined || data.scope !== undefined || data.type !== undefined) {
         let desc = data.description !== undefined ? (data.description ? data.description.trim() : '') : (existing.description || '');
@@ -1276,24 +1700,136 @@ export class SchoolYearService {
         data: updateData,
       });
 
-      // Notification 10: Update Academic Calendar (Ngày nghỉ, sự kiện thay đổi)
+      let copiedCount = 0;
+      const effectiveMakeupDate = updateData.makeup_date !== undefined ? updateData.makeup_date : existing.makeup_date;
+      if (effectiveMakeupDate && data.copyActivities !== false) {
+        try {
+          copiedCount = await copyActivitiesToMakeupDay({
+            schoolYearId: bigId,
+            originalDate: updateData.start_date || existing.start_date,
+            makeupDate: effectiveMakeupDate,
+            targetGrades: updateData.target_grades || existing.target_grades,
+            creatorAccountId: accountId,
+          });
+        } catch (copyErr) {
+          logger.error({ error: copyErr.message }, 'Failed to copy activities to makeup day');
+        }
+      }
+
+      // Notification: Gửi thông báo đến Giáo viên và Phụ huynh khi cập nhật ngày nghỉ / sự kiện / học bù
       (async () => {
         try {
-          const teachers = await prisma.account.findMany({
-            where: { role: 'TEACHER_GV', is_active: true, deleted_at: null },
-            select: { account_id: true },
-          });
-          await notificationService.emitSystemNotification({
-            recipientAccountIds: teachers.map((t) => t.account_id),
-            creatorAccountId: accountId,
-            type: 'SCHEDULE_WEATHER_CHANGE',
-            title: `Cập nhật lịch trường: ${updated.name}`,
-            body: `Lịch sự kiện/ngày nghỉ "${updated.name}" đã được Ban Giám Hiệu cập nhật.`,
-            data: {
-              type: 'ACADEMIC_CALENDAR_UPDATED',
-              holidayId: updated.public_id,
-            },
-          });
+          const { teacherAccountIds, parentAccountIds } = await getAffectedRecipients(bigId, updated.target_grades);
+          const sDateFormatted = formatVnDate(updated.start_date);
+          const eDateFormatted = formatVnDate(updated.end_date);
+          const sDayVn = formatVnDayOfWeek(updated.start_date);
+          const isSameDay = updated.start_date.toISOString().split('T')[0] === updated.end_date.toISOString().split('T')[0];
+          const dateRangeText = isSameDay ? `${sDayVn} (${sDateFormatted})` : `từ ${sDateFormatted} đến ${eDateFormatted}`;
+
+          const oldMakeupIso = existing.makeup_date ? existing.makeup_date.toISOString().split('T')[0] : null;
+          const newMakeupIso = updated.makeup_date ? updated.makeup_date.toISOString().split('T')[0] : null;
+
+          if (newMakeupIso && newMakeupIso !== oldMakeupIso) {
+            // Trường hợp 1: Có ngày học bù mới hoặc dời ngày học bù
+            const mDateFormatted = formatVnDate(updated.makeup_date);
+            const mDayVn = formatVnDayOfWeek(updated.makeup_date);
+
+            if (teacherAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: teacherAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `🔄 Điều chỉnh lịch dạy bù: ${updated.name}`,
+                body: `Ban Giám Hiệu đã cập nhật lại ngày dạy bù cho ${updated.name} sang ${mDayVn} (${mDateFormatted}). Lịch hoạt động giáo dục đã được đồng bộ lại theo ngày mới.`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_UPDATED',
+                  holidayId: updated.public_id,
+                  makeupDate: newMakeupIso,
+                  targetRole: 'TEACHER',
+                },
+              });
+            }
+
+            if (parentAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: parentAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `🔄 Điều chỉnh lịch học bù`,
+                body: `Kính gửi Phụ huynh: Lịch học bù cho ${updated.name} đã được điều chỉnh sang ${mDayVn} (${mDateFormatted}). Quý phụ huynh vui lòng kiểm tra lại lịch đưa đón bé.`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_UPDATED',
+                  holidayId: updated.public_id,
+                  makeupDate: newMakeupIso,
+                  targetRole: 'PARENT',
+                },
+              });
+            }
+          } else if (oldMakeupIso && !newMakeupIso) {
+            // Trường hợp 2: Hủy ngày học bù đã tạo trước đó
+            const oldMDateFormatted = formatVnDate(existing.makeup_date);
+
+            if (teacherAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: teacherAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `⚠️ Hủy lịch dạy bù: ${updated.name}`,
+                body: `Ban Giám Hiệu đã hủy lịch dạy bù vào Thứ Bảy (${oldMDateFormatted}) cho ${updated.name}. Thời khóa biểu Thứ Bảy đã được đóng lại về trạng thái nghỉ cuối tuần.`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_UPDATED',
+                  holidayId: updated.public_id,
+                  targetRole: 'TEACHER',
+                },
+              });
+            }
+
+            if (parentAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: parentAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `⚠️ Hủy lịch học bù Thứ Bảy`,
+                body: `Nhà trường xin thông báo: Lịch học bù vào Thứ Bảy (${oldMDateFormatted}) cho ${updated.name} đã được hủy bỏ. Các bé nghỉ học cuối tuần bình thường.`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_UPDATED',
+                  holidayId: updated.public_id,
+                  targetRole: 'PARENT',
+                },
+              });
+            }
+          } else {
+            // Trường hợp 3: Cập nhật thông thường
+            if (teacherAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: teacherAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `📅 Cập nhật lịch trường: ${updated.name}`,
+                body: `Ban Giám Hiệu thông báo cập nhật lịch ${updated.name}: ${dateRangeText}. Thầy/Cô vui lòng kiểm tra lại thời khóa biểu.`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_UPDATED',
+                  holidayId: updated.public_id,
+                  targetRole: 'TEACHER',
+                },
+              });
+            }
+
+            if (parentAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: parentAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `📢 Cập nhật lịch: ${updated.name}`,
+                body: `Kính gửi Phụ huynh: Lịch ${updated.name} đã được cập nhật lại: ${dateRangeText}. Quý phụ huynh vui lòng lưu ý thời gian nghỉ của bé.`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_UPDATED',
+                  holidayId: updated.public_id,
+                  targetRole: 'PARENT',
+                },
+              });
+            }
+          }
         } catch (e) {
           logger.warn({ error: e.message }, 'Failed to emit notification for holiday update');
         }
@@ -1302,12 +1838,18 @@ export class SchoolYearService {
       return {
         id: updated.public_id,
         name: updated.name,
-        message: 'Cập nhật ngày nghỉ / sự kiện thành công!',
+        makeupDate: updated.makeup_date ? updated.makeup_date.toISOString().split('T')[0] : null,
+        copiedActivitiesCount: copiedCount,
+        message: copiedCount > 0
+          ? `Cập nhật ngày nghỉ thành công! Đã sao chép ${copiedCount} hoạt động giáo dục sang ngày dạy bù.`
+          : 'Cập nhật ngày nghỉ / sự kiện thành công!',
       };
     }
 
-  async deleteHoliday(id, holidayId) {
-      const bigId = BigInt(id);
+  async deleteHoliday(id, holidayId, accountId = null) {
+      const schoolYear = await this._resolveSchoolYear(id);
+      if (!schoolYear) throw NotFound('Năm học không tồn tại.');
+      const bigId = schoolYear.school_year_id;
       const existing = await prisma.schoolHoliday.findFirst({
         where: {
           school_year_id: bigId,
@@ -1327,6 +1869,80 @@ export class SchoolYearService {
         where: { holiday_id: existing.holiday_id },
         data: { deleted_at: new Date() },
       });
+
+      // Notification: Gửi thông báo đến Giáo viên và Phụ huynh khi xóa ngày nghỉ / sự kiện
+      (async () => {
+        try {
+          const { teacherAccountIds, parentAccountIds } = await getAffectedRecipients(bigId, existing.target_grades);
+          const hasMakeup = Boolean(existing.makeup_date);
+
+          if (hasMakeup) {
+            const mDateFormatted = formatVnDate(existing.makeup_date);
+
+            if (teacherAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: teacherAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `⚠️ Hủy lịch dạy bù: ${existing.name}`,
+                body: `Ban Giám Hiệu đã hủy ngày nghỉ/sự kiện ${existing.name} và lịch dạy bù Thứ Bảy (${mDateFormatted}). Thời khóa biểu đã được khôi phục về trạng thái bình thường.`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_DELETED',
+                  holidayId: existing.public_id,
+                  targetRole: 'TEACHER',
+                },
+              });
+            }
+
+            if (parentAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: parentAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `⚠️ Hủy lịch học bù Thứ Bảy`,
+                body: `Nhà trường xin thông báo: Lịch nghỉ ${existing.name} và lịch học bù Thứ Bảy (${mDateFormatted}) đã được hủy bỏ. Lịch sinh hoạt và học tập của các bé trở lại bình thường.`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_DELETED',
+                  holidayId: existing.public_id,
+                  targetRole: 'PARENT',
+                },
+              });
+            }
+          } else {
+            if (teacherAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: teacherAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `📅 Hủy lịch nghỉ/sự kiện: ${existing.name}`,
+                body: `Ban Giám Hiệu đã hủy ngày nghỉ/sự kiện ${existing.name}. Lịch giảng dạy đã được mở khóa bình thường.`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_DELETED',
+                  holidayId: existing.public_id,
+                  targetRole: 'TEACHER',
+                },
+              });
+            }
+
+            if (parentAccountIds.length > 0) {
+              await notificationService.emitSystemNotification({
+                recipientAccountIds: parentAccountIds,
+                creatorAccountId: accountId,
+                type: 'SCHEDULE_WEATHER_CHANGE',
+                title: `📢 Thông báo thay đổi lịch: ${existing.name}`,
+                body: `Nhà trường xin thông báo: Lịch nghỉ ${existing.name} đã được hủy bỏ. Lịch học của các bé diễn ra bình thường.`,
+                data: {
+                  type: 'ACADEMIC_CALENDAR_DELETED',
+                  holidayId: existing.public_id,
+                  targetRole: 'PARENT',
+                },
+              });
+            }
+          }
+        } catch (e) {
+          logger.warn({ error: e.message }, 'Failed to emit notification for holiday deletion');
+        }
+      })();
   
       return {
         success: true,

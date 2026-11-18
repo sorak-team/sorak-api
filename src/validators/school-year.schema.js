@@ -63,5 +63,7 @@ export const createHolidaySchema = Joi.object({
   scope: Joi.string().allow('', null).optional(),
   targetGrades: Joi.array().items(Joi.string()).default([]),
   description: Joi.string().allow('', null).optional(),
+  makeupDate: Joi.date().iso().allow(null, '').optional(),
+  copyActivities: Joi.boolean().default(true).optional(),
 });
 
