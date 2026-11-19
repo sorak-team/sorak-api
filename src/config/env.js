@@ -62,3 +62,5 @@ export const env = {
     refreshTtl: value.JWT_REFRESH_TTL,
   },
 };
+
+export default env;
