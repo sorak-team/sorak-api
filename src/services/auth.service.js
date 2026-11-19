@@ -6,6 +6,7 @@ import { env } from '../config/env.js';
 import { Unauthorized, Forbidden, BadRequest, NotFound } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
 import { emailService } from './email.service.js';
+import { parentService } from './parent.service.js';
 
 const DUMMY_BCRYPT_HASH = '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQmG6eW6vV7xQyV7e3j1i';
 
@@ -119,7 +120,10 @@ export class AuthService {
       name: profileName,
       fullName: profileName,
       role: account.role,
-      identifier: contactEmail || contactPhone || account.username,
+      identifier:
+        account.role === 'PARENT_PH'
+          ? (account.student?.student_code || account.username)
+          : (contactEmail || contactPhone || account.username),
       email: contactEmail,
       phone: contactPhone,
       avatar: avatarUrl,
@@ -384,11 +388,19 @@ export class AuthService {
 
     if (activeSessions.length >= 3) {
       const tokensToRevoke = activeSessions.slice(0, activeSessions.length - 2);
+      const revokedTokenIds = tokensToRevoke.map((t) => t.token_id);
       await prisma.refreshToken.updateMany({
         where: {
-          token_id: { in: tokensToRevoke.map((t) => t.token_id) },
+          token_id: { in: revokedTokenIds },
         },
         data: { is_revoked: true },
+      });
+      // BE-10: Deactivate device push tokens linked to evicted sessions
+      await prisma.deviceToken.updateMany({
+        where: {
+          session_id: { in: revokedTokenIds },
+        },
+        data: { is_active: false },
       });
     }
 
@@ -422,8 +434,17 @@ export class AuthService {
       : new Date(Date.now() + 15 * 60 * 1000).toISOString();
     const sessionId = String(createdSession.token_id);
 
+    const userPayload = this._formatUser(account, isFirstLogin, isUsingDefaultPassword);
+    if (account.role === 'PARENT_PH' && account.student) {
+      try {
+        userPayload.siblings = await parentService._getSiblingStudents(account.student);
+      } catch (err) {
+        logger.warn({ error: err.message }, 'Failed to load sibling students on login');
+      }
+    }
+
     return {
-      user: this._formatUser(account, isFirstLogin, isUsingDefaultPassword),
+      user: userPayload,
       accessToken,
       refreshToken: rawRefreshToken,
       accessExpiresAt,
@@ -559,11 +580,19 @@ export class AuthService {
 
     if (activeSessions.length >= 3) {
       const tokensToRevoke = activeSessions.slice(0, activeSessions.length - 2);
+      const revokedTokenIds = tokensToRevoke.map((t) => t.token_id);
       await prisma.refreshToken.updateMany({
         where: {
-          token_id: { in: tokensToRevoke.map((t) => t.token_id) },
+          token_id: { in: revokedTokenIds },
         },
         data: { is_revoked: true },
+      });
+      // BE-10: Deactivate device push tokens linked to evicted sessions
+      await prisma.deviceToken.updateMany({
+        where: {
+          session_id: { in: revokedTokenIds },
+        },
+        data: { is_active: false },
       });
     }
 
@@ -596,8 +625,17 @@ export class AuthService {
       : new Date(Date.now() + 15 * 60 * 1000).toISOString();
     const sessionId = String(createdSession.token_id);
 
+    const userPayload = this._formatUser(account, isFirstLogin, !account.password_changed_at);
+    if (account.role === 'PARENT_PH' && account.student) {
+      try {
+        userPayload.siblings = await parentService._getSiblingStudents(account.student);
+      } catch (err) {
+        logger.warn({ error: err.message }, 'Failed to load sibling students on 2FA login');
+      }
+    }
+
     return {
-      user: this._formatUser(account, isFirstLogin, !account.password_changed_at),
+      user: userPayload,
       accessToken,
       refreshToken: rawRefreshToken,
       accessExpiresAt,
@@ -718,9 +756,31 @@ export class AuthService {
       throw BadRequest('Mã OTP không hợp lệ hoặc đã hết hạn.');
     }
 
+    // Rate-limit & vô hiệu hóa OTP sau 5 lần nhập sai (Thread #13, #14)
+    if (activeOtp.attempt_count >= 5) {
+      await prisma.otpVerification.update({
+        where: { otp_id: activeOtp.otp_id },
+        data: { is_used: true },
+      });
+      throw BadRequest('Bạn đã nhập sai mã OTP 5 lần. Mã này đã bị vô hiệu hóa. Vui lòng yêu cầu mã mới.');
+    }
+
     const isMatch = await bcrypt.compare(otp.trim(), activeOtp.otp_hash);
     if (!isMatch) {
-      throw BadRequest('Mã OTP không chính xác. Vui lòng kiểm tra lại.');
+      const nextCount = (activeOtp.attempt_count || 0) + 1;
+      await prisma.otpVerification.update({
+        where: { otp_id: activeOtp.otp_id },
+        data: {
+          attempt_count: nextCount,
+          is_used: nextCount >= 5,
+        },
+      });
+
+      if (nextCount >= 5) {
+        throw BadRequest('Bạn đã nhập sai mã OTP 5 lần. Mã này đã bị vô hiệu hóa. Vui lòng yêu cầu mã mới.');
+      }
+
+      throw BadRequest(`Mã OTP không chính xác. Bạn còn ${5 - nextCount} lần thử.`);
     }
 
     await prisma.otpVerification.update({
@@ -806,6 +866,12 @@ export class AuthService {
     await prisma.refreshToken.updateMany({
       where: { account_id: account.account_id },
       data: { is_revoked: true },
+    });
+
+    // BE-10: Deactivate all device push tokens for this account
+    await prisma.deviceToken.updateMany({
+      where: { account_id: account.account_id },
+      data: { is_active: false },
     });
 
     logger.info({ publicId }, 'Password changed successfully for authenticated user');
@@ -1226,6 +1292,12 @@ export class AuthService {
       data: { is_revoked: true },
     });
 
+    // BE-10: Deactivate all device push tokens for this account
+    await prisma.deviceToken.updateMany({
+      where: { account_id: accountId },
+      data: { is_active: false },
+    });
+
     return {
       message: 'Đặt lại mật khẩu thành công. Vui lòng đăng nhập bằng mật khẩu mới.',
     };
@@ -1276,6 +1348,12 @@ export class AuthService {
       },
     });
 
+    // BE-10: Migrate device push tokens from previous session to rotated session
+    await prisma.deviceToken.updateMany({
+      where: { session_id: existingToken.token_id },
+      data: { session_id: createdSession.token_id },
+    });
+
     // Generate new Access Token
     const newAccessToken = jwt.sign(
       {
@@ -1307,10 +1385,21 @@ export class AuthService {
   async logout({ rawToken }) {
     if (rawToken) {
       const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-      await prisma.refreshToken.updateMany({
+      const token = await prisma.refreshToken.findFirst({
         where: { token_hash: tokenHash },
-        data: { is_revoked: true },
+        select: { token_id: true },
       });
+      if (token) {
+        await prisma.refreshToken.update({
+          where: { token_id: token.token_id },
+          data: { is_revoked: true },
+        });
+        // BE-10: Deactivate device push tokens linked to this session
+        await prisma.deviceToken.updateMany({
+          where: { session_id: token.token_id },
+          data: { is_active: false },
+        });
+      }
     }
 
     return {
@@ -1527,12 +1616,22 @@ export class AuthService {
       throw NotFound('Không tìm thấy tài khoản');
     }
 
+    const targetSessionId = BigInt(sessionId);
+
     await prisma.refreshToken.updateMany({
       where: {
         account_id: account.account_id,
-        token_id: BigInt(sessionId),
+        token_id: targetSessionId,
       },
       data: { is_revoked: true },
+    });
+
+    // BE-10: Deactivate device push tokens linked to this session
+    await prisma.deviceToken.updateMany({
+      where: {
+        session_id: targetSessionId,
+      },
+      data: { is_active: false },
     });
 
     return { message: 'Đã thu hồi phiên đăng nhập thành công' };
@@ -1565,10 +1664,23 @@ export class AuthService {
       whereClause.token_hash = { not: currentHash };
     }
 
+    const sessionsToRevoke = await prisma.refreshToken.findMany({
+      where: whereClause,
+      select: { token_id: true },
+    });
+    const revokedSessionIds = sessionsToRevoke.map((s) => s.token_id);
+
     const result = await prisma.refreshToken.updateMany({
       where: whereClause,
       data: { is_revoked: true },
     });
+
+    if (revokedSessionIds.length > 0) {
+      await prisma.deviceToken.updateMany({
+        where: { session_id: { in: revokedSessionIds } },
+        data: { is_active: false },
+      });
+    }
 
     return {
       message: 'Đã thu hồi tất cả các phiên đăng nhập khác thành công',
@@ -1595,6 +1707,12 @@ export class AuthService {
         is_revoked: false,
       },
       data: { is_revoked: true },
+    });
+
+    // BE-10: Deactivate all device push tokens for this account
+    await prisma.deviceToken.updateMany({
+      where: { account_id: account.account_id },
+      data: { is_active: false },
     });
 
     return {
