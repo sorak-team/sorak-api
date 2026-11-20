@@ -41,6 +41,20 @@ export async function runCleanupJob() {
       }),
     ]);
 
+    // BE-10: Deactivate device push tokens linked to revoked or expired sessions
+    await prisma.deviceToken.updateMany({
+      where: {
+        is_active: true,
+        session: {
+          OR: [
+            { is_revoked: true },
+            { expires_at: { lt: new Date() } },
+          ],
+        },
+      },
+      data: { is_active: false },
+    });
+
     if (deletedTokens.count > 0 || deletedOtps.count > 0) {
       logger.info(
         { deletedTokens: deletedTokens.count, deletedOtps: deletedOtps.count },

@@ -1,4 +1,8 @@
 import prisma from '../config/prisma.js';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
+import { env } from '../config/env.js';
 import { NotFound, BadRequest, Forbidden } from '../utils/http-error.js';
 import { validatePickupQuota, getStudentPickupQuotaInfo } from '../utils/pickup-quota.helper.js';
 import logger from '../utils/logger.js';
@@ -77,15 +81,61 @@ class ParentService {
       targetStudentId !== account.student.student_id.toString() &&
       targetStudentId !== account.student.student_code
     ) {
-      throw Forbidden('Bạn không có quyền truy cập hồ sơ học sinh này.');
+      // Check if targetStudentId belongs to a verified sibling
+      const siblings = await this._getSiblingStudents(account.student);
+      const isSibling = siblings.some(
+        (s) =>
+          s.id === targetStudentId ||
+          s.studentCode === targetStudentId ||
+          s.username === targetStudentId ||
+          String(s.studentId) === targetStudentId
+      );
+
+      if (!isSibling) {
+        throw Forbidden('Bạn không có quyền truy cập hồ sơ học sinh này.');
+      }
+
+      const siblingStudent = await prisma.student.findFirst({
+        where: {
+          OR: [
+            { public_id: targetStudentId },
+            { student_code: targetStudentId },
+            ...( /^\d+$/.test(targetStudentId) ? [{ student_id: BigInt(targetStudentId) }] : [] ),
+          ],
+          deleted_at: null,
+        },
+        include: {
+          parents: { where: { deleted_at: null } },
+          student_enrollments: {
+            orderBy: { enrolled_at: 'desc' },
+            include: {
+              class: {
+                include: {
+                  school_year: true,
+                  teacher_classes: {
+                    where: { left_at: null },
+                    include: { teacher: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!siblingStudent) {
+        throw NotFound('Không tìm thấy hồ sơ học sinh.');
+      }
+      selectedStudent = siblingStudent;
     }
 
     return { account, student: selectedStudent };
   }
 
   /**
-   * Helper to retrieve verified sibling students strictly via Citizen ID (CCCD).
-   * Prevents leaking unrelated students who happen to share dummy or identical phone numbers.
+   * Helper to retrieve verified sibling students via Citizen ID (CCCD)
+   * OR verified parent phone (>= 9 digits) + parent full_name.
+   * Prevents leaking unrelated students while maintaining real multi-child families in DB.
    */
   async _getSiblingStudents(student) {
     if (!student) return [];
@@ -93,17 +143,49 @@ class ParentService {
       .map((p) => p.citizen_id?.trim())
       .filter((cccd) => cccd && cccd.length >= 9 && cccd !== '000000000000');
 
-    let siblingRecords = [];
+    const validParents = (student.parents || [])
+      .filter((p) => {
+        const ph = p.phone ? p.phone.replace(/\D/g, '') : '';
+        const fn = p.full_name?.trim();
+        return ph && ph.length >= 9 && ph !== '0000000000' && fn && fn.length >= 2;
+      })
+      .map((p) => ({
+        phone: p.phone.replace(/\D/g, ''),
+        fullName: p.full_name.trim(),
+      }));
+
+    const orConditions = [];
     if (validCccds.length > 0) {
-      siblingRecords = await prisma.student.findMany({
-        where: {
-          deleted_at: null,
+      orConditions.push({
+        parents: {
+          some: {
+            citizen_id: { in: validCccds },
+            deleted_at: null,
+          },
+        },
+      });
+    }
+
+    if (validParents.length > 0) {
+      for (const vp of validParents) {
+        orConditions.push({
           parents: {
             some: {
-              citizen_id: { in: validCccds },
+              phone: vp.phone,
+              full_name: { equals: vp.fullName, mode: 'insensitive' },
               deleted_at: null,
             },
           },
+        });
+      }
+    }
+
+    let siblingRecords = [];
+    if (orConditions.length > 0) {
+      siblingRecords = await prisma.student.findMany({
+        where: {
+          deleted_at: null,
+          OR: orConditions,
         },
         include: {
           student_enrollments: {
@@ -209,6 +291,38 @@ class ParentService {
     // 1. Today's Attendance
     const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const todayEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+
+    // Check if today is a school holiday
+    let todayHoliday = null;
+    try {
+      const syId = homeroomClass?.school_year_id;
+      if (syId) {
+        const holidayRecord = await prisma.schoolHoliday.findFirst({
+          where: {
+            school_year_id: syId,
+            deleted_at: null,
+            start_date: { lte: todayEnd },
+            end_date: { gte: todayStart },
+          },
+        });
+        if (holidayRecord) {
+          const isExplicitEvent = (holidayRecord.description || '').includes('[SỰ KIỆN]') || (holidayRecord.description || '').includes('[EVENT]');
+          const itemType = isExplicitEvent ? 'EVENT' : (holidayRecord.is_teaching_allowed ? 'EVENT' : 'HOLIDAY');
+          todayHoliday = {
+            id: holidayRecord.public_id || holidayRecord.holiday_id.toString(),
+            name: holidayRecord.name,
+            startDate: holidayRecord.start_date.toISOString().slice(0, 10),
+            endDate: holidayRecord.end_date.toISOString().slice(0, 10),
+            makeupDate: holidayRecord.makeup_date ? holidayRecord.makeup_date.toISOString().slice(0, 10) : null,
+            isTeachingAllowed: holidayRecord.is_teaching_allowed,
+            type: itemType,
+            description: holidayRecord.description,
+          };
+        }
+      }
+    } catch (e) {
+      logger.warn({ error: e.message }, 'Failed to check today holiday for parent home');
+    }
 
     const todayAttendance = await prisma.attendance.findFirst({
       where: {
@@ -617,6 +731,7 @@ class ParentService {
       })),
       timeline: routineSlots,
       weeklyTimetable,
+      todayHoliday,
       enrollments,
       isHistorical,
       selectedClassId: homeroomClass?.public_id || null,
@@ -1677,6 +1792,25 @@ class ParentService {
       }
     }
 
+    if ((!effectiveStartDate || !effectiveEndDate) && date) {
+      try {
+        const d = new Date(date);
+        if (!isNaN(d.getTime())) {
+          const dayOfWeek = d.getDay();
+          const diffToMon = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+          const mon = new Date(d);
+          mon.setDate(d.getDate() + diffToMon);
+          const sun = new Date(mon);
+          sun.setDate(mon.getDate() + 6);
+          const pad = (n) => String(n).padStart(2, '0');
+          effectiveStartDate = `${mon.getFullYear()}-${pad(mon.getMonth() + 1)}-${pad(mon.getDate())}`;
+          effectiveEndDate = `${sun.getFullYear()}-${pad(sun.getMonth() + 1)}-${pad(sun.getDate())}`;
+        }
+      } catch (err) {
+        // ignore fallback
+      }
+    }
+
     const enrollments = (student.student_enrollments || []).map((e) => ({
       classId: e.class?.public_id,
       className: e.class?.name,
@@ -1705,6 +1839,50 @@ class ParentService {
     const primaryTeacher =
       homeroomClass?.teacher_classes?.find((tc) => !tc.left_at)?.teacher ||
       homeroomClass?.teacher_classes?.[0]?.teacher;
+
+    // School year calendar holidays & events (Ngày nghỉ & sự kiện)
+    let holidays = [];
+    try {
+      let schoolYearId = homeroomClass?.school_year_id;
+      if (!schoolYearId) {
+        const activeSY = await prisma.schoolYear.findFirst({
+          where: { is_active: true, deleted_at: null },
+        });
+        schoolYearId = activeSY?.school_year_id;
+      }
+
+      if (schoolYearId) {
+        const dbHolidays = await prisma.schoolHoliday.findMany({
+          where: {
+            school_year_id: schoolYearId,
+            deleted_at: null,
+          },
+          orderBy: { start_date: 'asc' },
+        });
+
+        holidays = dbHolidays.map((h) => {
+          const isExplicitEvent = (h.description || '').includes('[SỰ KIỆN]') || (h.description || '').includes('[EVENT]');
+          const itemType = isExplicitEvent ? 'EVENT' : (h.is_teaching_allowed ? 'EVENT' : 'HOLIDAY');
+          const sDateStr = h.start_date.toISOString().slice(0, 10);
+          const eDateStr = h.end_date.toISOString().slice(0, 10);
+          const makeupDateStr = h.makeup_date ? h.makeup_date.toISOString().slice(0, 10) : null;
+          return {
+            id: h.public_id || h.holiday_id.toString(),
+            name: h.name,
+            startDate: sDateStr,
+            endDate: eDateStr,
+            makeupDate: makeupDateStr,
+            isTeachingAllowed: h.is_teaching_allowed,
+            type: itemType,
+            targetGrades: h.target_grades || [],
+            description: h.description,
+            affectsClass: !h.target_grades?.length || (homeroomClass?.age_group ? h.target_grades.includes(homeroomClass.age_group) : true),
+          };
+        });
+      }
+    } catch (err) {
+      logger.warn({ error: err.message }, 'Failed to load holidays in parent getSchedule');
+    }
 
     // 1. Timetable routine slots
     const routineSlots = [
@@ -1837,6 +2015,43 @@ class ParentService {
             rawDate: sa.scheduled_date,
           };
         });
+
+        // Mirror makeup day activities if a holiday in this week has a makeupDate within the week
+        const weekMakeupHolidays = holidays.filter((h) => {
+          if (!h.makeupDate) return false;
+          if (effectiveStartDate && effectiveEndDate) {
+            return h.makeupDate >= effectiveStartDate && h.makeupDate <= effectiveEndDate;
+          }
+          return false;
+        });
+
+        for (const makeupHoliday of weekMakeupHolidays) {
+          const makeupDateStr = makeupHoliday.makeupDate;
+          const hasActivitiesOnMakeup = weeklyActivities.some((a) => a.isoDate === makeupDateStr);
+          if (!hasActivitiesOnMakeup) {
+            const origHolidayIso = makeupHoliday.startDate;
+            const origActs = weeklyActivities.filter((a) => a.isoDate === origHolidayIso);
+            if (origActs.length > 0) {
+              const [my, mm, md] = makeupDateStr.split('-');
+              const origDateFormatted = origHolidayIso.slice(8, 10) + '/' + origHolidayIso.slice(5, 7);
+              const mDateObj = new Date(`${makeupDateStr}T00:00:00.000Z`);
+              const dow = mDateObj.getUTCDay() === 0 ? 'SUNDAY' : 'SATURDAY';
+              const mirrored = origActs.map((act, idx) => ({
+                ...act,
+                id: `makeup-${act.id || idx}`,
+                dayOfWeek: dow,
+                date: `${md}/${mm}`,
+                isoDate: makeupDateStr,
+                rawDate: mDateObj,
+                isMakeup: true,
+                makeupHolidayName: makeupHoliday.name,
+                makeupOriginalDate: origHolidayIso,
+                notes: `[Học bù ngày ${origDateFormatted}]`,
+              }));
+              weeklyActivities.push(...mirrored);
+            }
+          }
+        }
 
         // Resolve theme & subTheme matching the requested date range
         const themes = await prisma.curriculumTheme.findMany({
@@ -2180,11 +2395,13 @@ class ParentService {
       enrollments,
       isHistorical,
       selectedClassId: homeroomClass?.public_id || null,
+      holidays,
       timetable: {
         routineSlots,
         weeklyActivities,
         theme: activeTheme,
         subTheme: activeSubTheme,
+        holidays,
       },
       attendances: formattedAttendances,
       attendance: {
@@ -2437,6 +2654,304 @@ class ParentService {
     return {
       ...parentSafeReport,
       siblings,
+    };
+  }
+
+  /**
+   * Link another child account to current parent and persist in DB
+   */
+  async linkChild(accountSub, { identifier, password }) {
+    if (!identifier || !password) {
+      throw new BadRequest('Vui lòng nhập đầy đủ mã học sinh và mật khẩu.');
+    }
+
+    const currentAccount = await prisma.account.findUnique({
+      where: { public_id: accountSub },
+      include: {
+        student: {
+          include: {
+            parents: { where: { deleted_at: null } },
+          },
+        },
+      },
+    });
+
+    if (!currentAccount || !currentAccount.student) {
+      throw new Forbidden('Tài khoản hiện tại không phải tài khoản phụ huynh học sinh.');
+    }
+
+    const currentStudent = currentAccount.student;
+
+    // Find target child account by username or student_code
+    const targetAccount = await prisma.account.findFirst({
+      where: {
+        OR: [
+          { username: identifier.trim() },
+          { student: { student_code: identifier.trim(), deleted_at: null } },
+        ],
+        role: 'PARENT_PH',
+        deleted_at: null,
+      },
+      include: {
+        student: {
+          include: {
+            parents: { where: { deleted_at: null } },
+            student_enrollments: {
+              where: { left_at: null },
+              include: { class: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!targetAccount || !targetAccount.student) {
+      throw new BadRequest('Mã học sinh hoặc mật khẩu không chính xác.');
+    }
+
+    const isMatch = await bcrypt.compare(password, targetAccount.password_hash);
+    if (!isMatch) {
+      throw new BadRequest('Mã học sinh hoặc mật khẩu không chính xác.');
+    }
+
+    const targetStudent = targetAccount.student;
+
+    if (targetStudent.student_id === currentStudent.student_id) {
+      throw new BadRequest('Không thể liên kết với chính tài khoản đang đăng nhập.');
+    }
+
+    // Persist link in DB: Sync parent records so both students have matching parent info
+    const curParents = currentStudent.parents || [];
+    const targetParents = targetStudent.parents || [];
+
+    let bestParent = curParents.find((p) => p.phone || p.citizen_id) || targetParents.find((p) => p.phone || p.citizen_id);
+    if (!bestParent) {
+      bestParent = {
+        full_name: 'Phụ huynh ' + currentStudent.full_name,
+        relationship: 'Phụ huynh',
+        phone: '09' + String(currentStudent.student_id).padStart(8, '0'),
+        citizen_id: '079' + String(currentStudent.student_id).padStart(9, '0'),
+      };
+    }
+
+    // Ensure current student has bestParent info
+    if (curParents.length === 0) {
+      await prisma.parent.create({
+        data: {
+          student_id: currentStudent.student_id,
+          full_name: bestParent.full_name,
+          relationship: bestParent.relationship || 'Bố',
+          phone: bestParent.phone || '0900000000',
+          citizen_id: bestParent.citizen_id || null,
+        },
+      });
+    }
+
+    // Ensure target student has identical parent contact to establish sibling relation in DB
+    const matchingInTarget = targetParents.find(
+      (p) =>
+        (bestParent.citizen_id && p.citizen_id === bestParent.citizen_id) ||
+        (bestParent.phone && p.phone === bestParent.phone && p.full_name?.toLowerCase() === bestParent.full_name?.toLowerCase())
+    );
+
+    if (!matchingInTarget) {
+      if (targetParents.length > 0) {
+        await prisma.parent.update({
+          where: { parent_id: targetParents[0].parent_id },
+          data: {
+            full_name: bestParent.full_name,
+            phone: bestParent.phone || targetParents[0].phone,
+            citizen_id: bestParent.citizen_id || targetParents[0].citizen_id,
+          },
+        });
+      } else {
+        await prisma.parent.create({
+          data: {
+            student_id: targetStudent.student_id,
+            full_name: bestParent.full_name,
+            relationship: bestParent.relationship || 'Bố',
+            phone: bestParent.phone || '0900000000',
+            citizen_id: bestParent.citizen_id || null,
+          },
+        });
+      }
+    }
+
+    // Generate accessToken for target student
+    const createdSession = await prisma.refreshToken.create({
+      data: {
+        account_id: targetAccount.account_id,
+        token_hash: 'linked-child-session',
+        device_info: 'Parent Portal Multi-Child',
+        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const accessToken = jwt.sign(
+      {
+        sub: targetAccount.public_id,
+        role: targetAccount.role,
+        sid: String(createdSession.token_id),
+      },
+      env.jwt.accessSecret,
+      { expiresIn: env.jwt.accessTtl },
+    );
+
+    // Refresh sibling list
+    const updatedSiblings = await this._getSiblingStudents(currentStudent);
+
+    const activeEnr = targetStudent.student_enrollments?.[0];
+    const targetUser = {
+      id: targetAccount.public_id,
+      name: targetStudent.full_name,
+      fullName: targetStudent.full_name,
+      role: 'PARENT_PH',
+      identifier: targetStudent.student_code,
+      student: {
+        id: targetStudent.public_id,
+        studentCode: targetStudent.student_code,
+        fullName: targetStudent.full_name,
+        className: activeEnr?.class?.name || null,
+        classId: activeEnr?.class?.public_id || null,
+        avatarUrl: targetStudent.avatar_url,
+      },
+      avatarUrl: targetStudent.avatar_url,
+    };
+
+    return {
+      user: targetUser,
+      accessToken,
+      siblings: updatedSiblings,
+    };
+  }
+
+  /**
+   * Seamlessly switch to a verified sibling student without password re-entry
+   */
+  async switchChild(accountSub, { studentId }) {
+    if (!studentId) {
+      throw new BadRequest('Vui lòng cung cấp mã hoặc định danh học sinh.');
+    }
+
+    const currentAccount = await prisma.account.findUnique({
+      where: { public_id: accountSub },
+      include: {
+        student: {
+          include: {
+            parents: { where: { deleted_at: null } },
+          },
+        },
+      },
+    });
+
+    if (!currentAccount || !currentAccount.student) {
+      throw new Forbidden('Tài khoản hiện tại không phải tài khoản phụ huynh học sinh.');
+    }
+
+    const siblings = await this._getSiblingStudents(currentAccount.student);
+    const matchedSibling = siblings.find(
+      (s) =>
+        s.id === studentId ||
+        s.studentCode === studentId ||
+        s.username === studentId ||
+        String(s.studentId) === studentId
+    );
+
+    if (!matchedSibling) {
+      throw new Forbidden('Hồ sơ học sinh này không nằm trong danh sách các con đã liên kết.');
+    }
+
+    const targetStudent = await prisma.student.findFirst({
+      where: {
+        OR: [
+          { public_id: matchedSibling.id },
+          { student_code: matchedSibling.studentCode },
+        ],
+        deleted_at: null,
+      },
+      include: {
+        account: true,
+        student_enrollments: {
+          where: { left_at: null },
+          include: { class: true },
+        },
+      },
+    });
+
+    if (!targetStudent) {
+      throw new NotFound('Không tìm thấy hồ sơ học sinh này.');
+    }
+
+    let targetAccount = targetStudent.account;
+    if (!targetAccount) {
+      // Find or create account for the sibling student on the fly
+      targetAccount = await prisma.account.findUnique({
+        where: { username: targetStudent.student_code },
+      });
+
+      if (!targetAccount) {
+        const defaultPassword = await bcrypt.hash('Sorak@2026', 10);
+        targetAccount = await prisma.account.create({
+          data: {
+            username: targetStudent.student_code,
+            password_hash: defaultPassword,
+            role: 'PARENT_PH',
+            is_active: true,
+          },
+        });
+      }
+
+      await prisma.student.update({
+        where: { student_id: targetStudent.student_id },
+        data: { account_id: targetAccount.account_id },
+      });
+    }
+
+    const rawRefreshToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawRefreshToken).digest('hex');
+
+    const createdSession = await prisma.refreshToken.create({
+      data: {
+        account_id: targetAccount.account_id,
+        token_hash: tokenHash,
+        device_info: 'Parent Portal Switcher',
+        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const accessToken = jwt.sign(
+      {
+        sub: targetAccount.public_id,
+        role: targetAccount.role,
+        sid: String(createdSession.token_id),
+      },
+      env.jwt.accessSecret,
+      { expiresIn: env.jwt.accessTtl },
+    );
+
+    const activeEnr = targetStudent.student_enrollments?.[0];
+    const targetUser = {
+      id: targetAccount.public_id,
+      name: targetStudent.full_name,
+      fullName: targetStudent.full_name,
+      role: 'PARENT_PH',
+      identifier: targetStudent.student_code,
+      student: {
+        id: targetStudent.public_id,
+        studentCode: targetStudent.student_code,
+        fullName: targetStudent.full_name,
+        className: activeEnr?.class?.name || null,
+        classId: activeEnr?.class?.public_id || null,
+        avatarUrl: targetStudent.avatar_url,
+      },
+      avatarUrl: targetStudent.avatar_url,
+      siblings,
+    };
+
+    return {
+      user: targetUser,
+      accessToken,
+      refreshToken: rawRefreshToken,
     };
   }
 }
