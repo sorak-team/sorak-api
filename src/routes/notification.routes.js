@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../utils/async-handler.js';
 import { validate } from '../middlewares/validate.js';
-import { authMiddleware } from '../middlewares/auth.js';
+import { authMiddleware, flexibleDeviceTokenAuth } from '../middlewares/auth.js';
 import { requireRoles } from '../middlewares/roles.js';
 import {
   createBroadcastSchema,
@@ -26,7 +26,10 @@ import {
 
 const router = Router();
 
-// All notification endpoints require authentication
+// --- Mobile Device Push Token Unregistration (supports flexible auth if session is revoked/expired) ---
+router.delete('/device-token', flexibleDeviceTokenAuth, asyncHandler(unregisterDeviceToken));
+
+// All other notification endpoints require strict authentication
 router.use(authMiddleware);
 
 // --- User Recipient Inbox endpoints ---
@@ -36,7 +39,6 @@ router.patch('/:id/read', asyncHandler(markAsRead));
 
 // --- Mobile Device Push Token Management ---
 router.post('/device-token', asyncHandler(registerDeviceToken));
-router.delete('/device-token', asyncHandler(unregisterDeviceToken));
 router.post('/test-push', asyncHandler(testPushNotification));
 
 // --- Principal Broadcast & Automated Notifications Management endpoints ---
