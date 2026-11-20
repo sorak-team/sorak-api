@@ -26,7 +26,7 @@ const AGE_GROUP_ORDER = {
 export class StatisticsExportService {
   /**
    * Xuất Báo cáo Thống kê Toàn trường đa sheet đầy đủ các bảng và chỉ số
-   * Bao gồm: Sĩ số 9 tháng, Kế hoạch GD, Trẻ cần hỗ trợ, Trẻ vượt trội, 5 Lĩnh vực phát triển
+   * Bao gồm: Sĩ số 9 tháng, Kế hoạch GD, Đánh giá mục tiêu theo lớp, Trẻ cần hỗ trợ, Trẻ vượt trội, 5 Lĩnh vực phát triển
    */
   async exportSchoolStatisticsExcel({ schoolYearId }) {
     const data = await statisticsService.getSchoolOverview({ schoolYearId });
@@ -285,13 +285,13 @@ export class StatisticsExportService {
       'TÊN LỚP',
       'KHỐI LỚP',
       'GIÁO VIÊN PHỤ TRÁCH',
-      'TỔNG SỐ KH',
-      'ĐÃ DUYỆT',
+      'TỔNG CHỦ ĐỀ KHUNG',
+      'ĐÃ PHÊ DUYỆT',
       'CHỜ DUYỆT',
       'YÊU CẦU SỬA',
-      'BẢN NHÁP',
-      'TỶ LỆ DUYỆT (%)',
-      'TRẠNG THÁI',
+      'TỶ LỆ HOÀN THÀNH (%)',
+      'CHỦ ĐỀ GẦN NHẤT',
+      'TRẠNG THÁI GẦN NHẤT',
     ];
     applyHeaderStyles(headerRow2, EXCEL_COLORS.PRIMARY_HEADER);
     headerRow2.height = 28;
@@ -306,9 +306,9 @@ export class StatisticsExportService {
     let rowIdx2 = 8;
     sortedPlans.forEach((cls, idx) => {
       const row = sheet2.getRow(rowIdx2++);
-      const totalP = cls.totalPlans || 0;
+      const totalP = cls.totalPlannedThemes || cls.totalPlans || 0;
       const appP = cls.approved || 0;
-      const rate = totalP > 0 ? Math.round((appP / totalP) * 100) : 0;
+      const rate = cls.completionRate !== undefined ? cls.completionRate : totalP > 0 ? Math.round((appP / totalP) * 100) : 0;
 
       row.values = [
         idx + 1,
@@ -319,17 +319,18 @@ export class StatisticsExportService {
         appP,
         cls.pending || 0,
         cls.rejected || 0,
-        cls.draft || 0,
         `${rate}%`,
+        cls.latestThemeName || '—',
         cls.statusText || 'Chưa nộp',
       ];
       row.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
       row.getCell(2).alignment = { horizontal: 'left', vertical: 'middle' };
       row.getCell(3).alignment = { horizontal: 'left', vertical: 'middle' };
       row.getCell(4).alignment = { horizontal: 'left', vertical: 'middle' };
-      for (let c = 5; c <= 10; c++) {
+      for (let c = 5; c <= 9; c++) {
         row.getCell(c).alignment = { horizontal: 'center', vertical: 'middle' };
       }
+      row.getCell(10).alignment = { horizontal: 'left', vertical: 'middle' };
       row.getCell(11).alignment = { horizontal: 'left', vertical: 'middle' };
       row.height = 24;
     });
@@ -377,20 +378,177 @@ export class StatisticsExportService {
     });
 
     // ========================================================================
-    // SHEET 3: TRẺ CẦN HỖ TRỢ (Tách riêng 1 sheet độc lập)
+    // SHEET 3: THỐNG KÊ ĐÁNH GIÁ MỤC TIÊU THEO TỪNG LỚP (View Child Assessment Statistics)
     // ========================================================================
-    const sheet3 = workbook.addWorksheet('Trẻ cần hỗ trợ', {
+    const sheetClassAssess = workbook.addWorksheet('Đánh giá theo lớp', {
       views: [{ showGridLines: true }],
     });
-    addSchoolHeaderBanner(sheet3, {
+    addSchoolHeaderBanner(sheetClassAssess, {
+      title: 'BÁO CÁO THỐNG KÊ ĐÁNH GIÁ MỤC TIÊU GIÁO DỤC THEO TỪNG LỚP',
+      subtitle: `Tổng cộng ${assessmentStatistics?.totalDailyAssessments || 0} lượt đánh giá mục tiêu phát triển đã ghi nhận`,
+      schoolYearName: yearName,
+      totalCols: 12,
+    });
+
+    // Tóm tắt kết quả đánh giá toàn trường trên đầu bảng
+    const assessSummaryRow = sheetClassAssess.getRow(5);
+    assessSummaryRow.values = [
+      'TỔNG LƯỢT ĐÁNH GIÁ',
+      assessmentStatistics?.totalDailyAssessments || 0,
+      'ĐẠT CHUẨN',
+      assessmentStatistics?.achievedCount || 0,
+      'VƯỢT TRỘI',
+      assessmentStatistics?.outstandingCount || 0,
+      'CHƯA ĐẠT',
+      assessmentStatistics?.notAchievedCount || 0,
+      'TỶ LỆ ĐẠT CHUẨN',
+      `${
+        (assessmentStatistics?.totalDailyAssessments || 0) > 0
+          ? Math.round(
+              (((assessmentStatistics?.achievedCount || 0) + (assessmentStatistics?.outstandingCount || 0)) /
+                assessmentStatistics.totalDailyAssessments) *
+                100,
+            )
+          : 0
+      }%`,
+      '',
+      '',
+    ];
+    assessSummaryRow.height = 24;
+    assessSummaryRow.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF0D9488' } };
+    for (let c = 1; c <= 10; c++) {
+      assessSummaryRow.getCell(c).alignment = { horizontal: 'center', vertical: 'middle' };
+      assessSummaryRow.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0FDFA' } };
+      assessSummaryRow.getCell(c).border = {
+        top: { style: 'thin', color: { argb: 'FF99F6E4' } },
+        bottom: { style: 'thin', color: { argb: 'FF99F6E4' } },
+      };
+    }
+
+    const headerRowAssess = sheetClassAssess.getRow(7);
+    headerRowAssess.values = [
+      'STT',
+      'TÊN LỚP',
+      'KHỐI LỚP',
+      'GIÁO VIÊN PHỤ TRÁCH',
+      'SĨ SỐ (HS)',
+      'TIẾN ĐỘ MỤC TIÊU (ĐÃ ĐÁNH / KẾ HOẠCH KHỐI)',
+      'TỔNG LƯỢT ĐÁNH GIÁ',
+      'ĐẠT CHUẨN',
+      'VƯỢT TRỘI',
+      'CHƯA ĐẠT',
+      'TỶ LỆ ĐẠT CHUẨN (%)',
+    ];
+    applyHeaderStyles(headerRowAssess, '0D9488'); // Teal Header
+    headerRowAssess.height = 28;
+
+    const sortedAssessmentClasses = [...(assessmentStatistics?.byClass || [])].sort((a, b) => {
+      const rankA = AGE_GROUP_ORDER[a.ageGroup] || 99;
+      const rankB = AGE_GROUP_ORDER[b.ageGroup] || 99;
+      if (rankA !== rankB) return rankA - rankB;
+      return (a.className || '').localeCompare(b.className || '', 'vi', { numeric: true });
+    });
+
+    let rowIdxAssess = 8;
+    let sumTotalAss = 0;
+    let sumAchievedAss = 0;
+    let sumOutAss = 0;
+    let sumNotAchievedAss = 0;
+
+    sortedAssessmentClasses.forEach((cls, idx) => {
+      const row = sheetClassAssess.getRow(rowIdxAssess++);
+      sumTotalAss += cls.totalAssessments || 0;
+      sumAchievedAss += cls.achievedCount || 0;
+      sumOutAss += cls.outstandingCount || 0;
+      sumNotAchievedAss += cls.notAchievedCount || 0;
+
+      const goalProgressStr =
+        cls.plannedGoalsCount > 0
+          ? `${cls.assessedGoalsCount || 0}/${cls.plannedGoalsCount} MT (${cls.goalCoverageRate || 0}%)`
+          : `${cls.assessedGoalsCount || 0} MT`;
+
+      row.values = [
+        idx + 1,
+        cls.className,
+        AGE_GROUP_NAMES[cls.ageGroup] || cls.ageGroup || '',
+        cls.teacherName || 'Chưa phân công giáo viên',
+        cls.totalStudents || 0,
+        goalProgressStr,
+        cls.totalAssessments || 0,
+        cls.achievedCount || 0,
+        cls.outstandingCount || 0,
+        cls.notAchievedCount || 0,
+        cls.totalAssessments > 0 ? `${cls.passRate || 0}%` : '-',
+      ];
+      row.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+      row.getCell(2).alignment = { horizontal: 'left', vertical: 'middle' };
+      row.getCell(3).alignment = { horizontal: 'left', vertical: 'middle' };
+      row.getCell(4).alignment = { horizontal: 'left', vertical: 'middle' };
+      for (let c = 5; c <= 11; c++) {
+        row.getCell(c).alignment = { horizontal: 'center', vertical: 'middle' };
+      }
+      row.height = 24;
+    });
+
+    // Hàng tổng cộng đánh giá toàn trường
+    const totalAssessRow = sheetClassAssess.getRow(rowIdxAssess++);
+    const totalPass = sumAchievedAss + sumOutAss;
+    const overallPassRate = sumTotalAss > 0 ? Math.round((totalPass / sumTotalAss) * 100) : 0;
+    totalAssessRow.values = [
+      '',
+      'TỔNG CỘNG TOÀN TRƯỜNG',
+      '',
+      '',
+      summary?.totalStudents || 0,
+      '',
+      sumTotalAss,
+      sumAchievedAss,
+      sumOutAss,
+      sumNotAchievedAss,
+      `${overallPassRate}%`,
+    ];
+    sheetClassAssess.mergeCells(rowIdxAssess - 1, 2, rowIdxAssess - 1, 4);
+    totalAssessRow.height = 26;
+    totalAssessRow.font = { name: 'Segoe UI', size: 10.5, bold: true, color: { argb: 'FF0D9488' } };
+    totalAssessRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0FDFA' } };
+    for (let c = 1; c <= 11; c++) {
+      totalAssessRow.getCell(c).alignment = { horizontal: c <= 4 ? 'left' : 'center', vertical: 'middle' };
+      totalAssessRow.getCell(c).border = {
+        top: { style: 'thin', color: { argb: 'FF5EEAD4' } },
+        bottom: { style: 'thin', color: { argb: 'FF5EEAD4' } },
+      };
+    }
+
+    applyZebraAndBorders(sheetClassAssess, 8, rowIdxAssess - 2);
+    autoFitColumns(sheetClassAssess, {
+      1: 6,
+      2: 18,
+      3: 26,
+      4: 30,
+      5: 14,
+      6: 34,
+      7: 20,
+      8: 14,
+      9: 14,
+      10: 14,
+      11: 18,
+    });
+
+    // ========================================================================
+    // SHEET 4: TRẺ CẦN HỖ TRỢ (Tách riêng 1 sheet độc lập)
+    // ========================================================================
+    const sheet4 = workbook.addWorksheet('Trẻ cần hỗ trợ', {
+      views: [{ showGridLines: true }],
+    });
+    addSchoolHeaderBanner(sheet4, {
       title: 'DANH SÁCH HỌC SINH CẦN HỖ TRỢ PHÁT TRIỂN',
       subtitle: `Tổng cộng ${childrenNeedingSupport?.length || 0} học sinh cần theo dõi và phối hợp phụ huynh can thiệp sớm`,
       schoolYearName: yearName,
       totalCols: 8,
     });
 
-    const headerRow3 = sheet3.getRow(5);
-    headerRow3.values = [
+    const headerRow4 = sheet4.getRow(5);
+    headerRow4.values = [
       'STT',
       'MÃ HỌC SINH',
       'HỌ VÀ TÊN',
@@ -400,20 +558,20 @@ export class StatisticsExportService {
       'CHƯA ĐẠT LIÊN TIẾP',
       'TÌNH TRẠNG ĐÁNH GIÁ & LÝ DO CẦN HỖ TRỢ',
     ];
-    applyHeaderStyles(headerRow3, 'DC2626'); // Red Header
-    headerRow3.height = 28;
+    applyHeaderStyles(headerRow4, 'DC2626'); // Red Header
+    headerRow4.height = 28;
 
-    let rowIdx3 = 6;
+    let rowIdx4 = 6;
     if (!childrenNeedingSupport || childrenNeedingSupport.length === 0) {
-      const emptyRow = sheet3.getRow(rowIdx3++);
+      const emptyRow = sheet4.getRow(rowIdx4++);
       emptyRow.values = ['', '', 'Hiện tại toàn trường không có học sinh nào thuộc nhóm cần hỗ trợ đặc biệt.'];
-      sheet3.mergeCells(rowIdx3 - 1, 3, rowIdx3 - 1, 8);
+      sheet4.mergeCells(rowIdx4 - 1, 3, rowIdx4 - 1, 8);
       emptyRow.height = 32;
       emptyRow.font = { name: 'Segoe UI', size: 11, italic: true, color: { argb: 'FF065F46' } };
       emptyRow.alignment = { horizontal: 'center', vertical: 'middle' };
     } else {
       childrenNeedingSupport.forEach((st, idx) => {
-        const row = sheet3.getRow(rowIdx3++);
+        const row = sheet4.getRow(rowIdx4++);
         row.values = [
           idx + 1,
           st.studentCode || '',
@@ -434,10 +592,10 @@ export class StatisticsExportService {
         row.getCell(8).alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
         row.height = 24;
       });
-      applyZebraAndBorders(sheet3, 6, rowIdx3 - 1);
+      applyZebraAndBorders(sheet4, 6, rowIdx4 - 1);
     }
 
-    autoFitColumns(sheet3, {
+    autoFitColumns(sheet4, {
       1: 6,
       2: 15,
       3: 24,
@@ -449,20 +607,20 @@ export class StatisticsExportService {
     });
 
     // ========================================================================
-    // SHEET 4: TRẺ VƯỢT TRỘI (Tách riêng 1 sheet độc lập)
+    // SHEET 5: TRẺ VƯỢT TRỘI (Tách riêng 1 sheet độc lập)
     // ========================================================================
-    const sheet4 = workbook.addWorksheet('Trẻ vượt trội', {
+    const sheet5 = workbook.addWorksheet('Trẻ vượt trội', {
       views: [{ showGridLines: true }],
     });
-    addSchoolHeaderBanner(sheet4, {
+    addSchoolHeaderBanner(sheet5, {
       title: 'DANH SÁCH HỌC SINH ĐẠT KẾT QUẢ VƯỢT TRỘI / XUẤT SẮC',
       subtitle: `Tổng cộng ${childrenOutstanding?.length || 0} học sinh xuất sắc và vượt trội mục tiêu phát triển`,
       schoolYearName: yearName,
       totalCols: 8,
     });
 
-    const headerRow4 = sheet4.getRow(5);
-    headerRow4.values = [
+    const headerRow5 = sheet5.getRow(5);
+    headerRow5.values = [
       'STT',
       'MÃ HỌC SINH',
       'HỌ VÀ TÊN',
@@ -472,20 +630,20 @@ export class StatisticsExportService {
       'PHÂN LOẠI DANH HIỆU',
       'BIỂU HIỆN NỔI BẬT & THÀNH TÍCH',
     ];
-    applyHeaderStyles(headerRow4, '2563EB'); // Blue Header
-    headerRow4.height = 28;
+    applyHeaderStyles(headerRow5, '2563EB'); // Blue Header
+    headerRow5.height = 28;
 
-    let rowIdx4 = 6;
+    let rowIdx5 = 6;
     if (!childrenOutstanding || childrenOutstanding.length === 0) {
-      const emptyRow = sheet4.getRow(rowIdx4++);
+      const emptyRow = sheet5.getRow(rowIdx5++);
       emptyRow.values = ['', '', 'Chưa có học sinh đạt chuẩn vượt trội trong kỳ đánh giá này.'];
-      sheet4.mergeCells(rowIdx4 - 1, 3, rowIdx4 - 1, 8);
+      sheet5.mergeCells(rowIdx5 - 1, 3, rowIdx5 - 1, 8);
       emptyRow.height = 32;
       emptyRow.font = { name: 'Segoe UI', size: 11, italic: true, color: { argb: 'FF6B7280' } };
       emptyRow.alignment = { horizontal: 'center', vertical: 'middle' };
     } else {
       childrenOutstanding.forEach((st, idx) => {
-        const row = sheet4.getRow(rowIdx4++);
+        const row = sheet5.getRow(rowIdx5++);
         row.values = [
           idx + 1,
           st.studentCode || '',
@@ -506,10 +664,10 @@ export class StatisticsExportService {
         row.getCell(8).alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
         row.height = 24;
       });
-      applyZebraAndBorders(sheet4, 6, rowIdx4 - 1);
+      applyZebraAndBorders(sheet5, 6, rowIdx5 - 1);
     }
 
-    autoFitColumns(sheet4, {
+    autoFitColumns(sheet5, {
       1: 6,
       2: 15,
       3: 24,
@@ -521,20 +679,20 @@ export class StatisticsExportService {
     });
 
     // ========================================================================
-    // SHEET 5: THỐNG KÊ 5 LĨNH VỰC PHÁT TRIỂN
+    // SHEET 6: THỐNG KÊ 5 LĨNH VỰC PHÁT TRIỂN
     // ========================================================================
-    const sheet5 = workbook.addWorksheet('Lĩnh vực phát triển', {
+    const sheet6 = workbook.addWorksheet('Lĩnh vực phát triển', {
       views: [{ showGridLines: true }],
     });
-    addSchoolHeaderBanner(sheet5, {
+    addSchoolHeaderBanner(sheet6, {
       title: 'THỐNG KÊ ĐÁNH GIÁ THEO 5 LĨNH VỰC PHÁT TRIỂN',
       subtitle: `Tổng số lượt đánh giá mục tiêu toàn trường: ${assessmentStatistics?.totalDailyAssessments || 0}`,
       schoolYearName: yearName,
       totalCols: 7,
     });
 
-    const headerRow5 = sheet5.getRow(5);
-    headerRow5.values = [
+    const headerRow6 = sheet6.getRow(5);
+    headerRow6.values = [
       'STT',
       'LĨNH VỰC PHÁT TRIỂN',
       'TỔNG LƯỢT ĐÁNH GIÁ',
@@ -543,21 +701,21 @@ export class StatisticsExportService {
       'CHƯA ĐẠT (NOT ACHIEVED)',
       'TỶ LỆ ĐẠT CHUẨN (%)',
     ];
-    applyHeaderStyles(headerRow5, '0D9488'); // Teal Header
-    headerRow5.height = 28;
+    applyHeaderStyles(headerRow6, '0D9488'); // Teal Header
+    headerRow6.height = 28;
 
     const domainEntries = Object.entries(assessmentStatistics?.byDomain || {}).filter(
       ([key]) => key !== 'GENERAL'
     );
 
-    let rowIdx5 = 6;
+    let rowIdx6 = 6;
     let sumTotal = 0;
     let sumAchieved = 0;
     let sumOutstanding = 0;
     let sumNotAchieved = 0;
 
     domainEntries.forEach(([key, dData], idx) => {
-      const row = sheet5.getRow(rowIdx5++);
+      const row = sheet6.getRow(rowIdx6++);
       const total = dData.total || 0;
       const achieved = dData.achieved || 0;
       const outstanding = dData.outstanding || 0;
@@ -590,7 +748,7 @@ export class StatisticsExportService {
     // Hàng tổng cộng 5 lĩnh vực
     const sumPass = sumAchieved + sumOutstanding;
     const overallRate = sumTotal > 0 ? Math.round((sumPass / sumTotal) * 100) : 0;
-    const totalDomainRow = sheet5.getRow(rowIdx5++);
+    const totalDomainRow = sheet6.getRow(rowIdx6++);
     totalDomainRow.values = [
       '',
       'TỔNG CỘNG TOÀN TRƯỜNG',
@@ -600,7 +758,7 @@ export class StatisticsExportService {
       sumNotAchieved,
       `${overallRate}%`,
     ];
-    sheet5.mergeCells(rowIdx5 - 1, 1, rowIdx5 - 1, 2);
+    sheet6.mergeCells(rowIdx6 - 1, 1, rowIdx6 - 1, 2);
     totalDomainRow.height = 26;
     totalDomainRow.font = { name: 'Segoe UI', size: 10.5, bold: true, color: { argb: 'FF0D9488' } };
     totalDomainRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0FDFA' } };
@@ -612,8 +770,8 @@ export class StatisticsExportService {
       };
     }
 
-    applyZebraAndBorders(sheet5, 6, rowIdx5 - 2);
-    autoFitColumns(sheet5, {
+    applyZebraAndBorders(sheet6, 6, rowIdx6 - 2);
+    autoFitColumns(sheet6, {
       1: 6,
       2: 28,
       3: 20,
