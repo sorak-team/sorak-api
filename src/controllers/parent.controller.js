@@ -110,6 +110,32 @@ class ParentController {
       next(err);
     }
   }
+
+  async linkChild(req, res, next) {
+    try {
+      const data = await parentService.linkChild(req.user.sub, req.body);
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async switchChild(req, res, next) {
+    try {
+      const data = await parentService.switchChild(req.user.sub, req.body);
+      if (data.refreshToken) {
+        res.cookie('refreshToken', data.refreshToken, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+        });
+      }
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 export const parentController = new ParentController();
