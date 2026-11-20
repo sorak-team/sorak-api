@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import crypto, { randomUUID } from 'crypto';
 import prisma from '../config/prisma.js';
 import { BadRequest, NotFound, Unauthorized, Forbidden } from '../utils/http-error.js';
 import logger from '../utils/logger.js';
@@ -1256,8 +1256,9 @@ class NotificationService {
 
   /**
    * Register or update mobile device push token (e.g. ExpoPushToken)
+   * Associates token with the current session (refresh token)
    */
-  async registerDeviceToken(currentUser, { deviceToken, platform = 'ANDROID', deviceName = null }) {
+  async registerDeviceToken(currentUser, { deviceToken, platform = 'ANDROID', deviceName = null, refreshToken = null }) {
     if (!deviceToken || typeof deviceToken !== 'string' || !deviceToken.trim()) {
       throw BadRequest('Device token không được để trống');
     }
@@ -1269,6 +1270,19 @@ class NotificationService {
 
     const cleanToken = deviceToken.trim();
 
+    // Determine session_id from currentUser.sessionId or refreshToken
+    let sessionId = null;
+    if (currentUser?.sessionId && /^\d+$/.test(String(currentUser.sessionId))) {
+      sessionId = BigInt(currentUser.sessionId);
+    } else if (refreshToken && typeof refreshToken === 'string' && refreshToken.trim()) {
+      const tokenHash = crypto.createHash('sha256').update(refreshToken.trim()).digest('hex');
+      const session = await prisma.refreshToken.findFirst({
+        where: { token_hash: tokenHash, account_id: account.account_id, is_revoked: false },
+        select: { token_id: true },
+      });
+      if (session) sessionId = session.token_id;
+    }
+
     const record = await prisma.deviceToken.upsert({
       where: {
         account_id_device_token: {
@@ -1278,12 +1292,14 @@ class NotificationService {
       },
       create: {
         account_id: account.account_id,
+        session_id: sessionId,
         device_token: cleanToken,
         platform: validPlatform,
         device_name: deviceName ? String(deviceName).trim() : null,
         is_active: true,
       },
       update: {
+        session_id: sessionId,
         platform: validPlatform,
         device_name: deviceName ? String(deviceName).trim() : null,
         is_active: true,
@@ -1292,35 +1308,68 @@ class NotificationService {
     });
 
     logger.info(
-      { accountId: account.account_id.toString(), platform: validPlatform, deviceToken: cleanToken },
+      {
+        accountId: account.account_id.toString(),
+        sessionId: sessionId ? sessionId.toString() : null,
+        platform: validPlatform,
+        deviceToken: cleanToken,
+      },
       '📱 [PUSH] Registered device push token successfully'
     );
 
     return {
       message: 'Đăng ký thiết bị nhận thông báo thành công',
-      tokenId: record.public_id,
+      tokenId: record.token_id.toString(),
     };
   }
 
   /**
-   * Unregister / deactivate mobile device push token (upon logout)
+   * Unregister / deactivate mobile device push token (upon logout or session revocation)
+   * Supports deactivation by deviceToken, sessionId, and/or refreshToken
    */
-  async unregisterDeviceToken(currentUser, { deviceToken }) {
-    if (!deviceToken || typeof deviceToken !== 'string' || !deviceToken.trim()) {
-      throw BadRequest('Device token không được để trống');
+  async unregisterDeviceToken(currentUser, { deviceToken, refreshToken = null }) {
+    const cleanToken = typeof deviceToken === 'string' ? deviceToken.trim() : null;
+    let sessionId =
+      currentUser?.sessionId && /^\d+$/.test(String(currentUser.sessionId))
+        ? BigInt(currentUser.sessionId)
+        : null;
+
+    if (!sessionId && refreshToken && typeof refreshToken === 'string' && refreshToken.trim()) {
+      const tokenHash = crypto.createHash('sha256').update(refreshToken.trim()).digest('hex');
+      const session = await prisma.refreshToken.findFirst({
+        where: { token_hash: tokenHash },
+        select: { token_id: true },
+      });
+      if (session) sessionId = session.token_id;
     }
+
+    if (!cleanToken && !sessionId) {
+      throw BadRequest('Device token hoặc thông tin phiên không được để trống');
+    }
+
     const account = await this.resolveAccount(currentUser);
+
+    const whereConditions = [];
+    if (cleanToken) {
+      whereConditions.push({ account_id: account.account_id, device_token: cleanToken });
+    }
+    if (sessionId) {
+      whereConditions.push({ session_id: sessionId });
+    }
 
     await prisma.deviceToken.updateMany({
       where: {
-        account_id: account.account_id,
-        device_token: deviceToken.trim(),
+        OR: whereConditions,
       },
       data: { is_active: false },
     });
 
     logger.info(
-      { accountId: account.account_id.toString(), deviceToken: deviceToken.trim() },
+      {
+        accountId: account.account_id.toString(),
+        deviceToken: cleanToken,
+        sessionId: sessionId ? sessionId.toString() : null,
+      },
       '📱 [PUSH] Deactivated device push token'
     );
 
@@ -1344,8 +1393,18 @@ class NotificationService {
         where: {
           account_id: { in: validIds },
           is_active: true,
+          OR: [
+            { session_id: null }, // backward-compatibility for legacy tokens
+            {
+              session: {
+                is_revoked: false,
+                expires_at: { gt: new Date() },
+              },
+            },
+          ],
         },
         include: {
+          session: true,
           account: {
             include: {
               student: {
