@@ -39,3 +39,6 @@ Thumbs.db
 # scratch & temp scripts
 scratch/
 scratch_db.sql
+
+# Developer test helper
+scripts/send_test_email.js
