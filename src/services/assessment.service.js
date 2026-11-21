@@ -429,15 +429,39 @@ class AssessmentService {
       if (firstActivity) {
         targetActivityId = firstActivity.activity_id;
       } else {
-        const created = await prisma.educationalActivity.create({
-          data: {
-            title: 'Hoạt động học tập và sinh hoạt hàng ngày',
-            activity_type: 'ROUTINE',
-            routine_slot: 'DIRECTED_STUDY',
-          },
+        let content = await prisma.educationalContent.findFirst({
+          where: { deleted_at: null },
+          select: { content_id: true },
         });
-        targetActivityId = created.activity_id;
+        if (!content) {
+          const firstGoal = await prisma.educationalGoal.findFirst({
+            where: { deleted_at: null },
+            select: { goal_id: true },
+          });
+          if (firstGoal) {
+            content = await prisma.educationalContent.create({
+              data: {
+                goal_id: firstGoal.goal_id,
+                title: 'Nội dung giáo dục thường nhật',
+              },
+            });
+          }
+        }
+        if (content) {
+          const created = await prisma.educationalActivity.create({
+            data: {
+              content_id: content.content_id,
+              title: 'Hoạt động học tập và sinh hoạt hàng ngày',
+              routine_slot: 'DIRECTED_STUDY',
+            },
+          });
+          targetActivityId = created.activity_id;
+        }
       }
+    }
+
+    if (!targetActivityId) {
+      throw new BadRequest('Không xác định được hoạt động giáo dục cho tiết học này.');
     }
 
     if (Array.isArray(records) && records.length > 0) {
@@ -480,19 +504,25 @@ class AssessmentService {
           : (rec.status === 'N' ? 'NOT_ACHIEVED' : 'ACHIEVED');
 
         // Nghiệp vụ: Bé nghỉ học không cho phép đánh giá đạt hoặc vượt trội
-        const att = await prisma.attendance.findFirst({
-          where: {
-            student_id: sId,
-            date: today,
-            status: { in: ['ABSENT', 'EXCUSED_ABSENCE', 'UNEXCUSED_ABSENCE'] },
-            deleted_at: null,
-          },
-        });
+        let att = null;
+        try {
+          att = await prisma.attendance.findFirst({
+            where: {
+              student_id: sId,
+              date: today,
+              status: { in: ['EXCUSED_ABSENCE', 'UNEXCUSED_ABSENCE'] },
+              deleted_at: null,
+            },
+          });
+        } catch (attErr) {
+          console.warn('[saveAssessmentRecords] Could not check attendance:', attErr.message);
+        }
         if (att && (status === 'ACHIEVED' || status === 'OUTSTANDING')) {
           status = 'NOT_ACHIEVED';
         }
 
-        const note = rec.note || (att ? 'Nghỉ học' : (status === 'ACHIEVED' ? 'Con đạt yêu cầu' : (status === 'OUTSTANDING' ? 'Con xuất sắc' : 'Cần cô hỗ trợ thêm')));
+        const rawNote = rec.note || (att ? 'Nghỉ học' : (status === 'ACHIEVED' ? 'Con đạt yêu cầu' : (status === 'OUTSTANDING' ? 'Con xuất sắc' : 'Cần cô hỗ trợ thêm')));
+        const safeNote = String(rawNote || '').trim().slice(0, 250);
 
         await prisma.dailyAssessment.upsert({
           where: {
@@ -504,7 +534,7 @@ class AssessmentService {
           },
           update: {
             status,
-            notes: note,
+            notes: safeNote,
             updated_at: new Date(),
           },
           create: {
@@ -512,7 +542,7 @@ class AssessmentService {
             activity_id: targetActivityId,
             assessment_date: today,
             status,
-            notes: note,
+            notes: safeNote,
             evaluated_by: evalAccountId,
           },
         });

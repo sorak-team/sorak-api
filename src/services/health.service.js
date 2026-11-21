@@ -1,5 +1,6 @@
 import prisma from '../config/prisma.js';
-import { NotFound, BadRequest } from '../utils/http-error.js';
+import { NotFound, BadRequest, Forbidden } from '../utils/http-error.js';
+import ExcelJS from 'exceljs';
 import { TIMETABLE_DAYS } from './mock-data.js';
 import { calculateWhoAssessment, getClassificationFromZScores } from '../utils/who-calculator.js';
 import {
@@ -286,17 +287,15 @@ class HealthService {
   /**
    * Save health measurements for students to PostgreSQL
    */
-  async saveHealthRecords({ classId, date, records, recordedBy }) {
+  async saveHealthRecords({ classId, date, records, recordedBy, userRole }) {
+    if (userRole === 'PRINCIPAL_BGH' || userRole === 'PRINCIPAL') {
+      throw new Forbidden('Ban Giám Hiệu không được phép trực tiếp nhập hoặc ghi nhận chỉ số sức khỏe học sinh.');
+    }
+
     const targetDateStr = date || new Date().toISOString().slice(0, 10);
     const targetDateStart = new Date(`${targetDateStr}T00:00:00.000Z`);
     const targetDateEnd = new Date(`${targetDateStr}T23:59:59.999Z`);
     const targetDate = targetDateStart;
-
-    const now = new Date();
-    const todayEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
-    if (targetDate > todayEnd) {
-      throw new BadRequest('Không được thực hiện đo trong thời gian tương lai');
-    }
 
     let savedCount = 0;
 
@@ -304,22 +303,31 @@ class HealthService {
     if (recordedBy) {
       const str = String(recordedBy).trim();
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-      if (isUuid) {
-        const acc = await prisma.account.findFirst({
-          where: { public_id: str, deleted_at: null },
-          select: { account_id: true },
-        });
-        if (acc) recorderId = acc.account_id;
-      } else if (/^\d+$/.test(str)) {
-        recorderId = BigInt(str);
+      const acc = isUuid
+        ? await prisma.account.findFirst({
+            where: { public_id: str, deleted_at: null },
+            select: { account_id: true, role: true },
+          })
+        : /^\d+$/.test(str)
+        ? await prisma.account.findFirst({
+            where: { account_id: BigInt(str), deleted_at: null },
+            select: { account_id: true, role: true },
+          })
+        : null;
+
+      if (acc) {
+        if (acc.role === 'PRINCIPAL_BGH' || acc.role === 'PRINCIPAL') {
+          throw new Forbidden('Ban Giám Hiệu không được phép trực tiếp nhập hoặc ghi nhận chỉ số sức khỏe học sinh.');
+        }
+        recorderId = acc.account_id;
       }
     }
     if (!recorderId) {
-      const anyStaff = await prisma.account.findFirst({
-        where: { role: { in: ['PRINCIPAL_BGH', 'TEACHER_GV'] }, deleted_at: null },
+      const teacherStaff = await prisma.account.findFirst({
+        where: { role: 'TEACHER_GV', deleted_at: null },
         select: { account_id: true },
       });
-      recorderId = anyStaff?.account_id || 1n;
+      recorderId = teacherStaff?.account_id || 1n;
     }
 
     if (Array.isArray(records) && records.length > 0) {
@@ -682,6 +690,241 @@ class HealthService {
     autoFitColumns(worksheet);
 
     return await workbook.xlsx.writeBuffer();
+  }
+
+  /**
+   * Export detailed health report for a single student (.xlsx)
+   * Sheet 1: Thông tin học sinh
+   * Sheet 2: Lịch sử theo dõi sức khỏe (Oldest to newest)
+   * Sheet 3: Kết quả đánh giá tăng trưởng theo WHO/Bộ Y tế (Oldest to newest)
+   */
+  async exportStudentHealthExcel({ studentId, classId, schoolYearId }) {
+    const student = await this._resolveStudent(studentId);
+    if (!student) {
+      throw new NotFound('Không tìm thấy học sinh');
+    }
+
+    const fullStudent = await prisma.student.findUnique({
+      where: { student_id: student.student_id },
+      include: {
+        parents: { where: { deleted_at: null } },
+        student_enrollments: {
+          orderBy: { enrolled_at: 'desc' },
+          include: {
+            class: {
+              include: { school_year: true },
+            },
+          },
+        },
+        health_assessments: {
+          where: { deleted_at: null },
+          orderBy: { assessment_date: 'asc' }, // Oldest to newest
+          include: {
+            recorder: {
+              select: {
+                username: true,
+                role: true,
+                teacher: { select: { full_name: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const activeEnrollment = fullStudent.student_enrollments.find((e) => !e.left_at) || fullStudent.student_enrollments[0];
+    const targetClass = activeEnrollment?.class;
+    const schoolYearName = targetClass?.school_year?.name || '2026–2027';
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Trường Mầm non Sorak';
+    workbook.created = new Date();
+
+    // ================= SHEET 1: Thông tin học sinh =================
+    const ws1 = workbook.addWorksheet('Thông tin học sinh', {
+      views: [{ showGridLines: true }],
+    });
+    ws1.properties.defaultRowHeight = 22;
+
+    const banner1 = addSchoolHeaderBanner(ws1, {
+      title: 'HỒ SƠ SỨC KHỎE VÀ THÔNG TIN HỌC SINH',
+      subtitle: `Học sinh: ${fullStudent.full_name.toUpperCase()} | Mã số: ${fullStudent.student_code} | Lớp: ${targetClass?.name || '—'} | Năm học: ${schoolYearName}`,
+      totalCols: 6,
+    });
+
+    const infoRows = [
+      ['Mã học sinh:', fullStudent.student_code, '', 'Họ và tên:', fullStudent.full_name, ''],
+      ['Ngày sinh:', fullStudent.date_of_birth ? formatDateDMY(fullStudent.date_of_birth) : '', '', 'Giới tính:', fullStudent.gender === 'MALE' ? 'Nam' : 'Nữ', ''],
+      ['Lớp học:', targetClass?.name || 'Chưa xếp lớp', '', 'Năm học:', schoolYearName, ''],
+      ['Dân tộc:', fullStudent.ethnic || 'Kinh', '', 'Quốc tịch:', fullStudent.nationality || 'Việt Nam', ''],
+      ['Nơi sinh:', fullStudent.place_of_birth || '—', '', 'Hộ khẩu:', fullStudent.permanent_residence || '—', ''],
+      ['Ghi chú dị ứng:', fullStudent.allergy_notes || 'Không có', '', 'Tiền sử bệnh lý:', fullStudent.medical_notes || 'Bình thường', ''],
+    ];
+
+    infoRows.forEach((r) => {
+      const row = ws1.addRow(r);
+      row.getCell(1).font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF334155' } };
+      row.getCell(2).font = { name: 'Segoe UI', size: 10, color: { argb: 'FF0F172A' } };
+      row.getCell(4).font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF334155' } };
+      row.getCell(5).font = { name: 'Segoe UI', size: 10, color: { argb: 'FF0F172A' } };
+    });
+
+    ws1.addRow([]);
+    const parentHeader = ws1.addRow(['THÔNG TIN PHỤ HUYNH LIÊN HỆ', '', '', '', '', '']);
+    parentHeader.getCell(1).font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FF1E40AF' } };
+
+    (fullStudent.parents || []).forEach((p, idx) => {
+      const pRow = ws1.addRow([
+        `Phụ huynh ${idx + 1} (${p.relationship || 'Người giám hộ'}):`,
+        p.full_name,
+        '',
+        'Số điện thoại:',
+        p.phone || '—',
+        '',
+      ]);
+      pRow.getCell(1).font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF334155' } };
+      pRow.getCell(4).font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF334155' } };
+    });
+
+    autoFitColumns(ws1);
+
+    // ================= SHEET 2: Lịch sử theo dõi sức khỏe =================
+    const ws2 = workbook.addWorksheet('Lịch sử theo dõi sức khỏe', {
+      views: [{ showGridLines: true }],
+    });
+    ws2.properties.defaultRowHeight = 22;
+
+    const banner2 = addSchoolHeaderBanner(ws2, {
+      title: 'LỊCH SỬ CÁC ĐỢT ĐO & THEO DÕI SỨC KHỎE',
+      subtitle: `Học sinh: ${fullStudent.full_name} (${fullStudent.student_code}) | Tổng số đợt đo: ${fullStudent.health_assessments.length}`,
+      totalCols: 9,
+    });
+
+    const header2 = ws2.addRow([
+      'STT',
+      'Đợt đo',
+      'Ngày đo',
+      'Tuổi (tháng)',
+      'Chiều cao (cm)',
+      'Cân nặng (kg)',
+      'Chỉ số BMI',
+      'Người ghi nhận',
+      'Ghi chú',
+    ]);
+    applyHeaderStyles(header2);
+
+    fullStudent.health_assessments.forEach((h, idx) => {
+      const hVal = Number(h.height);
+      const wVal = Number(h.weight);
+      const bmiVal = Number(h.bmi) || Number((wVal / ((hVal / 100) ** 2)).toFixed(2));
+
+      let ageInMonths = '—';
+      if (fullStudent.date_of_birth && h.assessment_date) {
+        const diffMs = new Date(h.assessment_date).getTime() - new Date(fullStudent.date_of_birth).getTime();
+        ageInMonths = (diffMs / (86400000 * 30.4375)).toFixed(1);
+      }
+
+      let recName = h.recorder?.teacher?.full_name || h.recorder?.username;
+      if (h.recorder?.role === 'PRINCIPAL_BGH' || !recName) {
+        recName = 'Cán bộ Y tế';
+      }
+
+      ws2.addRow([
+        idx + 1,
+        `Đợt ${idx + 1}`,
+        formatDateDMY(h.assessment_date),
+        ageInMonths,
+        hVal,
+        wVal,
+        bmiVal,
+        recName,
+        h.notes || 'Bình thường',
+      ]);
+    });
+
+    applyZebraRows(ws2, banner2 + 1, fullStudent.health_assessments.length);
+    autoFitColumns(ws2);
+
+    // ================= SHEET 3: Kết quả đánh giá tăng trưởng theo WHO =================
+    const ws3 = workbook.addWorksheet('Đánh giá tăng trưởng (WHO)', {
+      views: [{ showGridLines: true }],
+    });
+    ws3.properties.defaultRowHeight = 22;
+
+    const banner3 = addSchoolHeaderBanner(ws3, {
+      title: 'KẾT QUẢ ĐÁNH GIÁ TĂNG TRƯỞNG THEO CHUẨN WHO & BỘ Y TẾ',
+      subtitle: `Học sinh: ${fullStudent.full_name} (${fullStudent.student_code}) | Phân loại thể trạng dinh dưỡng`,
+      totalCols: 9,
+    });
+
+    const header3 = ws3.addRow([
+      'STT',
+      'Đợt đo',
+      'Ngày đo',
+      'HAZ (Chiều cao/tuổi)',
+      'Đánh giá chiều cao',
+      'WAZ (Cân nặng/tuổi)',
+      'Đánh giá cân nặng',
+      'BAZ (BMI/tuổi)',
+      'Thể trạng dinh dưỡng',
+    ]);
+    applyHeaderStyles(header3);
+
+    fullStudent.health_assessments.forEach((h, idx) => {
+      const heightZ = h.height_for_age_zscore != null ? Number(h.height_for_age_zscore) : null;
+      const weightZ = h.weight_for_age_zscore != null ? Number(h.weight_for_age_zscore) : null;
+      const bmiZ = h.bmi_for_age_zscore != null ? Number(h.bmi_for_age_zscore) : null;
+      const bmiVal = Number(h.bmi);
+
+      let heightEval = 'Bình thường';
+      if (heightZ != null) {
+        if (heightZ < -3) heightEval = 'Thấp còi độ 2';
+        else if (heightZ < -2) heightEval = 'Thấp còi độ 1';
+        else if (heightZ > 2) heightEval = 'Cao hơn so với tuổi';
+      }
+
+      let weightEval = 'Bình thường';
+      if (weightZ != null) {
+        if (weightZ < -3) weightEval = 'Suy dinh dưỡng nặng';
+        else if (weightZ < -2) weightEval = 'Suy dinh dưỡng vừa';
+        else if (weightZ > 2) weightEval = 'Cân nặng cao hơn tuổi';
+      }
+
+      const evaluation = getClassificationFromZScores({
+        heightZ,
+        weightZ,
+        bmiZ,
+        bmiVal,
+      });
+
+      const row = ws3.addRow([
+        idx + 1,
+        `Đợt ${idx + 1}`,
+        formatDateDMY(h.assessment_date),
+        heightZ != null ? heightZ.toFixed(2) : '—',
+        heightEval,
+        weightZ != null ? weightZ.toFixed(2) : '—',
+        weightEval,
+        bmiZ != null ? bmiZ.toFixed(2) : '—',
+        evaluation.label || 'Bình thường',
+      ]);
+
+      if (evaluation.status === 'SEVERE') {
+        row.getCell(9).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+        row.getCell(9).font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFB91C1C' } };
+      } else if (['MODERATE', 'UNDERWEIGHT', 'RISK_OVERWEIGHT'].includes(evaluation.status)) {
+        row.getCell(9).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+        row.getCell(9).font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFB45309' } };
+      }
+    });
+
+    applyZebraRows(ws3, banner3 + 1, fullStudent.health_assessments.length);
+    autoFitColumns(ws3);
+
+    const safeStudentName = fullStudent.full_name.trim().replace(/\s+/g, '_');
+    const filename = `Bao_cao_suc_khoe_${fullStudent.student_code}_${safeStudentName}.xlsx`;
+    const buffer = await workbook.xlsx.writeBuffer();
+    return { buffer, filename };
   }
 }
 

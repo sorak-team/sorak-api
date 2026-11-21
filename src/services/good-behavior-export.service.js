@@ -47,12 +47,20 @@ export class GoodBehaviorExportService {
     const teacherName = targetClass.teacher_classes?.[0]?.teacher?.full_name || 'Giáo viên phụ trách';
     const schoolYearName = targetClass.school_year?.name || '2026-2027';
 
-    // Lấy danh sách học sinh đang học
+    // Lọc theo thời gian học sinh thực tế thuộc lớp trong tháng báo cáo (Thread #12)
+    const startOfMonth = new Date(parsedYear, parsedMonth - 1, 1);
+    const endOfMonth = new Date(parsedYear, parsedMonth, 0, 23, 59, 59, 999);
+
+    // Lấy danh sách học sinh đang học trong tháng được khảo sát
     const enrollments = await prisma.studentEnrollment.findMany({
       where: {
         class_id: targetClass.class_id,
-        status: 'ENROLLED',
         student: { deleted_at: null },
+        enrolled_at: { lte: endOfMonth },
+        OR: [
+          { left_at: null },
+          { left_at: { gte: startOfMonth } },
+        ],
       },
       include: {
         student: true,
@@ -185,6 +193,9 @@ export class GoodBehaviorExportService {
     const parsedMonth = parseInt(month, 10) || 10;
     const parsedYear = parseInt(year, 10) || 2026;
 
+    const startOfMonth = new Date(parsedYear, parsedMonth - 1, 1);
+    const endOfMonth = new Date(parsedYear, parsedMonth, 0, 23, 59, 59, 999);
+
     // Tìm học sinh
     let enrollments = [];
     if (studentId) {
@@ -207,8 +218,12 @@ export class GoodBehaviorExportService {
       enrollments = await prisma.studentEnrollment.findMany({
         where: {
           class_id: targetClass.class_id,
-          status: 'ENROLLED',
           student: { deleted_at: null },
+          enrolled_at: { lte: endOfMonth },
+          OR: [
+            { left_at: null },
+            { left_at: { gte: startOfMonth } },
+          ],
         },
         include: { student: true },
         orderBy: { student: { full_name: 'asc' } },
