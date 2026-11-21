@@ -207,6 +207,28 @@ class AttendanceController {
       next(err);
     }
   }
+
+  /**
+   * UC 66: Class Attendance Statistics (Thống kê điểm danh theo lớp)
+   */
+  async getClassAttendanceStats(req, res, next) {
+    try {
+      const { classId } = req.params;
+      const { period, date, startDate, endDate, month, year } = req.query;
+      const data = await attendanceService.getClassAttendanceStats({
+        classId,
+        period,
+        date,
+        startDate,
+        endDate,
+        month,
+        year,
+      });
+      res.success(data);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 export default new AttendanceController();

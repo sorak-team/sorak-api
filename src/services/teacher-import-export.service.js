@@ -355,10 +355,27 @@ export class TeacherImportExportService {
    * 4. Xuất danh sách giáo viên ra file Excel
    */
   async exportTeachersExcel({ workStatus, gender, search, schoolYearId }) {
-    const where = { deleted_at: null };
+    const where = {};
 
     if (workStatus && workStatus !== 'ALL') {
-      where.work_status = workStatus;
+      const s = String(workStatus).toUpperCase();
+      if (s === 'RESIGNED') {
+        where.OR = [
+          { work_status: 'RESIGNED' },
+          { deleted_at: { not: null } },
+        ];
+      } else if (s === 'WORKING' || s === 'ACTIVE') {
+        where.work_status = 'WORKING';
+        where.deleted_at = null;
+      } else if (s === 'LEAVE_OF_ABSENCE' || s === 'ON_LEAVE') {
+        where.work_status = 'LEAVE_OF_ABSENCE';
+        where.deleted_at = null;
+      } else {
+        where.work_status = workStatus;
+        where.deleted_at = null;
+      }
+    } else {
+      where.deleted_at = null;
     }
     if (gender && gender !== 'ALL') {
       where.gender = gender;
@@ -451,10 +468,14 @@ export class TeacherImportExportService {
     ]);
     applyHeaderStyles(headerRow);
 
-    const workStatusMap = {
-      WORKING: 'Đang làm việc',
-      ON_LEAVE: 'Nghỉ phép',
-      RESIGNED: 'Đã thôi việc',
+    const getWorkStatusLabel = (t) => {
+      if (t.deleted_at !== null || t.work_status === 'RESIGNED') {
+        return 'Đã nghỉ việc';
+      }
+      if (t.work_status === 'LEAVE_OF_ABSENCE' || t.work_status === 'ON_LEAVE') {
+        return 'Tạm nghỉ';
+      }
+      return 'Đang làm việc';
     };
 
     teachers.forEach((t, idx) => {
@@ -471,7 +492,7 @@ export class TeacherImportExportService {
         t.email || '',
         t.position || 'Giáo viên',
         currentClass,
-        workStatusMap[t.work_status] || t.work_status,
+        getWorkStatusLabel(t),
       ]);
     });
 

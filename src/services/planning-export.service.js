@@ -1035,9 +1035,10 @@ export class PlanningExportService {
               const timeDetail = [dayLabel, dateStr].filter(Boolean).join(' - ');
               const slotLabel = timeDetail ? `${rawSlotLabel}\n• ${timeDetail}` : rawSlotLabel;
 
-              // Cột 4: [Mã MT] Lĩnh vực GD \n • Tên nội dung
+              // Cột 4: [Mã MT] Tên mục tiêu \n • Tên nội dung giáo dục
               const goalCodePart = goal?.goal_code ? `[${goal.goal_code}] ` : '';
-              const contentCell = `${goalCodePart}${domainLabel}\n• ${content?.title || 'Nội dung chung'}`;
+              const goalNamePart = goal?.title || goal?.description || domainLabel;
+              const contentCell = `${goalCodePart}${goalNamePart}\n• ${content?.title || 'Nội dung giáo dục'}`;
 
               // Cột 5: Tên hoạt động \n • Kết quả: Kết quả mong đợi
               const objPart = act?.objective ? `\n• Kết quả: ${act.objective}` : '';
@@ -1060,10 +1061,13 @@ export class PlanningExportService {
                 const content = ac.content;
                 const goal = content?.goal;
                 const domainLabel = DOMAIN_LABELS[goal?.domain] || goal?.domain || 'Chung';
-                const bankActs = content?.activities || [];
+                const bankActs = (content?.activities || []).filter(
+                  (ba) => !ba.theme_id || ba.theme_id.toString() === theme.theme_id.toString()
+                );
 
                 const goalCodePart = goal?.goal_code ? `[${goal.goal_code}] ` : '';
-                const contentCell = `${goalCodePart}${domainLabel}\n• ${content?.title || 'Nội dung chung'}`;
+                const goalNamePart = goal?.title || goal?.description || domainLabel;
+                const contentCell = `${goalCodePart}${goalNamePart}\n• ${content?.title || 'Nội dung giáo dục'}`;
 
                 if (bankActs.length > 0) {
                   for (const ba of bankActs) {
