@@ -420,6 +420,7 @@ class AttendanceService {
         shortTitle: act?.title || '',
         date: dateFormatted,
         fullDate: dateStr,
+        notes: rec.notes || '',
         status: rec.status,
         statusLabel: rec.status === 'COMPLETED' ? 'Đã hoàn thành' : 'Đã xếp lịch',
         objective: act?.objective || '',
@@ -558,6 +559,7 @@ class AttendanceService {
           name: h.name,
           startDate: h.start_date.toISOString().slice(0, 10),
           endDate: h.end_date.toISOString().slice(0, 10),
+          makeupDate: h.makeup_date ? h.makeup_date.toISOString().slice(0, 10) : null,
           isTeachingAllowed: h.is_teaching_allowed,
           type: itemType,
           targetGrades: h.target_grades || [],
@@ -565,6 +567,40 @@ class AttendanceService {
       });
     } catch (err) {
       console.warn('Failed to fetch holidays for timetable overview:', err);
+    }
+
+    // Check if Saturday is a make-up day in this week and mirror slots if empty
+    const makeupHoliday = holidays.find((h) => {
+      if (!h.makeupDate) return false;
+      if (effectiveStartDate && effectiveEndDate) {
+        return h.makeupDate >= effectiveStartDate && h.makeupDate <= effectiveEndDate;
+      }
+      return true;
+    });
+
+    if (makeupHoliday && !dbSlots.some((s) => s.day === 'T7')) {
+      const origSlots = dbSlots.filter((s) => {
+        if (s.fullDate && makeupHoliday.startDate && s.fullDate === makeupHoliday.startDate) return true;
+        return false;
+      });
+
+      if (origSlots.length > 0) {
+        const makeupDateStr = makeupHoliday.makeupDate;
+        const [my, mm, md] = makeupDateStr.split('-');
+        const origDateStr = makeupHoliday.startDate;
+        const [oy, om, od] = origDateStr.split('-');
+
+        const mirroredSlots = origSlots.map((s, idx) => ({
+          ...s,
+          id: `makeup-${s.id || idx}`,
+          day: 'T7',
+          dayKey: 'T7',
+          date: `${md}/${mm}`,
+          fullDate: makeupDateStr,
+          notes: s.notes ? `[Dạy bù ngày ${od}/${om}] ${s.notes}` : `[Dạy bù ngày ${od}/${om}]`,
+        }));
+        dbSlots.push(...mirroredSlots);
+      }
     }
 
     return {
@@ -613,6 +649,9 @@ class AttendanceService {
     const targetClass = await this._resolveClass(classId);
     if (!targetClass) {
       throw new NotFound('Lớp học không tồn tại hoặc mã định danh không hợp lệ');
+    }
+    if (targetClass.school_year?.status === 'COMPLETED' || targetClass.school_year?.status === 'ENDED') {
+      throw new BadRequest('Năm học đã kết thúc. Không thể chỉnh sửa điểm danh.');
     }
     const cId = targetClass.class_id;
 
@@ -729,6 +768,9 @@ class AttendanceService {
     const targetClass = await this._resolveClass(classId);
     if (!targetClass) {
       throw new NotFound('Lớp học không tồn tại hoặc mã định danh không hợp lệ');
+    }
+    if (targetClass.school_year?.status === 'COMPLETED' || targetClass.school_year?.status === 'ENDED') {
+      throw new BadRequest('Năm học đã kết thúc. Không thể chỉnh sửa điểm danh.');
     }
     const cId = targetClass.class_id;
     const targetDateStr = date || new Date().toISOString().slice(0, 10);
@@ -1035,11 +1077,13 @@ class AttendanceService {
         throw new BadRequest(`Học sinh ID ${sId} hôm nay vắng mặt (${attendance.status}). Không thể ghi nhận đón trẻ.`);
       }
 
-      let checkOutDate = now;
+      let checkOutDate = targetDateStr === new Date().toISOString().slice(0, 10) ? now : new Date(`${targetDateStr}T16:30:00.000Z`);
       if (rec.checkOutTime) {
         const parsed = new Date(rec.checkOutTime);
         if (!isNaN(parsed.getTime())) {
           checkOutDate = parsed;
+        } else if (typeof rec.checkOutTime === 'string' && rec.checkOutTime.includes(':')) {
+          checkOutDate = new Date(`${targetDateStr}T${rec.checkOutTime}:00.000Z`);
         }
       } else if (attendance.check_out_time) {
         checkOutDate = attendance.check_out_time;
@@ -1688,6 +1732,14 @@ class AttendanceService {
 
     const isHolidayDay = (dayNum) => {
       const curDate = new Date(Date.UTC(targetYear, targetMonth - 1, dayNum));
+      const curIso = curDate.toISOString().slice(0, 10);
+      const isMakeup = holidays.some((h) => {
+        if (!h.makeup_date) return false;
+        const mDate = new Date(h.makeup_date);
+        return curIso === mDate.toISOString().slice(0, 10);
+      });
+      if (isMakeup) return false;
+
       return holidays.some((h) => {
         const hStart = new Date(h.start_date);
         const hEnd = new Date(h.end_date);
@@ -2151,6 +2203,204 @@ class AttendanceService {
     });
 
     return await workbook.xlsx.writeBuffer();
+  }
+
+  /**
+   * UC 66: Class Attendance Statistics (Thống kê điểm danh theo lớp)
+   * Displays attendance totals and rates for a selected class and period (week, month, semester, or custom range).
+   */
+  async getClassAttendanceStats({ classId, period = 'month', date, startDate, endDate, month, year, semester }) {
+    const targetClass = await this._resolveClass(classId);
+    if (!targetClass) {
+      throw new NotFound('Lớp học không tồn tại hoặc mã định danh không hợp lệ');
+    }
+
+    const now = new Date();
+
+    // 1. Resolve date range
+    let rangeStart = null;
+    let rangeEnd = null;
+
+    if (startDate && endDate) {
+      rangeStart = new Date(`${startDate.slice(0, 10)}T00:00:00.000Z`);
+      rangeEnd = new Date(`${endDate.slice(0, 10)}T23:59:59.999Z`);
+    } else if (period === 'week') {
+      const refDate = date ? new Date(date) : now;
+      const day = refDate.getDay();
+      const diffToMonday = refDate.getDate() - day + (day === 0 ? -6 : 1);
+      rangeStart = new Date(refDate.setDate(diffToMonday));
+      rangeStart.setUTCHours(0, 0, 0, 0);
+      rangeEnd = new Date(rangeStart);
+      rangeEnd.setDate(rangeStart.getDate() + 6);
+      rangeEnd.setUTCHours(23, 59, 59, 999);
+    } else if (period === 'year' || period === 'all' || period === 'school_year') {
+      const yearStart = targetClass.school_year?.start_date;
+      const yearEnd = targetClass.school_year?.end_date;
+      rangeStart = yearStart ? new Date(yearStart) : new Date(Date.UTC(now.getFullYear(), 8, 1));
+      rangeEnd = yearEnd ? new Date(yearEnd) : now;
+    } else if (period === 'semester') {
+      const sem1Start = targetClass.school_year?.semester1_start_date || targetClass.school_year?.start_date;
+      const sem1End = targetClass.school_year?.semester1_end_date;
+      const sem2Start = targetClass.school_year?.semester2_start_date;
+      const sem2End = targetClass.school_year?.semester2_end_date || targetClass.school_year?.end_date;
+
+      const isSem2 = String(semester) === '2' || (date && sem2Start && new Date(date) >= new Date(sem2Start));
+      if (isSem2 && sem2Start) {
+        rangeStart = new Date(sem2Start);
+        rangeEnd = sem2End ? new Date(sem2End) : now;
+      } else if (sem1Start) {
+        rangeStart = new Date(sem1Start);
+        rangeEnd = sem1End ? new Date(sem1End) : now;
+      } else {
+        rangeStart = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
+        rangeEnd = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999));
+      }
+    } else {
+      // Default: Month
+      const targetMonth = month ? parseInt(month, 10) : (date ? new Date(date).getMonth() + 1 : now.getMonth() + 1);
+      const targetYear = year ? parseInt(year, 10) : (date ? new Date(date).getFullYear() : now.getFullYear());
+      rangeStart = new Date(Date.UTC(targetYear, targetMonth - 1, 1, 0, 0, 0, 0));
+      rangeEnd = new Date(Date.UTC(targetYear, targetMonth, 0, 23, 59, 59, 999));
+    }
+
+    // 2. Fetch active students in class
+    const enrollments = await prisma.studentEnrollment.findMany({
+      where: {
+        class_id: targetClass.class_id,
+        status: { notIn: ['DROPPED_OUT', 'TRANSFERRED_SCHOOL'] },
+        student: { deleted_at: null },
+      },
+      include: {
+        student: true,
+      },
+      orderBy: { student: { student_code: 'asc' } },
+    });
+    const totalStudents = enrollments.length;
+
+    // 3. Query attendance records in period
+    const records = await prisma.attendance.findMany({
+      where: {
+        class_id: targetClass.class_id,
+        date: { gte: rangeStart, lte: rangeEnd },
+        deleted_at: null,
+      },
+      orderBy: { date: 'asc' },
+    });
+
+    // 4. Compute totals
+    let presentCount = 0;
+    let excusedCount = 0;
+    let unexcusedCount = 0;
+    const dailyMap = new Map();
+    const studentMap = new Map();
+
+    for (const enr of enrollments) {
+      studentMap.set(enr.student_id, {
+        id: enr.student_id,
+        publicId: enr.student.public_id,
+        studentCode: enr.student.student_code,
+        fullName: enr.student.full_name,
+        gender: enr.student.gender,
+        avatarUrl: enr.student.avatar_url,
+        presentCount: 0,
+        excusedCount: 0,
+        unexcusedCount: 0,
+        total: 0,
+        presentRate: 100,
+      });
+    }
+
+    for (const r of records) {
+      const dStr = r.date.toISOString().slice(0, 10);
+      if (!dailyMap.has(dStr)) {
+        dailyMap.set(dStr, {
+          date: dStr,
+          presentCount: 0,
+          excusedCount: 0,
+          unexcusedCount: 0,
+          total: 0,
+        });
+      }
+      const dayStat = dailyMap.get(dStr);
+      dayStat.total++;
+
+      if (studentMap.has(r.student_id)) {
+        studentMap.get(r.student_id).total++;
+      }
+
+      if (r.status === 'PRESENT') {
+        presentCount++;
+        dayStat.presentCount++;
+        if (studentMap.has(r.student_id)) {
+          studentMap.get(r.student_id).presentCount++;
+        }
+      } else if (r.status === 'EXCUSED_ABSENCE') {
+        excusedCount++;
+        dayStat.excusedCount++;
+        if (studentMap.has(r.student_id)) {
+          studentMap.get(r.student_id).excusedCount++;
+        }
+      } else if (r.status === 'UNEXCUSED_ABSENCE') {
+        unexcusedCount++;
+        dayStat.unexcusedCount++;
+        if (studentMap.has(r.student_id)) {
+          studentMap.get(r.student_id).unexcusedCount++;
+        }
+      }
+    }
+
+    for (const s of studentMap.values()) {
+      s.presentRate = s.total > 0 ? Math.round((s.presentCount / s.total) * 100) : 100;
+    }
+    const studentsSummary = Array.from(studentMap.values());
+
+    const totalLoggedDays = dailyMap.size;
+    const totalRecordedSlots = presentCount + excusedCount + unexcusedCount;
+    const presentRate = totalRecordedSlots > 0 ? Math.round((presentCount / totalRecordedSlots) * 100) : 100;
+
+    const dailyTrend = Array.from(dailyMap.values()).map((d) => {
+      const dt = new Date(`${d.date}T00:00:00.000Z`);
+      const dayNum = dt.getUTCDay();
+      const dayNames = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+      const dayRate = d.total > 0 ? Math.round((d.presentCount / d.total) * 100) : 0;
+      return {
+        date: d.date,
+        dateFormatted: `${String(dt.getUTCDate()).padStart(2, '0')}/${String(dt.getUTCMonth() + 1).padStart(2, '0')}/${dt.getUTCFullYear()}`,
+        dayOfWeek: dayNames[dayNum],
+        totalStudents,
+        totalRecorded: d.total,
+        presentCount: d.presentCount,
+        excusedCount: d.excusedCount,
+        unexcusedCount: d.unexcusedCount,
+        presentRate: dayRate,
+      };
+    });
+
+    return {
+      classInfo: {
+        id: targetClass.public_id || targetClass.class_id.toString(),
+        name: targetClass.name,
+        ageGroup: targetClass.age_group,
+        schoolYear: targetClass.school_year?.name,
+      },
+      periodInfo: {
+        period,
+        startDate: rangeStart.toISOString().slice(0, 10),
+        endDate: rangeEnd.toISOString().slice(0, 10),
+      },
+      totalStudents,
+      stats: {
+        totalLoggedDays,
+        totalRecordedSlots,
+        presentCount,
+        excusedCount,
+        unexcusedCount,
+        presentRate,
+        absentCount: excusedCount + unexcusedCount,
+      },
+      dailyTrend,
+      studentsSummary,
+    };
   }
 }
 
