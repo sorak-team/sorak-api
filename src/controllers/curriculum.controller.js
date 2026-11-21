@@ -78,14 +78,15 @@ export const queryAiAssistant = async (req, res) => {
 export const exportEducationalFrameworkExcel = async (req, res) => {
   const { year, schoolYearId } = req.query;
   const buffer = await curriculumService.exportEducationalFrameworkExcel({ year, schoolYearId });
-  const filename = `Khung_Chuong_Trinh_GDMN_${year ? `${year}_` : ''}${new Date().toISOString().slice(0, 10)}.xlsx`;
+  const sanitizedYear = (year || '').replace(/[\u2013\u2014]/g, '-').replace(/[^\w.-]/g, '_');
+  const safeFilename = `Khung_Chuong_Trinh_GDMN_${sanitizedYear ? `${sanitizedYear}_` : ''}${new Date().toISOString().slice(0, 10)}.xlsx`;
   res.setHeader(
     'Content-Type',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   );
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="${filename}"`,
+    `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(safeFilename)}`,
   );
   res.send(buffer);
 };

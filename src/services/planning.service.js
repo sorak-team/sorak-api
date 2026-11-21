@@ -804,6 +804,10 @@ class PlanningService {
       throw new NotFound('Không tìm thấy hoạt động giáo dục.');
     }
 
+    if (existing.theme_id) {
+      await this.checkPlanEditable(classId, existing.theme_id);
+    }
+
     // Chỉ khóa những hoạt động giáo dục nào đã được sử dụng vào kế hoạch tuần
     const scheduledCount = await prisma.subThemeActivity.count({
       where: { activity_id: existing.activity_id },
@@ -1094,6 +1098,7 @@ class PlanningService {
         startTime: times.start,
         endTime: times.end,
         title: act?.title || '',
+        notes: rec.notes || '',
         status: rec.status,
         domain: goal?.domain || '',
         domainLabel: DOMAIN_LABELS[goal?.domain] || goal?.domain || '',
@@ -1362,6 +1367,7 @@ class PlanningService {
           name: h.name,
           startDate: h.start_date.toISOString().slice(0, 10),
           endDate: h.end_date.toISOString().slice(0, 10),
+          makeupDate: h.makeup_date ? h.makeup_date.toISOString().slice(0, 10) : null,
           isTeachingAllowed: h.is_teaching_allowed,
           type: itemType,
           targetGrades: h.target_grades || [],
@@ -1536,25 +1542,56 @@ class PlanningService {
       }
     }
 
+    // Validate weekend: Sunday (CN) is never allowed; Saturday (T7) requires configured makeup day
+    if (day === 'CN' || dayOfWeek === 'SUNDAY') {
+      throw new BadRequest('Không thể xếp hoạt động vào ngày Chủ nhật (ngày nghỉ).');
+    }
+    if (day === 'T7' || dayOfWeek === 'SATURDAY') {
+      const makeupDay = await prisma.schoolHoliday.findFirst({
+        where: {
+          school_year_id: targetClass.school_year_id,
+          deleted_at: null,
+          OR: [
+            { is_teaching_allowed: true, start_date: { lte: scheduledDate }, end_date: { gte: scheduledDate } },
+            { makeup_date: scheduledDate },
+          ],
+        },
+      });
+      if (!makeupDay) {
+        throw new BadRequest('Không thể xếp hoạt động vào ngày Thứ Bảy do không có lịch học bù được cấu hình.');
+      }
+    }
+
     // Validate if scheduledDate falls on a day locked by SchoolHoliday (is_teaching_allowed === false)
-    const lockedHoliday = await prisma.schoolHoliday.findFirst({
+    // Exception: If this day is configured as a makeup day, it is allowed
+    const isMakeupDay = await prisma.schoolHoliday.findFirst({
       where: {
         school_year_id: targetClass.school_year_id,
         deleted_at: null,
-        is_teaching_allowed: false,
-        start_date: { lte: scheduledDate },
-        end_date: { gte: scheduledDate },
+        makeup_date: scheduledDate,
       },
     });
 
-    if (lockedHoliday) {
-      const affectsGrade = !lockedHoliday.target_grades?.length ||
-        lockedHoliday.target_grades.includes(targetClass.age_group);
-      if (affectsGrade) {
-        const dateDisplay = date || scheduledDate.toISOString().slice(0, 10);
-        throw new BadRequest(
-          `Không thể xếp kế hoạch tuần vào ngày ${dateDisplay} vì đã bị khóa dạy bởi sự kiện/ngày nghỉ "${lockedHoliday.name}".`
-        );
+    if (!isMakeupDay) {
+      const lockedHoliday = await prisma.schoolHoliday.findFirst({
+        where: {
+          school_year_id: targetClass.school_year_id,
+          deleted_at: null,
+          is_teaching_allowed: false,
+          start_date: { lte: scheduledDate },
+          end_date: { gte: scheduledDate },
+        },
+      });
+
+      if (lockedHoliday) {
+        const affectsGrade = !lockedHoliday.target_grades?.length ||
+          lockedHoliday.target_grades.includes(targetClass.age_group);
+        if (affectsGrade) {
+          const dateDisplay = date || scheduledDate.toISOString().slice(0, 10);
+          throw new BadRequest(
+            `Không thể xếp kế hoạch tuần vào ngày ${dateDisplay} vì đã bị khóa dạy bởi sự kiện/ngày nghỉ "${lockedHoliday.name}".`
+          );
+        }
       }
     }
 
@@ -1601,6 +1638,10 @@ class PlanningService {
 
     if (dateSubTheme) {
       targetSubThemeId = dateSubTheme.sub_theme_id;
+
+      if (dateSubTheme.theme_id) {
+        await this.checkPlanEditable(targetClass.class_id, dateSubTheme.theme_id);
+      }
 
       // Validate: Activity must strictly belong to the active theme covering scheduledDate (if activity has theme_id)
       if (activity.theme_id) {
@@ -1861,6 +1902,9 @@ class PlanningService {
       }
 
       if (slot.day) {
+        if (slot.day === 'CN') {
+          throw new BadRequest('Không thể xếp hoạt động vào ngày Chủ nhật (ngày nghỉ).');
+        }
         updateData.day_of_week = DAY_MAP_TO_ENUM[slot.day] || 'MONDAY';
       }
       if (slot.routineSlot || slot.routine_slot) {
@@ -1880,23 +1924,50 @@ class PlanningService {
         }
         if (scheduledDate) {
           const targetClass = await this.resolveClass(classId);
-          const lockedHoliday = await prisma.schoolHoliday.findFirst({
+
+          if (slot.day === 'T7') {
+            const makeupDay = await prisma.schoolHoliday.findFirst({
+              where: {
+                school_year_id: targetClass.school_year_id,
+                deleted_at: null,
+                OR: [
+                  { is_teaching_allowed: true, start_date: { lte: scheduledDate }, end_date: { gte: scheduledDate } },
+                  { makeup_date: scheduledDate },
+                ],
+              },
+            });
+            if (!makeupDay) {
+              throw new BadRequest('Không thể xếp hoạt động vào ngày Thứ Bảy do không có lịch học bù được cấu hình.');
+            }
+          }
+
+          const isMakeupDay = await prisma.schoolHoliday.findFirst({
             where: {
               school_year_id: targetClass.school_year_id,
               deleted_at: null,
-              is_teaching_allowed: false,
-              start_date: { lte: scheduledDate },
-              end_date: { gte: scheduledDate },
+              makeup_date: scheduledDate,
             },
           });
 
-          if (lockedHoliday) {
-            const affectsGrade = !lockedHoliday.target_grades?.length ||
-              lockedHoliday.target_grades.includes(targetClass.age_group);
-            if (affectsGrade) {
-              throw new BadRequest(
-                `Không thể xếp kế hoạch tuần vào ngày ${slot.date} vì đã bị khóa dạy bởi sự kiện/ngày nghỉ "${lockedHoliday.name}".`
-              );
+          if (!isMakeupDay) {
+            const lockedHoliday = await prisma.schoolHoliday.findFirst({
+              where: {
+                school_year_id: targetClass.school_year_id,
+                deleted_at: null,
+                is_teaching_allowed: false,
+                start_date: { lte: scheduledDate },
+                end_date: { gte: scheduledDate },
+              },
+            });
+
+            if (lockedHoliday) {
+              const affectsGrade = !lockedHoliday.target_grades?.length ||
+                lockedHoliday.target_grades.includes(targetClass.age_group);
+              if (affectsGrade) {
+                throw new BadRequest(
+                  `Không thể xếp kế hoạch tuần vào ngày ${slot.date} vì đã bị khóa dạy bởi sự kiện/ngày nghỉ "${lockedHoliday.name}".`
+                );
+              }
             }
           }
 
@@ -2106,6 +2177,16 @@ class PlanningService {
       });
 
       if (existing) {
+        if (existing.sub_theme_id) {
+          const st = await prisma.subTheme.findUnique({
+            where: { sub_theme_id: existing.sub_theme_id },
+            select: { theme_id: true },
+          });
+          if (st?.theme_id) {
+            await this.checkPlanEditable(classId, st.theme_id);
+          }
+        }
+
         await prisma.subThemeActivity.delete({
           where: { id: parsedSlotId },
         });
@@ -2263,17 +2344,36 @@ class PlanningService {
     // Nếu chưa công bố (tất cả themes là DRAFT hoặc không có theme nào PUBLISHED), giáo viên không được xem
     const isCurriculumPublished = themes.length > 0 && themes.some((t) => t.status === 'PUBLISHED');
 
-    if (!isPrincipalOrBgh && !isCurriculumPublished) {
-      const AGE_MAP = {
-        NHA_TRE: 'Khối Nhà trẻ',
-        MAM: 'Khối Mầm',
-        CHOI: 'Khối Chồi',
-        LA: 'Khối Lá',
-      };
-      const gradeText = AGE_MAP[targetClass?.age_group] || targetClass?.age_group || '';
-      const yearText = targetClass?.school_year?.name || '';
+    const AGE_MAP = {
+      NHA_TRE: 'Khối Nhà trẻ',
+      MAM: 'Khối Mầm',
+      CHOI: 'Khối Chồi',
+      LA: 'Khối Lá',
+    };
+    const gradeText = AGE_MAP[targetClass?.age_group] || targetClass?.age_group || '';
+    const yearText = targetClass?.school_year?.name || '';
+
+    // Kiểm tra trạng thái công bố Ngân hàng mục tiêu (EducationalGoal is_approved)
+    const approvedGoalsCount = await prisma.educationalGoal.count({
+      where: {
+        school_year_id: targetClass.school_year_id,
+        age_group: targetClass.age_group,
+        is_approved: true,
+        deleted_at: null,
+      },
+    });
+    const isGoalBankPublished = approvedGoalsCount > 0;
+
+    if (!isPrincipalOrBgh && (!isGoalBankPublished || !isCurriculumPublished)) {
+      const lockMsg = !isGoalBankPublished
+        ? `Ngân hàng mục tiêu ${gradeText} chưa được công bố. Vui lòng liên hệ Ban Giám hiệu.`
+        : gradeText && yearText
+        ? `Hiện tại Ban Giám Hiệu chưa ban hành bộ chủ đề và mục tiêu giáo dục áp dụng cho ${gradeText} (${yearText}). Giáo viên vui lòng liên hệ Ban Giám Hiệu để cập nhật kế hoạch chính thức.`
+        : 'Hiện tại Ban Giám Hiệu chưa ban hành bộ chủ đề và mục tiêu giáo dục áp dụng cho khối lớp này. Giáo viên vui lòng liên hệ Ban Giám Hiệu để cập nhật kế hoạch chính thức.';
+
       return {
         isCurriculumPublished: false,
+        isGoalBankPublished,
         publishedThemes: [],
         selectedTheme: null,
         bankGoals: [],
@@ -2284,9 +2384,7 @@ class PlanningService {
           ageGroupLabel: gradeText,
           yearName: yearText,
         },
-        message: gradeText && yearText
-          ? `Hiện tại Ban Giám Hiệu chưa ban hành bộ chủ đề và mục tiêu giáo dục áp dụng cho ${gradeText} (${yearText}). Giáo viên vui lòng liên hệ Ban Giám Hiệu để cập nhật kế hoạch chính thức.`
-          : 'Hiện tại Ban Giám Hiệu chưa ban hành bộ chủ đề và mục tiêu giáo dục áp dụng cho khối lớp này. Giáo viên vui lòng liên hệ Ban Giám Hiệu để cập nhật kế hoạch chính thức.',
+        message: lockMsg,
       };
     }
 
@@ -2295,6 +2393,7 @@ class PlanningService {
         school_year_id: targetClass.school_year_id,
         age_group: targetClass.age_group,
         deleted_at: null,
+        ...(!isPrincipalOrBgh ? { is_approved: true } : {}),
       },
       include: {
         contents: {
@@ -2690,8 +2789,21 @@ class PlanningService {
       user?.role === 'ADMIN'
     );
     const isCurriculumPublished = themes.length > 0 && themes.some((t) => t.status === 'PUBLISHED');
-    if (!isPrincipalOrBgh && !isCurriculumPublished) {
-      throw new Forbidden('Bộ chủ đề và mục tiêu giáo dục chưa được công bố. Vui lòng liên hệ Ban giám hiệu.');
+    if (!isPrincipalOrBgh) {
+      if (!isCurriculumPublished) {
+        throw new Forbidden('Bộ chủ đề giáo dục chưa được công bố. Vui lòng liên hệ Ban giám hiệu.');
+      }
+      const approvedCount = await prisma.educationalGoal.count({
+        where: {
+          school_year_id: targetClass.school_year_id,
+          age_group: targetClass.age_group,
+          is_approved: true,
+          deleted_at: null,
+        },
+      });
+      if (approvedCount === 0) {
+        throw new Forbidden('Ngân hàng mục tiêu chưa được công bố. Vui lòng liên hệ Ban giám hiệu.');
+      }
     }
 
     let resolvedThemeId = null;
@@ -2873,9 +2985,13 @@ class PlanningService {
    * Check if plan is editable (not PENDING_APPROVAL or USED)
    */
   async checkPlanEditable(classId, themeId) {
-    if (!classId || !themeId) return;
+    if (!classId) return;
     try {
       const targetClass = await this.resolveClass(classId);
+      if (targetClass?.school_year?.status === 'COMPLETED' || targetClass?.school_year?.status === 'ENDED') {
+        throw new Forbidden('Năm học đã kết thúc. Kế hoạch giáo dục chỉ có thể xem, không thể chỉnh sửa.');
+      }
+      if (!themeId) return;
       const theme = await prisma.curriculumTheme.findFirst({
         where: isUuid(String(themeId))
           ? { public_id: String(themeId) }
@@ -3178,27 +3294,7 @@ class PlanningService {
 
     const resolvedThemeName = themeName || resolvedTheme.name;
 
-    // Kiểm tra cấu hình nộp trễ của BGH
-    if (resolvedTheme.allow_late_submit === false) {
-      let deadlineDate = null;
-      if (resolvedTheme.submission_deadline) {
-        deadlineDate = new Date(resolvedTheme.submission_deadline);
-      } else if (resolvedTheme.start_date) {
-        deadlineDate = new Date(resolvedTheme.start_date);
-        deadlineDate.setDate(deadlineDate.getDate() - 5);
-      }
-
-      if (deadlineDate) {
-        const endOfDeadline = new Date(deadlineDate);
-        endOfDeadline.setHours(23, 59, 59, 999);
-        if (new Date() > endOfDeadline) {
-          const dateFmt = deadlineDate.toISOString().split('T')[0].split('-').reverse().join('/');
-          throw new BadRequest(
-            `Đã quá thời hạn nộp kế hoạch cho chủ đề "${resolvedThemeName}" (${dateFmt}). Ban Giám Hiệu không cho phép nộp muộn sau thời hạn.`,
-          );
-        }
-      }
-    }
+    // Quy định nhà trường: Luôn cho phép nộp muộn (hạn nộp chỉ dùng để thống kê/nhắc nhở tiến độ, không chặn giáo viên nộp kế hoạch)
 
     // Kiểm tra điều kiện hoàn thiện theo quy định của nhà trường & trao đổi với tester
     const subThemes = await prisma.subTheme.findMany({
@@ -3901,43 +3997,67 @@ class PlanningService {
       orderBy: [{ scheduled_date: 'asc' }, { routine_slot: 'asc' }, { order_index: 'asc' }],
     }) : [];
 
-    // Group activities by week -> day of week
-    const timetableByWeek = subThemesList.map((st, idx) => {
-      const weekRecords = scheduledRecords.filter((r) => r.sub_theme_id === st.sub_theme_id);
+    // Group activities by week -> day of week (Hiển thị đủ từng tuần lịch thực tế)
+    let globalWeekNum = 1;
+    const timetableByWeek = [];
 
-      const days = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY'];
-      const scheduleGrid = {};
+    for (const st of subThemesList) {
+      const sDate = st.start_date ? new Date(st.start_date) : new Date();
+      const eDate = st.end_date ? new Date(st.end_date) : new Date(sDate.getTime() + 6 * 86400000);
+      const diffTime = Math.abs(eDate.getTime() - sDate.getTime());
+      const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
+      const weeksInSubTheme = Math.max(1, Math.round(diffDays / 7));
 
-      for (const day of days) {
-        scheduleGrid[day] = weekRecords
-          .filter((r) => r.day_of_week === day)
-          .map((r) => ({
-            id: r.id.toString(),
-            routineSlot: r.routine_slot,
-            scheduledDate: r.scheduled_date ? r.scheduled_date.toISOString().split('T')[0] : null,
-            title: r.activity?.title || 'Hoạt động giáo dục',
-            domain: r.activity?.content?.goal?.domain || null,
-            goalCode: r.activity?.content?.goal?.goal_code || null,
-            goalTitle: r.activity?.content?.goal?.title || null,
-            contentTitle: r.activity?.content?.title || null,
-            objective: r.activity?.objective || null,
-            preparation: r.activity?.preparation || null,
-            procedure: r.activity?.procedure || null,
-            evaluationCriteria: r.activity?.evaluation_criteria || null,
-            notes: r.notes || null,
-          }));
+      for (let w = 0; w < weeksInSubTheme; w++) {
+        const wStart = new Date(sDate.getTime() + w * 7 * 86400000);
+        let wEnd = new Date(sDate.getTime() + (w * 7 + 6) * 86400000);
+        if (wEnd > eDate || w === weeksInSubTheme - 1) wEnd = eDate;
+
+        const wStartStr = wStart.toISOString().split('T')[0];
+        const wEndStr = wEnd.toISOString().split('T')[0];
+
+        const weekRecords = scheduledRecords.filter((r) => {
+          if (r.sub_theme_id !== st.sub_theme_id) return false;
+          if (!r.scheduled_date) return true;
+          const rDateStr = r.scheduled_date.toISOString().split('T')[0];
+          if (weeksInSubTheme === 1) return true;
+          return rDateStr >= wStartStr && rDateStr <= wEndStr;
+        });
+
+        const days = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY'];
+        const scheduleGrid = {};
+
+        for (const day of days) {
+          scheduleGrid[day] = weekRecords
+            .filter((r) => r.day_of_week === day)
+            .map((r) => ({
+              id: r.id.toString(),
+              routineSlot: r.routine_slot,
+              scheduledDate: r.scheduled_date ? r.scheduled_date.toISOString().split('T')[0] : null,
+              title: r.activity?.title || 'Hoạt động giáo dục',
+              domain: r.activity?.content?.goal?.domain || null,
+              goalCode: r.activity?.content?.goal?.goal_code || null,
+              goalTitle: r.activity?.content?.goal?.title || null,
+              contentTitle: r.activity?.content?.title || null,
+              objective: r.activity?.objective || null,
+              preparation: r.activity?.preparation || null,
+              procedure: r.activity?.procedure || null,
+              evaluationCriteria: r.activity?.evaluation_criteria || null,
+              notes: r.notes || null,
+            }));
+        }
+
+        timetableByWeek.push({
+          id: `${st.public_id || st.sub_theme_id}_w${w + 1}`,
+          name: st.name,
+          weekNumber: globalWeekNum++,
+          startDate: wStartStr,
+          endDate: wEndStr,
+          totalActivities: weekRecords.length,
+          scheduleGrid,
+        });
       }
-
-      return {
-        id: st.public_id || st.sub_theme_id.toString(),
-        name: st.name,
-        weekNumber: idx + 1,
-        startDate: st.start_date ? st.start_date.toISOString().split('T')[0] : null,
-        endDate: st.end_date ? st.end_date.toISOString().split('T')[0] : null,
-        totalActivities: weekRecords.length,
-        scheduleGrid,
-      };
-    });
+    }
 
     // Fetch goals for this class & theme
     const themeGoals = await prisma.classThemeGoal.findMany({

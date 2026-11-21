@@ -9,6 +9,7 @@ router.use(authMiddleware);
 
 router.get('/export/excel', attendanceController.exportAttendanceExcel);
 router.get('/classes/:classId/export/excel', attendanceController.exportAttendanceExcel);
+router.get('/classes/:classId/stats', attendanceController.getClassAttendanceStats);
 router.get('/classes/:classId/timetable', attendanceController.getTimetableOverview);
 router.post('/classes/:classId/records', attendanceController.updateAttendance);
 router.delete('/classes/:classId/records', attendanceController.clearAttendance);

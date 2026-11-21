@@ -523,7 +523,7 @@ export class TeacherService {
    * Update teacher profile
    */
   async updateTeacher(id, data, currentUser = null) {
-    const where = { ...this._parseId(id), deleted_at: null };
+    const where = { ...this._parseId(id) };
     const teacher = await prisma.teacher.findFirst({
       where,
       include: { account: true },
@@ -613,6 +613,14 @@ export class TeacherService {
       teacherUpdate.end_date = data.endDate ? new Date(data.endDate) : null;
     } else if (normWorkStatus === 'RESIGNED' && !teacher.end_date) {
       teacherUpdate.end_date = new Date();
+    } else if (normWorkStatus && normWorkStatus !== 'RESIGNED') {
+      teacherUpdate.end_date = null;
+    }
+
+    if (normWorkStatus === 'RESIGNED') {
+      teacherUpdate.deleted_at = new Date();
+    } else if (normWorkStatus && normWorkStatus !== 'RESIGNED') {
+      teacherUpdate.deleted_at = null;
     }
 
     await prisma.$transaction(async (tx) => {
@@ -645,11 +653,17 @@ export class TeacherService {
       }
 
       // 3. If status changes to RESIGNED -> lock user account (is_active = false)
+      // If status changes away from RESIGNED -> unlock user account (is_active = true)
       const targetAccountId = teacher.account_id || teacher.account?.account_id;
       if (normWorkStatus === 'RESIGNED' && targetAccountId) {
         await tx.account.update({
           where: { account_id: targetAccountId },
           data: { is_active: false },
+        });
+      } else if (normWorkStatus && normWorkStatus !== 'RESIGNED' && targetAccountId) {
+        await tx.account.update({
+          where: { account_id: targetAccountId },
+          data: { is_active: true, deleted_at: null },
         });
       }
     });
@@ -663,6 +677,7 @@ export class TeacherService {
   async assignTeacherToClass(teacherId, { classId, assignedAt = new Date() } = {}) {
     const teacher = await prisma.teacher.findFirst({
       where: { ...this._parseId(teacherId), deleted_at: null },
+      include: { account: true },
     });
     if (!teacher) throw new NotFound('Giáo viên không tồn tại');
 
@@ -676,8 +691,25 @@ export class TeacherService {
 
     const classRecord = await prisma.class.findFirst({
       where: { ...this._parseClassId(classId), deleted_at: null },
+      include: { school_year: true },
     });
     if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+
+    // Block changes if school year is completed
+    if (classRecord.school_year?.status === 'COMPLETED' || classRecord.school_year?.status === 'ENDED') {
+      throw new BadRequest('Năm học đã kết thúc. Không thể thay đổi phân công giáo viên.');
+    }
+
+    // Tester Bug 2 (BR-38 / MSG090): Maximum 3 teachers per class
+    const activeTeachersCount = await prisma.teacherClass.count({
+      where: {
+        class_id: classRecord.class_id,
+        left_at: null,
+      },
+    });
+    if (activeTeachersCount >= 3) {
+      throw new BadRequest('Lớp học đã có đủ tối đa 3 giáo viên phụ trách (BR-38). Không thể phân công thêm.');
+    }
 
     // Check if teacher is already actively assigned to any class in the same school year
     const existingSchoolYearAssignment = await prisma.teacherClass.findFirst({
@@ -751,6 +783,11 @@ export class TeacherService {
       include: { school_year: true },
     });
     if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+
+    // Block changes if school year is completed
+    if (classRecord.school_year?.status === 'COMPLETED' || classRecord.school_year?.status === 'ENDED') {
+      throw new BadRequest('Năm học đã kết thúc. Không thể thay đổi phân công giáo viên.');
+    }
 
     const active = await prisma.teacherClass.findFirst({
       where: {
@@ -856,32 +893,27 @@ export class TeacherService {
     }
 
     await prisma.$transaction(async (tx) => {
-      // 1. Soft delete teacher and mark as RESIGNED
-      await tx.teacher.update({
+      // 1. Hard delete teacher record if teacher has never been assigned and has no authored data
+      await tx.teacher.delete({
         where: { teacher_id: teacher.teacher_id },
-        data: {
-          work_status: 'RESIGNED',
-          end_date: new Date(),
-          deleted_at: new Date(),
-        },
       });
 
-      // 2. End any active class assignments
-      await tx.teacherClass.updateMany({
-        where: { teacher_id: teacher.teacher_id, left_at: null },
-        data: { left_at: new Date(), leave_reason: 'RESIGNED' },
-      });
-
-      // 3. Deactivate associated account if exists (BR-14(3), BR-24(3))
+      // 2. Clean up associated account if exists and has no other links
       if (teacher.account_id) {
-        await tx.account.update({
-          where: { account_id: teacher.account_id },
-          data: { is_active: false, deleted_at: new Date() },
-        });
+        try {
+          await tx.account.delete({
+            where: { account_id: teacher.account_id },
+          });
+        } catch {
+          await tx.account.update({
+            where: { account_id: teacher.account_id },
+            data: { is_active: false, deleted_at: new Date() },
+          });
+        }
       }
     });
 
-    return { success: true, message: 'Đã xóa hồ sơ giáo viên thành công' };
+    return { success: true, message: 'Xóa giáo viên thành công' };
   }
 }
 

@@ -22,6 +22,7 @@ class HealthController {
           date,
           records,
           recordedBy: req.user?.sub || req.user?.accountId || req.user?.id,
+          userRole: req.user?.role,
         });
         res.success(data);
       } catch (err) {
@@ -39,6 +40,29 @@ class HealthController {
         next(err);
       }
     }
+
+  async exportStudentHealthExcel(req, res, next) {
+    try {
+      const { studentId } = req.params;
+      const { classId, schoolYearId } = req.query;
+      const { buffer, filename } = await healthService.exportStudentHealthExcel({
+        studentId,
+        classId,
+        schoolYearId,
+      });
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${encodeURIComponent(filename)}"`,
+      );
+      res.send(buffer);
+    } catch (err) {
+      next(err);
+    }
+  }
 
   async exportHealthExcel(req, res, next) {
     try {

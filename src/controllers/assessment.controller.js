@@ -26,9 +26,19 @@ class AssessmentController {
   async saveAssessmentRecords(req, res, next) {
     try {
       const { classId } = req.params;
-      const { slotId, activityId, date, records } = req.body;
+      const { slotId, activityId, date, records } = req.body || {};
+      const finalSlotId = slotId || req.query?.slotId;
+      const finalActivityId = activityId || req.query?.activityId;
+      const finalDate = date || req.query?.date;
       const evaluatedBy = req.user?.sub || req.user?.accountId || req.user?.id;
-      const data = await assessmentService.saveAssessmentRecords({ classId, slotId, activityId, date, records, evaluatedBy });
+      const data = await assessmentService.saveAssessmentRecords({
+        classId,
+        slotId: finalSlotId,
+        activityId: finalActivityId,
+        date: finalDate,
+        records,
+        evaluatedBy,
+      });
       res.success(data);
     } catch (err) {
       next(err);

@@ -679,26 +679,34 @@ export class ClassService {
     return Math.max(0, months);
   }
 
+  _calculateAgeInYears(dob, refDate) {
+    if (!dob) return null;
+    const birth = new Date(dob);
+    if (isNaN(birth.getTime())) return null;
+    const ref = refDate ? new Date(refDate) : new Date('2026-09-01');
+    return Math.max(0, ref.getFullYear() - birth.getFullYear());
+  }
+
   /**
-   * Get matching grade based on exact age in months according to preschool regulations:
-   * - Nhà trẻ: Từ đủ 24 tháng đến dưới 36 tháng
-   * - Mầm: Từ đủ 36 tháng đến dưới 48 tháng
-   * - Chồi: Từ đủ 48 tháng đến dưới 60 tháng
-   * - Lá: Từ đủ 60 tháng đến dưới 72 tháng
+   * Get matching grade based on age in years (theo năm dương lịch):
+   * - Nhà trẻ: 1-2 tuổi (sinh năm refYear-2 đến refYear-1)
+   * - Mầm: 3 tuổi (sinh năm refYear-3)
+   * - Chồi: 4 tuổi (sinh năm refYear-4)
+   * - Lá: 5 tuổi (sinh năm refYear-5)
    */
-  _getGradeByAgeInMonths(months) {
-    if (months === null || months === undefined) return null;
-    if (months >= 24 && months < 36) {
-      return { key: 'NHA_TRE', label: 'Khối Nhà trẻ', minMonths: 24, maxMonths: 36 };
+  _getGradeByAgeInYears(years) {
+    if (years === null || years === undefined) return null;
+    if (years >= 1 && years <= 2) {
+      return { key: 'NHA_TRE', label: 'Khối Nhà trẻ', minMonths: 24, maxMonths: 36, ageYears: years };
     }
-    if (months >= 36 && months < 48) {
-      return { key: 'MAM', label: 'Khối Mầm', minMonths: 36, maxMonths: 48 };
+    if (years === 3) {
+      return { key: 'MAM', label: 'Khối Mầm', minMonths: 36, maxMonths: 48, ageYears: 3 };
     }
-    if (months >= 48 && months < 60) {
-      return { key: 'CHOI', label: 'Khối Chồi', minMonths: 48, maxMonths: 60 };
+    if (years === 4) {
+      return { key: 'CHOI', label: 'Khối Chồi', minMonths: 48, maxMonths: 60, ageYears: 4 };
     }
-    if (months >= 60 && months < 72) {
-      return { key: 'LA', label: 'Khối Lá', minMonths: 60, maxMonths: 72 };
+    if (years === 5) {
+      return { key: 'LA', label: 'Khối Lá', minMonths: 60, maxMonths: 72, ageYears: 5 };
     }
     return null;
   }
@@ -722,42 +730,45 @@ export class ClassService {
   }
 
   /**
-   * Check if student's age is eligible for the class age group
+   * Check if student's age is eligible for the class age group (calculated by calendar year)
    */
   _isAgeEligible(dob, classAgeGroup, refDate) {
     if (!dob || !classAgeGroup) return false;
-    const months = this._calculateAgeInMonths(dob, refDate);
-    if (months === null) return false;
+    const years = this._calculateAgeInYears(dob, refDate);
+    if (years === null) return false;
 
     const norm = this._normalizeAgeGroupKey(classAgeGroup);
     if (norm === 'NHATRE') {
-      return months >= 24 && months < 36;
+      return years >= 1 && years <= 3;
     }
     if (norm === 'MAM') {
-      return months >= 36 && months < 48;
+      return years >= 3 && years <= 4;
     }
     if (norm === 'CHOI') {
-      return months >= 48 && months < 60;
+      return years >= 4 && years <= 5;
     }
     if (norm === 'LA') {
-      return months >= 60 && months < 72;
+      return years >= 5 && years <= 6;
     }
     return false;
   }
 
   /**
-   * Calculate suitable grade based on date of birth relative to school year
+   * Calculate suitable grade based on calendar year of birth relative to school year
    */
   _calculateSuitableGrade(dob, refDate) {
-    const months = this._calculateAgeInMonths(dob, refDate);
-    const grade = this._getGradeByAgeInMonths(months);
+    const years = this._calculateAgeInYears(dob, refDate);
+    if (years === null) {
+      return { key: 'UNKNOWN', label: 'Chưa xác định' };
+    }
+    const grade = this._getGradeByAgeInYears(years);
     if (grade) {
       return grade;
     }
-    if (months !== null && months < 24) {
-      return { key: 'UNDER_AGE', label: 'Dưới 24 tháng', minMonths: 0, maxMonths: 24 };
+    if (years < 1) {
+      return { key: 'UNDER_AGE', label: 'Dưới 1 tuổi', minMonths: 0, maxMonths: 24, ageYears: years };
     }
-    return { key: 'OVER_AGE', label: 'Trên 72 tháng', minMonths: 72, maxMonths: 999 };
+    return { key: 'OVER_AGE', label: 'Trên 5 tuổi', minMonths: 72, maxMonths: 999, ageYears: years };
   }
 
   /**
@@ -982,6 +993,7 @@ export class ClassService {
 
       const refDate = classRecord.school_year?.start_date || new Date('2026-09-01');
       const ageInMonths = this._calculateAgeInMonths(s.date_of_birth, refDate);
+      const ageInYears = this._calculateAgeInYears(s.date_of_birth, refDate);
       const suitable = this._calculateSuitableGrade(s.date_of_birth, refDate);
       const isAgeEligible = this._isAgeEligible(s.date_of_birth, classRecord.age_group, refDate);
       const isAccountLinked = Boolean(
@@ -1065,6 +1077,7 @@ export class ClassService {
         dateOfBirth: s.date_of_birth,
         gender: s.gender,
         ageInMonths,
+        ageInYears,
         isAgeEligible,
         hasAccount: isAccountLinked,
         accountId: s.account_id ? s.account_id.toString() : null,
@@ -1139,15 +1152,17 @@ export class ClassService {
       throw new BadRequest('Không tìm thấy học sinh hợp lệ để thêm vào lớp');
     }
 
-    // Check if any student does NOT have a linked active account
-    const unlinkedStudents = students.filter(
-      (s) => !s.account_id || !s.account || s.account.deleted_at !== null || !s.account.is_active
-    );
-    if (unlinkedStudents.length > 0) {
-      const unlinkedNames = unlinkedStudents.map((s) => s.full_name).join(', ');
-      throw new BadRequest(
-        `Hồ sơ học sinh (${unlinkedNames}) chưa được liên kết tài khoản. Vui lòng liên kết tài khoản cho học sinh trước khi phân lớp.`
-      );
+    // Check class capacity limit: 40 students max (BR-36 / MSG100)
+    const currentStudentCount = await prisma.studentEnrollment.count({
+      where: {
+        class_id: classRecord.class_id,
+        left_at: null,
+        status: 'ENROLLED',
+        student: { deleted_at: null },
+      },
+    });
+    if (currentStudentCount + students.length > 40) {
+      throw new BadRequest('Việc phân lớp này sẽ làm số học sinh vượt quá giới hạn 40 học sinh của lớp.');
     }
 
     // Check if any student does NOT have suitable age for this class's age bracket
@@ -1623,13 +1638,20 @@ export class ClassService {
     }));
 
     // 2. Candidate teachers pool:
-    // Only active teachers (not resigned)
+    // Only active teachers (not resigned) with an active linked account
     const allTeachers = await prisma.teacher.findMany({
       where: {
         deleted_at: null,
         work_status: { not: 'RESIGNED' },
       },
       include: {
+        account: {
+          select: {
+            is_active: true,
+            username: true,
+            deleted_at: true,
+          },
+        },
         teacher_classes: {
           where: {
             left_at: null,
@@ -1681,6 +1703,8 @@ export class ClassService {
         canAssign: true,
       }));
 
+    const isSchoolYearEnded = classRecord.school_year?.status === 'COMPLETED' || classRecord.school_year?.status === 'ENDED';
+
     return {
       class: {
         id: classRecord.public_id || classRecord.class_id.toString(),
@@ -1691,6 +1715,9 @@ export class ClassService {
       summary: {
         total: activeTeachers.length,
         recommendedCount: 2,
+        maxTeachersCount: 3,
+        canAddMoreTeachers: activeTeachers.length < 3 && !isSchoolYearEnded,
+        isSchoolYearEnded,
       },
       activeTeachers,
       poolTeachers,
@@ -2160,6 +2187,7 @@ export class ClassService {
     const classRecord = await prisma.class.findFirst({
       where: { ...this._parseId(classId), deleted_at: null },
       include: {
+        school_year: true,
         teacher_classes: {
           where: { left_at: null },
           include: {
@@ -2175,6 +2203,10 @@ export class ClassService {
       },
     });
     if (!classRecord) throw new NotFound('Lớp học không tồn tại');
+
+    if (classRecord.school_year?.status === 'COMPLETED' || classRecord.school_year?.status === 'ENDED') {
+      throw new BadRequest('Năm học đã kết thúc. Không thể tạo yêu cầu chuyển lớp.');
+    }
 
     if (user && user.role === 'TEACHER_GV') {
       const userSub = String(user.sub);
@@ -2495,6 +2527,26 @@ export class ClassService {
             approved_at: tDate,
           },
         });
+
+        // 4. Update health records recorded on or after transfer date to the active teacher of to_class
+        const toClassTeachers = await tx.teacherClass.findMany({
+          where: { class_id: transfer.to_class_id, left_at: null },
+          include: { teacher: true },
+        });
+        const targetTeacherAccId = toClassTeachers.find((tc) => tc.teacher?.account_id)?.teacher?.account_id;
+        if (targetTeacherAccId) {
+          const transDate = transfer.transfer_date ? new Date(transfer.transfer_date) : tDate;
+          transDate.setHours(0, 0, 0, 0);
+          await tx.healthAssessment.updateMany({
+            where: {
+              student_id: transfer.student_id,
+              assessment_date: { gte: transDate },
+            },
+            data: {
+              recorded_by: targetTeacherAccId,
+            },
+          });
+        }
       });
 
       // Notification 7: Approve Transfer Request (BGH duyệt chuyển lớp -> Người tạo + GV lớp nguồn + GV lớp đích + Phụ huynh)
@@ -3064,6 +3116,7 @@ export class ClassService {
         recorder: {
           select: {
             username: true,
+            role: true,
             teacher: { select: { full_name: true } },
           },
         },
@@ -3084,6 +3137,12 @@ export class ClassService {
       });
       const classification = whoEvaluation.label;
 
+      let recName = h.recorder?.teacher?.full_name || h.recorder?.username;
+      // Do NOT allow PRINCIPAL_BGH to be displayed as health recorder (teacher only)
+      if (h.recorder?.role === 'PRINCIPAL_BGH' || !recName) {
+        recName = 'Cán bộ Y tế';
+      }
+
       return {
         id: h.assessment_id.toString(),
         publicId: h.public_id,
@@ -3099,7 +3158,7 @@ export class ClassService {
         zscoreWeight: Number(h.weight_for_age_zscore) || null,
         zscoreBmi: Number(h.bmi_for_age_zscore) || null,
         notes: h.notes || '',
-        recordedBy: h.recorder?.teacher?.full_name || h.recorder?.username || 'Cán bộ Y tế',
+        recordedBy: recName,
       };
     });
 

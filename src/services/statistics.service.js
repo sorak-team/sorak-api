@@ -515,6 +515,49 @@ export class StatisticsService {
       }
     }
 
+    // 5. Thống kê Chuyên cần theo từng lớp trong năm học (School-wide Attendance by Class)
+    const classAttendanceList = [];
+    let totalSchoolPresent = 0;
+    let totalSchoolRecorded = 0;
+
+    for (const cls of classes) {
+      const classIdBig = cls.class_id;
+      const atts = await prisma.attendance.findMany({
+        where: {
+          class_id: classIdBig,
+          date: { gte: yearStart, lte: yearEnd },
+          deleted_at: null,
+        },
+        select: { status: true },
+      });
+
+      const totalRecorded = atts.length;
+      const presentCount = atts.filter((a) => a.status === 'PRESENT').length;
+      const excusedCount = atts.filter((a) => a.status === 'EXCUSED_ABSENCE').length;
+      const unexcusedCount = atts.filter((a) => a.status === 'UNEXCUSED_ABSENCE').length;
+      const attendanceRate = totalRecorded > 0 ? Math.round((presentCount / totalRecorded) * 100) : 100;
+
+      totalSchoolPresent += presentCount;
+      totalSchoolRecorded += totalRecorded;
+
+      classAttendanceList.push({
+        classId: cls.class_id.toString(),
+        publicId: cls.public_id,
+        className: cls.name,
+        ageGroup: cls.age_group,
+        totalStudents: (cls.student_enrollments || []).length,
+        totalRecorded,
+        presentCount,
+        excusedCount,
+        unexcusedCount,
+        attendanceRate,
+      });
+    }
+
+    const schoolAttendanceRate = totalSchoolRecorded > 0
+      ? Math.round((totalSchoolPresent / totalSchoolRecorded) * 100)
+      : 100;
+
     return {
       schoolYear: {
         id: schoolYear.school_year_id.toString(),
@@ -565,9 +608,95 @@ export class StatisticsService {
         notAchievedCount: totalNotAchievedAssessments,
         byDomain: domainStats,
       },
+      attendanceStatistics: {
+        schoolAttendanceRate,
+        totalPresent: totalSchoolPresent,
+        totalRecorded: totalSchoolRecorded,
+        byClass: classAttendanceList,
+      },
       childrenNeedingSupport,
       childrenOutstanding,
     };
+  }
+
+  /**
+   * Lấy thống kê Chuyên cần theo lớp cho Toàn trường (View Class Attendance Statistics for Principal)
+   */
+  async getClassAttendanceOverview({ schoolYearId }) {
+    const overview = await this.getSchoolOverview({ schoolYearId });
+    return overview.attendanceStatistics || { schoolAttendanceRate: 100, byClass: [] };
+  }
+
+  /**
+   * Lấy chi tiết Thống kê Đánh giá trẻ (View Child Assessment Statistics)
+   */
+  async getChildAssessmentStatistics({ schoolYearId, classId }) {
+    const overview = await this.getSchoolOverview({ schoolYearId });
+    if (!classId) {
+      return overview.assessmentStatistics;
+    }
+    const filteredClass = (overview.assessmentStatistics?.byClass || []).find(
+      (c) => String(c.classId) === String(classId) || c.publicId === String(classId),
+    );
+    return {
+      class: filteredClass || null,
+      summary: overview.assessmentStatistics,
+    };
+  }
+
+  /**
+   * Lấy thống kê Sĩ số học sinh 9 tháng (View Student Statistics)
+   */
+  async getStudentStatistics({ schoolYearId }) {
+    const overview = await this.getSchoolOverview({ schoolYearId });
+    return {
+      schoolYear: overview.schoolYear,
+      summary: overview.summary,
+      monthlyStudentMatrix: overview.monthlyStudentMatrix,
+    };
+  }
+
+  /**
+   * Lấy thống kê Kế hoạch giáo dục (View Education Plan Statistics)
+   */
+  async getEducationPlanStatistics({ schoolYearId, classId }) {
+    const overview = await this.getSchoolOverview({ schoolYearId });
+    if (!classId) {
+      return overview.planStatistics;
+    }
+    const filteredClass = (overview.planStatistics?.byClass || []).find(
+      (c) => String(c.classId) === String(classId) || c.publicId === String(classId),
+    );
+    return {
+      class: filteredClass || null,
+      summary: overview.planStatistics,
+    };
+  }
+
+  /**
+   * Lấy danh sách trẻ cần hỗ trợ (View Children Needing Support)
+   */
+  async getChildrenNeedingSupport({ schoolYearId, classId }) {
+    const overview = await this.getSchoolOverview({ schoolYearId });
+    if (!classId) {
+      return overview.childrenNeedingSupport;
+    }
+    return (overview.childrenNeedingSupport || []).filter(
+      (c) => String(c.classId) === String(classId) || c.className === String(classId),
+    );
+  }
+
+  /**
+   * Lấy danh sách trẻ vượt trội (View Children with Outstanding Results)
+   */
+  async getChildrenWithOutstandingResults({ schoolYearId, classId }) {
+    const overview = await this.getSchoolOverview({ schoolYearId });
+    if (!classId) {
+      return overview.childrenOutstanding;
+    }
+    return (overview.childrenOutstanding || []).filter(
+      (c) => String(c.classId) === String(classId) || c.className === String(classId),
+    );
   }
 }
 
