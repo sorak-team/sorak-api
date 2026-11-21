@@ -143,14 +143,25 @@ export class StudentImportExportService {
       }
     }
 
-    // Đọc danh sách lớp học hiện có để kiểm tra tên lớp
+    // Đọc danh sách lớp học hiện có để kiểm tra tên lớp và sĩ số hiện tại
     const existingClasses = await prisma.class.findMany({
       where: { deleted_at: null },
-      select: { class_id: true, name: true, public_id: true },
+      select: {
+        class_id: true,
+        name: true,
+        public_id: true,
+        student_enrollments: {
+          where: { left_at: null, status: 'ENROLLED', student: { deleted_at: null } },
+          select: { enrollment_id: true },
+        },
+      },
     });
     const classMap = new Map();
+    const classAssignedCountMap = new Map();
     existingClasses.forEach((c) => {
-      classMap.set(c.name.trim().toLowerCase(), c);
+      const activeCount = c.student_enrollments.length;
+      classMap.set(c.name.trim().toLowerCase(), { ...c, currentCount: activeCount });
+      classAssignedCountMap.set(c.class_id.toString(), activeCount);
     });
 
     // Đọc danh sách mã học sinh hiện có
@@ -265,6 +276,15 @@ export class StudentImportExportService {
         matchedClass = classMap.get(rawClassName.toLowerCase());
         if (!matchedClass) {
           rowErrors.push(`Không tìm thấy lớp học có tên '${rawClassName}'.`);
+        } else {
+          // Check capacity limit 40 students per class (BR-36 / MSG100)
+          const currentInClass = classAssignedCountMap.get(matchedClass.class_id.toString()) || 0;
+          if (currentInClass >= 40) {
+            rowErrors.push(`Việc phân lớp này sẽ làm số học sinh vượt quá giới hạn 40 học sinh của lớp.`);
+          } else {
+            // Count tentatively for remaining rows in batch
+            classAssignedCountMap.set(matchedClass.class_id.toString(), currentInClass + 1);
+          }
         }
       }
 

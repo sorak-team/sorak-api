@@ -1800,15 +1800,15 @@ async function main() {
         const dayOfWeek = WEEK_DAYS[dIdx];
         const dayOffset = wIdx * 5 + dIdx;
 
-        // Xếp các slot cơ bản trong 1 ngày mầm non
+        // Xếp các slot cơ bản trong 1 ngày mầm non (đúng 7 slot thời khóa biểu)
         const dailySlots = [
           'ARRIVAL_PLAY',
           'MORNING_EXERCISE',
           'DIRECTED_STUDY',
-          'OUTDOOR_PLAY',
-          'HYGIENE_MEAL_SLEEP',
           'CORNER_PLAY',
+          'OUTDOOR_PLAY',
           'AFTERNOON_ACTIVITY',
+          'RETURN_CHILD',
         ];
 
         for (let sIdx = 0; sIdx < dailySlots.length; sIdx++) {

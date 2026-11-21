@@ -16,6 +16,8 @@ router.post('/requests/pickup/:requestId/cancel', parentController.cancelPickupR
 router.get('/student-report', parentController.getStudentReport);
 router.get('/good-behavior', parentController.getGoodBehavior);
 router.post('/good-behavior/feedback', parentController.submitGoodBehaviorFeedback);
+router.post('/link-child', parentController.linkChild);
+router.post('/switch-child', parentController.switchChild);
 router.get('/notifications', parentController.getNotifications);
 router.patch('/notifications/:id/read', parentController.markNotificationRead);
 

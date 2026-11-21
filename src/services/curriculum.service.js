@@ -268,6 +268,8 @@ class CurriculumService {
           status: draftCount > 0 ? 'DRAFT' : 'PUBLISHED',
           statusLabel: draftCount > 0 ? 'Bản nháp' : 'Đã công bố',
           updatedAt: '13/10/2026',
+          schoolYearStatus: schoolYear?.status || 'ACTIVE',
+          isSchoolYearEnded: schoolYear?.status === 'COMPLETED' || schoolYear?.status === 'ENDED',
         },
         themes: mappedThemes,
         summary: {
@@ -290,6 +292,8 @@ class CurriculumService {
         status: 'DRAFT',
         statusLabel: 'Chưa có dữ liệu',
         updatedAt: 'Chưa có dữ liệu',
+        schoolYearStatus: schoolYear?.status || 'ACTIVE',
+        isSchoolYearEnded: schoolYear?.status === 'COMPLETED' || schoolYear?.status === 'ENDED',
       },
       themes: [],
       summary: {
@@ -311,6 +315,10 @@ class CurriculumService {
 
     if (!schoolYear) {
       throw new NotFound('Không tìm thấy năm học.');
+    }
+
+    if (schoolYear.status === 'COMPLETED' || schoolYear.status === 'ENDED') {
+      throw new BadRequest('Năm học đã kết thúc. Không thể thay đổi trạng thái bộ chủ đề.');
     }
 
     if (String(status).toUpperCase() === 'PUBLISHED') {
@@ -488,6 +496,9 @@ class CurriculumService {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     const normalizedYear = (year || '2026–2027').replace('-', '–');
     const schoolYear = await this.resolveSchoolYear(year);
+    if (schoolYear?.status === 'COMPLETED' || schoolYear?.status === 'ENDED') {
+      throw new BadRequest('Năm học đã kết thúc. Không thể chỉnh sửa kế hoạch chủ đề.');
+    }
     const schoolYearId = schoolYear?.school_year_id || 1n;
     const syStart = schoolYear?.start_date ? schoolYear.start_date.toISOString().slice(0, 10) : '2026-09-01';
     const syEnd = schoolYear?.end_date ? schoolYear.end_date.toISOString().slice(0, 10) : '2027-05-31';
@@ -1066,6 +1077,8 @@ class CurriculumService {
           totalGoals: dbGoals.length,
           domainCount: activeDomains.length,
           updatedAt: '13/10/2026',
+          isSchoolYearEnded: schoolYear?.status === 'COMPLETED' || schoolYear?.status === 'ENDED',
+          schoolYearStatus: schoolYear?.status || 'ACTIVE',
         },
         tree: activeDomains,
       };
@@ -1093,6 +1106,10 @@ class CurriculumService {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     const schoolYear = await this.resolveSchoolYear(year);
     const schoolYearId = schoolYear?.school_year_id;
+
+    if (schoolYear?.status === 'COMPLETED' || schoolYear?.status === 'ENDED') {
+      throw new BadRequest('Năm học đã kết thúc. Không thể thay đổi trạng thái ngân hàng mục tiêu.');
+    }
 
     if (String(status).toUpperCase() === 'PUBLISHED') {
       // 1. Validate BR-80, BR-82, BR-205: Check that ALL goals in this framework have at least one educational content
@@ -1277,6 +1294,8 @@ class CurriculumService {
         year: normalizedYear,
         ageGroup: ageGroupInfo.key,
         ageGroupLabel: ageGroupInfo.label,
+        isSchoolYearEnded: schoolYear?.status === 'COMPLETED' || schoolYear?.status === 'ENDED',
+        schoolYearStatus: schoolYear?.status || 'ACTIVE',
       },
       goal: {
         id: dbGoal.public_id || dbGoal.goal_id.toString(),
@@ -1311,6 +1330,13 @@ class CurriculumService {
     }
     if (!targetGoal) {
       throw new NotFound('Không tìm thấy mục tiêu giáo dục.');
+    }
+
+    const schoolYear = targetGoal.school_year_id
+      ? await prisma.schoolYear.findUnique({ where: { school_year_id: targetGoal.school_year_id } })
+      : await this.resolveSchoolYear(year);
+    if (schoolYear?.status === 'COMPLETED' || schoolYear?.status === 'ENDED') {
+      throw new BadRequest('Năm học đã kết thúc. Không thể chỉnh sửa nội dung giáo dục.');
     }
 
     const gId = targetGoal.goal_id;
@@ -1447,6 +1473,9 @@ class CurriculumService {
   async createGoal({ year = '2026–2027', ageGroup = 'nhatre', data = {} }) {
     const ageGroupInfo = AGE_GROUPS.find((g) => g.key === ageGroup) || AGE_GROUPS[0];
     const schoolYear = await this.resolveSchoolYear(year);
+    if (schoolYear?.status === 'COMPLETED' || schoolYear?.status === 'ENDED') {
+      throw new BadRequest('Năm học đã kết thúc. Không thể thêm mục tiêu giáo dục mới.');
+    }
     const schoolYearId = schoolYear?.school_year_id || 1n;
 
     const goalTitle = (data.title || '').trim();
@@ -1559,6 +1588,13 @@ class CurriculumService {
     }
 
     if (targetGoal) {
+      const schoolYear = targetGoal.school_year_id
+        ? await prisma.schoolYear.findUnique({ where: { school_year_id: targetGoal.school_year_id } })
+        : await this.resolveSchoolYear(year);
+      if (schoolYear?.status === 'COMPLETED' || schoolYear?.status === 'ENDED') {
+        throw new BadRequest('Năm học đã kết thúc. Không thể chỉnh sửa mục tiêu giáo dục.');
+      }
+
       const updateData = { updated_at: new Date() };
       if (data.title !== undefined) {
         const goalTitle = (data.title || '').trim();
@@ -1632,6 +1668,13 @@ class CurriculumService {
     }
 
     if (targetGoal) {
+      const schoolYear = targetGoal.school_year_id
+        ? await prisma.schoolYear.findUnique({ where: { school_year_id: targetGoal.school_year_id } })
+        : await this.resolveSchoolYear(year);
+      if (schoolYear?.status === 'COMPLETED' || schoolYear?.status === 'ENDED') {
+        throw new BadRequest('Năm học đã kết thúc. Không thể xóa mục tiêu giáo dục.');
+      }
+
       await prisma.educationalGoal.update({
         where: { goal_id: targetGoal.goal_id },
         data: { deleted_at: new Date() },
