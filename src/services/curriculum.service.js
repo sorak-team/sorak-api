@@ -215,6 +215,26 @@ class CurriculumService {
     const schoolYear = await this.resolveSchoolYear(year);
     const schoolYearId = schoolYear?.school_year_id;
 
+    // Fetch school holidays for calendar display and scheduling reference
+    const dbHolidays = schoolYearId
+      ? await prisma.schoolHoliday.findMany({
+          where: {
+            school_year_id: schoolYearId,
+            deleted_at: null,
+          },
+          orderBy: { start_date: 'asc' },
+        })
+      : [];
+
+    const mappedHolidays = dbHolidays.map((h) => ({
+      id: h.public_id || h.holiday_id.toString(),
+      name: h.name,
+      startDate: h.start_date.toISOString().slice(0, 10),
+      endDate: h.end_date.toISOString().slice(0, 10),
+      isTeachingAllowed: h.is_teaching_allowed,
+      description: h.description || '',
+    }));
+
     // Query themes directly using Prisma Relation Filter (single DB query)
     const dbThemes = await prisma.curriculumTheme.findMany({
       where: {
@@ -272,6 +292,7 @@ class CurriculumService {
           isSchoolYearEnded: schoolYear?.status === 'COMPLETED' || schoolYear?.status === 'ENDED',
         },
         themes: mappedThemes,
+        holidays: mappedHolidays,
         summary: {
           totalThemes: mappedThemes.length,
           publishedCount,
@@ -296,6 +317,7 @@ class CurriculumService {
         isSchoolYearEnded: schoolYear?.status === 'COMPLETED' || schoolYear?.status === 'ENDED',
       },
       themes: [],
+      holidays: mappedHolidays,
       summary: {
         totalThemes: 0,
         publishedCount: 0,
@@ -360,16 +382,26 @@ class CurriculumService {
         );
       }
 
-      // Kiểm tra tính liên tục giữa các chủ đề (không có tuần bị bỏ trống)
+      // Kiểm tra tính liên tục và khoảng cách giữa các chủ đề (cho phép có khoảng cách nghỉ Tết/nghỉ lễ, nhưng phải tròn tuần)
       for (let i = 1; i < dbThemes.length; i++) {
         const prevTheme = dbThemes[i - 1];
         const currTheme = dbThemes[i];
         const prevEnd = new Date(prevTheme.end_date);
         const currStart = new Date(currTheme.start_date);
         const diffDays = Math.round((currStart - prevEnd) / (1000 * 60 * 60 * 24));
-        if (diffDays > 3) {
+        if (diffDays < 1) {
           throw new BadRequest(
-            `Kế hoạch chủ đề bị ngắt quãng giữa chủ đề "${prevTheme.name}" (kết thúc ${prevTheme.end_date.toISOString().slice(0, 10)}) và "${currTheme.name}" (bắt đầu ${currTheme.start_date.toISOString().slice(0, 10)}).`,
+            `Chủ đề "${currTheme.name}" (bắt đầu ${currTheme.start_date.toISOString().slice(0, 10)}) bị trùng hoặc đi trước ngày kết thúc của chủ đề trước "${prevTheme.name}" (kết thúc ${prevTheme.end_date.toISOString().slice(0, 10)}).`,
+          );
+        }
+        // Vì prevEnd là Chủ Nhật và currStart là Thứ Hai:
+        // - Nối tiếp ngay: diffDays = 1 ngày (Chủ Nhật -> Thứ Hai tuần sau)
+        // - Nghỉ 1 tuần: diffDays = 8 ngày
+        // - Nghỉ 2 tuần: diffDays = 15 ngày
+        // Khoảng cách giữa các chủ đề phải tính theo trọn vẹn tuần: (diffDays - 1) % 7 === 0
+        if ((diffDays - 1) % 7 !== 0) {
+          throw new BadRequest(
+            `Khoảng cách giữa chủ đề "${prevTheme.name}" (kết thúc ${prevTheme.end_date.toISOString().slice(0, 10)}) và "${currTheme.name}" (bắt đầu ${currTheme.start_date.toISOString().slice(0, 10)}) không hợp lệ. Khoảng cách giữa các chủ đề phải là các tuần trọn vẹn (bắt đầu vào Thứ Hai và kết thúc vào Chủ Nhật).`,
           );
         }
       }
@@ -649,7 +681,7 @@ class CurriculumService {
         );
       }
 
-      // Quy tắc 2: Không đè lên chủ đề trước và nối tiếp liên tục
+      // Quy tắc 2: Không đè lên chủ đề trước và khoảng cách (nếu có) phải tính theo trọn vẹn tuần
       if (i > 0) {
         const prevT = targetThemes[i - 1];
         const prevName = prevT.name?.trim() || `Chủ đề ${i}`;
@@ -658,10 +690,10 @@ class CurriculumService {
             `Chủ đề "${tName}" bắt đầu ngày ${t.startDate} bị trùng hoặc đi trước ngày kết thúc của chủ đề trước "${prevName}" (${prevT.endDate}).`,
           );
         }
-        const expectedThemeStart = addDaysToDateStr(prevT.endDate, 1);
-        if (t.status === 'PUBLISHED' && t.startDate !== expectedThemeStart) {
+        const gapDays = Math.round((new Date(t.startDate) - new Date(prevT.endDate)) / 86400000);
+        if ((gapDays - 1) % 7 !== 0) {
           throw new BadRequest(
-            `Chủ đề "${tName}" (bắt đầu ${t.startDate}) phải bắt đầu liền kề vào Thứ Hai (${expectedThemeStart}) ngay sau khi chủ đề trước "${prevName}" kết thúc (${prevT.endDate}).`,
+            `Khoảng cách giữa chủ đề "${prevName}" (kết thúc ${prevT.endDate}) và "${tName}" (bắt đầu ${t.startDate}) không hợp lệ. Khoảng cách giữa các chủ đề phải là các tuần trọn vẹn (bắt đầu vào Thứ Hai và kết thúc vào Chủ Nhật).`,
           );
         }
       }

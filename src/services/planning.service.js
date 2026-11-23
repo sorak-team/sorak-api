@@ -2759,17 +2759,43 @@ class PlanningService {
       };
     });
 
+    // Load school holidays for the class academic year
+    let holidays = [];
+    if (targetClass.school_year_id) {
+      try {
+        const rawHolidays = await prisma.schoolHoliday.findMany({
+          where: {
+            school_year_id: targetClass.school_year_id,
+            deleted_at: null,
+          },
+          orderBy: { start_date: 'asc' },
+        });
+        holidays = rawHolidays.map((h) => ({
+          id: h.holiday_id != null ? h.holiday_id.toString() : undefined,
+          name: h.name,
+          startDate: h.start_date instanceof Date ? h.start_date.toISOString().slice(0, 10) : String(h.start_date).slice(0, 10),
+          endDate: h.end_date instanceof Date ? h.end_date.toISOString().slice(0, 10) : String(h.end_date).slice(0, 10),
+          isTeachingAllowed: h.is_teaching_allowed,
+          description: h.description,
+        }));
+      } catch (err) {
+        logger.warn('Failed to load holidays in getTargetAllocation:', err.message);
+      }
+    }
+
     return {
       isCurriculumPublished: true,
       publishedThemes,
       selectedTheme: firstTheme,
       bankGoals,
+      holidays,
       classInfo: {
         id: targetClass.public_id || targetClass.class_id.toString(),
         name: targetClass.name,
         ageGroup: targetClass.age_group,
         ageGroupLabel: AGE_GROUP_LABELS[targetClass.age_group] || targetClass.age_group,
         yearName: targetClass.school_year?.name || 'Năm học 2026–2027',
+        schoolYearId: targetClass.school_year_id != null ? targetClass.school_year_id.toString() : null,
       },
     };
   }
