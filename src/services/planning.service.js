@@ -2796,6 +2796,16 @@ class PlanningService {
         ageGroupLabel: AGE_GROUP_LABELS[targetClass.age_group] || targetClass.age_group,
         yearName: targetClass.school_year?.name || 'Năm học 2026–2027',
         schoolYearId: targetClass.school_year_id != null ? targetClass.school_year_id.toString() : null,
+        startDate: targetClass.school_year?.start_date
+          ? (targetClass.school_year.start_date instanceof Date
+              ? targetClass.school_year.start_date.toISOString().slice(0, 10)
+              : String(targetClass.school_year.start_date).slice(0, 10))
+          : null,
+        endDate: targetClass.school_year?.end_date
+          ? (targetClass.school_year.end_date instanceof Date
+              ? targetClass.school_year.end_date.toISOString().slice(0, 10)
+              : String(targetClass.school_year.end_date).slice(0, 10))
+          : null,
       },
     };
   }
